@@ -20,8 +20,10 @@
  *      mcp__chrome__take_screenshot / 反向对照：tools.list( 与 ALLOW 文本被校验器抓到。
  *   12)（补·裁定 A）第二拍行为断言：订阅 tools/change 后 MCP 晚注册 ⇒ 手动触发回调 ⇒
  *      回调不抛、restrict 恰 +1、新 deny 更长且含 mcp__chrome__navigate_page、仍不含 run_code；
- *      第二次 restrict 之前第一次的 dispose 已被调用（先撤后 apply）；restrict 内部同步 emit
- *      tools/change 不引发递归（重入保护）；正向对照：一次触发 ⇒ 回调恰跑一次。
+ *      先加后撤：第二次 restrict 时尚未撤旧层（seenDisposes=0）、回调结束后恰撤 1 次；
+ *      restrict 内部同步 emit tools/change 不引发递归（重入保护）；正向对照：一次触发 ⇒ 回调恰跑一次。
+ *   13)（fail-closed）restrict 第二次调用时抛（模拟 MCP 中途断开）⇒ 不抛穿、旧层未撤
+ *     （disposeCount 仍 0）、降级日志含 fail-closed；恢复后自动重试成功且撤旧层。
  *   11)（修复单 v2 补）TOCTOU：applyToPreset 与 restoreFromBackup 注入 _fault:'recheck' ⇒
  *      都 ok:false CONCURRENT_MODIFICATION 且零写入（文件逐字节未变 + .dma-backup/ 条数不变）；
  *      dryRun 检测到并发修改时 ok:true 但 recheck.ok=false 且计划如实报告。
@@ -489,14 +491,77 @@ let afterWrite = null
       Array.isArray(deny2) && deny2.length > deny1.length && deny2.includes('mcp__chrome__navigate_page') && !deny2.includes('run_code'),
       `deny1=${JSON.stringify(deny1)} deny2=${JSON.stringify(deny2)}`)
     console.log('   [info] ⑫ deny 前后 = ' + JSON.stringify(deny1) + ' -> ' + JSON.stringify(deny2))
-    // 先撤后 apply：第二次 restrict 之前，第一次的 dispose 已被调用（否则限制按层越堆越多）
-    check('⑫-4 先撤上一次：第二次 restrict 时 dispose 恰已被调用 1 次',
-      restrictCalls.length === 2 && restrictCalls[1].seenDisposes === 1 && disposeCount === 1,
+    // 先加后撤（fail-closed）：第二次 restrict 成功【之后】才撤旧层 —— 第二次 restrict 被调用时
+    // dispose 还一次都没跑（seenDisposes===0），回调结束后旧层恰被撤一次（disposeCount===1）
+    check('⑫-4 先加后撤：第二次 restrict 时尚未撤旧层（seenDisposes=0），回调结束后恰撤 1 次',
+      restrictCalls.length === 2 && restrictCalls[1].seenDisposes === 0 && disposeCount === 1,
       `seenDisposes=${JSON.stringify(restrictCalls.map((c) => c.seenDisposes))} disposeCount=${disposeCount}`)
     // 重入保护：restrict 内部同步 emit 的那几次全被 applying 挡住 ⇒ 总次数有限（2 次）而非爆炸
     check('⑫-5 重入保护：emit-inside-restrict 未引发递归（restrict 总数有限、emit 被 applying 挡住）',
       restrictCalls.length === 2 && emitCount <= 50 && emitCount >= 1,
       `restrictCalls=${restrictCalls.length} emitCount=${emitCount}`)
+
+  }
+
+  // —— ⑬ fail-closed（撤层顺序的可执行证据）：模拟 schemas→restrict 之间 MCP 中途断开 ——
+  //   restrict() 第二次调用时抛 ⇒ 断言：① 不抛穿；② 旧层未被撤（disposeCount 仍 0）；
+  //   ③ 有降级日志（warn 里带 fail-closed 字样）；④ 恢复后（MCP 重连）自动重试成功且撤旧层。
+  {
+    const modFc = await import(pathToFileURL(scopePath).href + '?fail-closed')
+    const applyFc = typeof modFc === 'function' ? modFc : modFc.apply
+    const changeHandlers = []
+    const restrictCalls = []
+    const warned = []
+    let disposeCount = 0
+    let throwing = false
+    const fcCtx = {
+      log: { warn: (msg) => warned.push(String(msg)) },
+      tools: {
+        names: ['run_code', 'anvil_query', 'mcp__chrome__take_screenshot'],
+        schemas() {
+          return this.names.slice()
+        },
+        restrict(body) {
+          if (throwing) throw new Error('模拟 MCP 中途断开：工具名失效')
+          restrictCalls.push((body && body.deny) || [])
+          return () => {
+            disposeCount++
+          }
+        },
+        on(type, fn) {
+          if (type === 'tools/change') changeHandlers.push(fn)
+          return () => {}
+        },
+      },
+    }
+    applyFc(fcCtx, {}) // 第一拍：装好第一层
+    check('⑬-1 第一拍：第一层已装（1 次 restrict、dispose 未调用）',
+      restrictCalls.length === 1 && disposeCount === 0 && !restrictCalls[0].includes('run_code'),
+      `restrictCalls=${restrictCalls.length} disposeCount=${disposeCount} deny1=${JSON.stringify(restrictCalls[0])}`)
+    fcCtx.tools.names.push('mcp__chrome__navigate_page')
+    throwing = true // schemas() 成功之后、restrict() 里 MCP 断开 ⇒ 新层装不上
+    let threwFc = null
+    try {
+      for (const h of changeHandlers) h()
+    } catch (e) {
+      threwFc = e
+    }
+    check('⑬-2 fail-closed：restrict 抛 ⇒ 不抛穿 + 旧层未被撤（disposeCount 仍 0）+ 旧 deny 原样',
+      threwFc === null && disposeCount === 0 && restrictCalls.length === 1,
+      `throws=${String((threwFc && threwFc.message) || 'null')} disposeCount=${disposeCount} restrictCalls=${restrictCalls.length}`)
+    check('⑬-3 fail-closed：有降级日志（warn 含 fail-closed 字样）',
+      warned.length >= 1 && warned.join('\n').includes('fail-closed'), JSON.stringify(warned).slice(0, 200))
+    throwing = false // MCP 重连：名字又可用 ⇒ 因 lastKey 未动，下次 tools/change 自动重试
+    let threwRetry = null
+    try {
+      for (const h of changeHandlers) h()
+    } catch (e) {
+      threwRetry = e
+    }
+    check('⑬-4 恢复后自愈：重试装上新层（3 个 deny）且旧层被撤（disposeCount=1）',
+      threwRetry === null && restrictCalls.length === 2 && disposeCount === 1
+      && restrictCalls[1].includes('mcp__chrome__navigate_page') && !restrictCalls[1].includes('run_code'),
+      `throws=${String((threwRetry && threwRetry.message) || 'null')} restrictCalls=${restrictCalls.length} disposeCount=${disposeCount} deny2=${JSON.stringify(restrictCalls[1])}`)
   }
 
   // —— ⑪ TOCTOU（写前重核）：用现成的 _fault:'recheck' 注入口；两处都要有 + 零写入证据 ——
