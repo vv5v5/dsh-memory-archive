@@ -13,12 +13,20 @@
  *   ⑦ 找不到 customInstruction 键 ⇒ ok:false + 可读原因（不猜位置、不整份重写）
  *   附：HTTP 集成 —— 恰好 2 条路由；POST /agent/apply（dryRun 零写入 / 真写 / 一律 200）；
  *      GET /agent/backups；BAD_JSON / 缺参都 200 + ok:false，绝不 500。
+ *   10)（修复单 v2 补）针对「生成物本身」的断言：真跑路径 F 取出 rp-tool-scope.js ⇒
+ *      node --check（子进程退出码 0）/ 导出形状能被 cordis 解析（registry.ts:222-228 口径）/
+ *      用 schemas( 不用 list( / 无 ALLOW、deny 构造用 RESERVED_TRANSPORT / 订阅 tools/change +
+ *      applying 重入保护 / 喂会抛的假 ctx 不抛 / 行为级：真跑 apply 后 deny 不含 run_code 且含
+ *      mcp__chrome__take_screenshot / 反向对照：tools.list( 与 ALLOW 文本被校验器抓到。
+ *   11)（修复单 v2 补）TOCTOU：applyToPreset 与 restoreFromBackup 注入 _fault:'recheck' ⇒
+ *      都 ok:false CONCURRENT_MODIFICATION 且零写入（文件逐字节未变 + .dma-backup/ 条数不变）；
+ *      dryRun 检测到并发修改时 ok:true 但 recheck.ok=false 且计划如实报告。
  */
 import http from 'node:http'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const repo = dirname(fileURLToPath(import.meta.url))
 let failures = 0
@@ -306,6 +314,121 @@ let afterWrite = null
   check('路径 F：agentPresets 服务缺失 ⇒ 可读拒绝（不写任何东西）', g.ok === false && g.code === 'SERVICE_MISSING')
   const g2 = await rp.generatePreset({ service: { copy: async () => {} }, presetsRoot, presetId: 'standard', displayName: 'x' })
   check('路径 F：部署 preset id ⇒ 硬拒', g2.ok === false && g2.code === 'PRESET_READ_ONLY')
+}
+
+// ---- 10) v5 修复单 v2 补：针对「生成物本身」的断言 + TOCTOU（写前重核） ----
+// ★ 为什么必须有（本项目的核心教训，别删这段注释）：P1a 交付时「全部台子都绿」，但生成器是
+// 坏的 —— 因为没有任何一条断言碰过生成出来的那份脚本（本文件此前全文没有 generatePreset /
+// schemas / checkToolScopeContract 字样）。不是假阳性，是覆盖空洞 ⇒ 下面把生成物真的取出来、
+// 落到临时目录、真的检查它（⛔ 不许只检查「模板字符串里有没有某个词」这种自欺）。
+{
+  // —— ① 取生成物：临时根上真跑一次路径 F（fake copy 模仿官方 agentPresets.copy）——
+  const genId = 'roleplay-dsh'
+  const genDir = join(presetsRoot, genId)
+  const fakeCopy = async () => {
+    mkdirSync(genDir, { recursive: true })
+    writeFileSync(join(genDir, 'agent.cordis.yml'), COMPOSITION, 'utf8')
+    writeFileSync(join(genDir, 'preset.yml'), 'name: 角色扮演（记忆库）\n', 'utf8')
+  }
+  const gen = await rp.generatePreset({ service: { copy: fakeCopy }, presetsRoot, presetId: genId, displayName: '角色扮演（记忆库）' })
+  const scopePath = join(genDir, 'rp-tool-scope.js')
+  check('① 路径 F 生成 ok 且 rp-tool-scope.js 已落盘（生成物真的取出来了）', gen.ok === true && existsSync(scopePath), JSON.stringify(gen).slice(0, 200))
+  const scopeText = readFileSync(scopePath, 'utf8')
+
+  // —— ② node --check 生成物：真的子进程，断言退出码 0，stderr 带进失败详情 ——
+  const { spawnSync } = await import('node:child_process')
+  const chk = spawnSync(process.execPath, ['--check', scopePath], { encoding: 'utf8' })
+  check('② 生成物 node --check 通过（退出码 0）', chk.status === 0, `status=${chk.status} stderr=${String(chk.stderr || '').slice(0, 300)}`)
+
+  // —— ③ 导出形状能被 cordis 解析 ——
+  // 依据（逐字）：vendor/cordis/src/registry.ts:222-228 的 resolve() 只认「函数」或
+  // 「带 .apply 函数的对象」（isApplicable 见 :8-10）⇒ activate/deactivate 之类根本挂不上。
+  const mod = await import(pathToFileURL(scopePath).href)
+  check('③ 导出形状 = 函数或带 .apply 的对象（cordis registry.ts:222-228 口径）',
+    typeof mod === 'function' || (mod && typeof mod.apply === 'function'),
+    'typeof mod=' + typeof mod + ' typeof mod.apply=' + String(mod && typeof mod.apply))
+  const applyFn = typeof mod === 'function' ? mod : mod.apply
+
+  // —— ④ 用 schemas 不用 list。⚠ 只对【生成物文本】断言 —— 校验器 rp-agent.js 里那两处
+  //      tools.list( 是故意的违例模式，别把自己坑了。——
+  check('④ 生成物枚举用 tools.schemas( 且不含 tools.list(', scopeText.includes('tools.schemas(') && !scopeText.includes('tools.list('))
+
+  // —— ⑤ 白名单真的退役：无 ALLOW / config.allow；deny 构造用 RESERVED_TRANSPORT ——
+  check('⑤ 生成物无 ALLOW / config.allow，deny 构造用 RESERVED_TRANSPORT',
+    !scopeText.includes('ALLOW') && !scopeText.includes('config.allow') && /deny\s*=\s*[\s\S]{0,200}RESERVED_TRANSPORT/.test(scopeText))
+
+  // —— ⑥⑦ 订阅 tools/change（兜 mcp 晚注册）+ applying 重入保护（restrict 自身会 emit）——
+  check('⑥⑦ 生成物订阅 tools/change 且有 applying 重入保护', scopeText.includes('tools/change') && /\bapplying\b/.test(scopeText))
+
+  // —— ⑧ 喂一个会抛的假 ctx ⇒ 断言不抛（「绝不抛」那条的可执行证据）——
+  let threw8 = null
+  try {
+    applyFn({ tools: { schemas() { throw new Error('boom') } } }, {})
+  } catch (e) {
+    threw8 = e
+  }
+  check('⑧ apply({ schemas(){throw boom} }) 不抛', threw8 === null, String(threw8 && threw8.message))
+
+  // —— ⑨ 行为级证据：记账假 ctx 跑真 apply ⇒ deny 不含 run_code、含 mcp__chrome__take_screenshot ——
+  // ★ 这条最有价值：证明「遮罩真的会挡掉 chrome」，而不是只看文本。
+  const restrictCalls = []
+  const behaviorCtx = {
+    tools: {
+      schemas() {
+        return ['run_code', 'anvil_query', 'mcp__chrome__take_screenshot']
+      },
+      restrict(body) {
+        restrictCalls.push(body && body.deny)
+      },
+    },
+  }
+  let threw9 = null
+  try {
+    applyFn(behaviorCtx, {})
+  } catch (e) {
+    threw9 = e
+  }
+  const lastDeny = restrictCalls.length ? restrictCalls[restrictCalls.length - 1] : null
+  check('⑨ 行为级：真跑 apply 后 deny 不含 run_code 且含 mcp__chrome__take_screenshot',
+    threw9 === null && Array.isArray(lastDeny) && !lastDeny.includes('run_code') && lastDeny.includes('mcp__chrome__take_screenshot'),
+    `throws=${String((threw9 && threw9.message) || 'null')} deny=${JSON.stringify(lastDeny)} calls=${JSON.stringify(restrictCalls)}`)
+  console.log('   [info] ⑨ deny 实际内容 = ' + JSON.stringify(lastDeny))
+
+  // —— ⑩ 反向对照：故意违例的脚本文本必须被校验器抓到（防「校验器永远返回 ok」——否则它可能压根没检查）——
+  const badList = rp.checkToolScopeContract('const t = tools.list()\nexport function apply(ctx, config) {}\n')
+  const badAllow = rp.checkToolScopeContract("const ALLOW = ['anima_query']\nexport function apply(ctx, config) {}\n")
+  const goodOne = rp.checkToolScopeContract(scopeText)
+  check('⑩-1 tools.list( 文本 ⇒ checkToolScopeContract ok:false 且含 USES_TOOLS_LIST',
+    badList.ok === false && badList.violations.some((v) => v.code === 'USES_TOOLS_LIST'), JSON.stringify(badList.violations))
+  check('⑩-2 ALLOW = [...] 文本 ⇒ ok:false 且含 HAS_ALLOWLIST',
+    badAllow.ok === false && badAllow.violations.some((v) => v.code === 'HAS_ALLOWLIST'), JSON.stringify(badAllow.violations))
+  check('⑩-3 对照组：生成物本身过校验器（ok:true 零违例）', goodOne.ok === true && goodOne.violations.length === 0, JSON.stringify(goodOne.violations))
+
+  // —— ⑪ TOCTOU（写前重核）：用现成的 _fault:'recheck' 注入口；两处都要有 + 零写入证据 ——
+  //   零写入 = 目标文件逐字节未变 + .dma-backup/ 条数不变（证明重核发生在备份之前，不留半截）。
+  const targetFile = join(rpDir, 'agent.cordis.yml')
+  const beforeText = readFileSync(targetFile, 'utf8')
+  const beforeBackups = readdirSync(backupDir).length
+  const r1 = rp.applyToPreset({ presetsRoot, presetId: 'roleplay', trust: 'user', customInstruction: '不该被写进去的值', memoryArchiveRoot: null, _fault: 'recheck' })
+  check('TOCTOU：applyToPreset 重核不过 ⇒ ok:false CONCURRENT_MODIFICATION（写前重核）',
+    r1.ok === false && r1.code === 'CONCURRENT_MODIFICATION' && String(r1.message).includes('写前重核'), JSON.stringify({ ok: r1.ok, code: r1.code }))
+  check('TOCTOU：applyToPreset 零写入（文件逐字节未变 + .dma-backup/ 条数不变）',
+    readFileSync(targetFile, 'utf8') === beforeText && readdirSync(backupDir).length === beforeBackups,
+    `backups ${beforeBackups} -> ${readdirSync(backupDir).length}`)
+
+  const someBackup = readdirSync(backupDir)[0]
+  const r2 = rp.restoreFromBackup({ presetsRoot, presetId: 'roleplay', trust: 'user', backupFile: someBackup, _fault: 'recheck' })
+  check('TOCTOU：restoreFromBackup 重核不过 ⇒ ok:false CONCURRENT_MODIFICATION（两处都要有）',
+    r2.ok === false && r2.code === 'CONCURRENT_MODIFICATION' && String(r2.message).includes('写前重核'), JSON.stringify({ ok: r2.ok, code: r2.code }))
+  check('TOCTOU：restoreFromBackup 零写入（同上两证）',
+    readFileSync(targetFile, 'utf8') === beforeText && readdirSync(backupDir).length === beforeBackups,
+    `backups ${beforeBackups} -> ${readdirSync(backupDir).length}`)
+
+  const d = rp.applyToPreset({ presetsRoot, presetId: 'roleplay', trust: 'user', customInstruction: INSTRUCTION, memoryArchiveRoot: null, dryRun: true, _fault: 'recheck' })
+  check('TOCTOU：dryRun 检测到并发修改 ⇒ ok:true 但 recheck.ok=false 且计划如实报告（§四.5）',
+    d.ok === true && d.dryRun === true && d.recheck && d.recheck.ok === false && d.plan.join('\n').includes('并发修改'), JSON.stringify({ recheck: d.recheck }))
+  check('TOCTOU：dryRun 依旧零写入',
+    readFileSync(targetFile, 'utf8') === beforeText && readdirSync(backupDir).length === beforeBackups)
 }
 
 // ---- 清理 ----
