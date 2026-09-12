@@ -410,6 +410,43 @@ let afterWrite = null
     badAllow.ok === false && badAllow.violations.some((v) => v.code === 'HAS_ALLOWLIST'), JSON.stringify(badAllow.violations))
   check('⑩-3 对照组：生成物本身过校验器（ok:true 零违例）', goodOne.ok === true && goodOne.violations.length === 0, JSON.stringify(goodOne.violations))
 
+  // —— ⑭（修复 v3 ①）RUN_CODE 排除判定的正反例：放宽 ≠ 放水 ——
+  // 教训（写进注释）：不能用「只认自己写法」的规则去判别人的代码 —— 真机手写 rp-tool-scope.js
+  // 用字符串常量 + !== 比较，旧判定只认数组字面量 ⇒ 假阳性；纪律 = 「先怀疑自己的台子」。
+  const rGen = rp.checkToolScopeContract(scopeText, { generated: true })
+  check('⑭-1 正例1：数组形态（我们的生成物，generated:true）⇒ 不报 RUN_CODE_NOT_EXCLUDED',
+    !rGen.violations.some((v) => v.code === 'RUN_CODE_NOT_EXCLUDED'), JSON.stringify(rGen.violations))
+  const FOREIGN_STYLE = [
+    '// 别人的写法（摘自真机手写 rp-tool-scope.js：字符串常量 + !== 比较）',
+    "const RESERVED_TRANSPORT = 'run_code'",
+    "const allow = new Set(['anima_query', 'state_show', 'state_list'])",
+    'export function apply(ctx, config) {',
+    '  const globals = ctx.tools.schemas()',
+    '  const deny = globals.filter((t) => !allow.has(t) && t !== RESERVED_TRANSPORT)',
+    '  ctx.tools.restrict({ deny })',
+    '}',
+  ].join('\n')
+  const rForeign = rp.checkToolScopeContract(FOREIGN_STYLE)
+  check('⑭-2 正例2：字符串常量形态（照抄对方写法）⇒ 不报 RUN_CODE_NOT_EXCLUDED',
+    !rForeign.violations.some((v) => v.code === 'RUN_CODE_NOT_EXCLUDED'), JSON.stringify(rForeign.violations))
+  const NO_EXCLUDE = [
+    "const allow = new Set(['anima_query'])",
+    'export function apply(ctx, config) {',
+    '  const globals = ctx.tools.schemas()',
+    '  const deny = globals.filter((t) => !allow.has(t))',
+    '  ctx.tools.restrict({ deny })',
+    '}',
+  ].join('\n')
+  const rBad = rp.checkToolScopeContract(NO_EXCLUDE, { generated: true })
+  const rBadForeign = rp.checkToolScopeContract(NO_EXCLUDE)
+  const badOwn = rBad.violations.find((v) => v.code === 'RUN_CODE_NOT_EXCLUDED')
+  const badOther = rBadForeign.violations.find((v) => v.code === 'RUN_CODE_NOT_EXCLUDED')
+  check('⑭-3 反例：真没排除（deny = globals.filter(!allow.has)）⇒ 必须仍报（generated:true 错误级）',
+    rBad.ok === false && badOwn && badOwn.severity === 'error', JSON.stringify(rBad.violations))
+  check('⑭-4 别人的文件同款问题 ⇒ 仍报但降为警告（措辞不判死，请人工确认）',
+    badOther && badOther.severity === 'warn' && String(badOther.detail).includes('请人工确认'),
+    JSON.stringify(badOther))
+
   // —— ⑫ 第二拍：tools/change 晚注册 ⇒ 重算（行为级；裁定 A 的落地）。文本里写了「订阅」
   //      不等于回调真的会重算 —— 「订阅了但回调逻辑坏了」只在 MCP 插件晚启动时才发作。
   //      假 ctx 全程记账：schemas() 可变（模拟 MCP 晚注册）、restrict() 记 deny + 返回 disposer
