@@ -176,35 +176,73 @@ writeFileSync(join(presetDir, 'preset.yml'), 'name: 角色扮演\n', 'utf8')
   // 导出形状能被 cordis 解析（registry.ts:222-228：resolve() 只认函数或带 .apply 的对象；isApplicable:8-10）
   const mod = await import(pathToFileURL(injectPath).href)
   check('① 导出形状 = 函数或带 .apply 的对象（cordis 口径）', typeof mod === 'function' || (mod && typeof mod.apply === 'function'))
+  const injectText = readFileSync(injectPath, 'utf8')
+  check('①-fix 文本级：生成物含 export const name / export const inject(systemPrompt) / ctx.effect(',
+    injectText.includes("export const name = 'dma-rp-inject'")
+      && injectText.includes('export const inject') && injectText.includes("'systemPrompt'")
+      && injectText.includes('ctx.effect('),
+    injectText.slice(0, 0))
 
-  // ---- 记账假 ctx：段名 / order / 文本逐字 ----
+  // ---- 记账假 ctx：段名 / order / 文本逐字（走 ctx.effect 正路；文本断言 ≠ 行为）----
   const registered = []
+  const effectCalls = [] // effect(fn, label) 的 label —— 断言真的走了 effect 那条路
+  const effectFnReturns = [] // effect 内部执行 fn 的返回值 = section() 的 disposer
+  const sectionDisposers = [] // section() 返回的 disposer（记账）
   const makeRecordingCtx = (schemaImpl) => ({
     systemPrompt: {
       section(s) {
+        const disposer = () => {}
+        sectionDisposers.push(disposer)
         registered.push({ name: s.name, order: s.order, text: s.text })
-        return () => {}
+        return disposer
       },
       ...(schemaImpl ? { schemas: schemaImpl } : {}),
+    },
+    effect(fn, label) {
+      effectCalls.push(label)
+      const r = fn() // 执行 fn（真正的注册发生在这里）
+      effectFnReturns.push(r)
+      return r // 官方契约：effect 的返回值 = fn 的返回值（disposer）
     },
   })
   registered.length = 0
   mod.apply(makeRecordingCtx(), { packFile: './dma-rp-pack.md' })
   const settings = registered.find((s) => s.name === 'dma:settings')
   const rules = registered.find((s) => s.name === 'dma:rules')
-  check('② 记账假 ctx：注册 dma:settings(60) + dma:rules(9950)，文本与 pack 逐字相等',
+  check('② 记账假 ctx（行为级）：走 ctx.effect 正路注册 dma:settings(60) + dma:rules(9950)，文本与 pack 逐字相等，disposer 交给 effect',
     registered.length === 2 && settings && settings.order === 60 && settings.text === SETTINGS_VERBATIM
-      && rules && rules.order === 9950 && rules.text === POST_VERBATIM,
+      && rules && rules.order === 9950 && rules.text === POST_VERBATIM
+      && effectCalls.length === 2 && effectCalls.every((l) => String(l).startsWith('dma-rp-inject.'))
+      && effectFnReturns.length === 2 && effectFnReturns[0] === sectionDisposers[0] && effectFnReturns[1] === sectionDisposers[1],
     JSON.stringify(registered.map((s) => ({ name: s.name, order: s.order, len: (s.text || '').length }))))
 
-  // ---- 绝不抛 ----
+  // ---- 绝不抛 + 降级日志 ----
   let threw = null
+  const boomLogs = []
   try {
-    mod.apply({ systemPrompt: { section() { throw new Error('boom') } }, log: { warn: () => {} } }, { settingsText: 'S', rulesText: 'R' })
+    mod.apply({ systemPrompt: { section() { throw new Error('boom') } }, log: { warn: (m) => boomLogs.push(String(m)) } }, { settingsText: 'S', rulesText: 'R' })
   } catch (e) {
     threw = e
   }
-  check('③ 喂会抛的假 ctx ⇒ apply 不抛（绝不抛）', threw === null, String(threw && threw.message))
+  check('③ 喂会抛的假 ctx ⇒ apply 不抛（绝不抛）且有降级日志', threw === null && boomLogs.some((m) => m.includes('dma-rp-inject')), String(threw && threw.message) + ' logs=' + boomLogs.length)
+
+  // ---- 降级：没有 ctx.effect ⇒ 直接注册仍成功（并记一句），绝不抛 ----
+  registered.length = 0
+  effectCalls.length = 0
+  const noEffectLogs = []
+  let threwNoEffect = null
+  try {
+    mod.apply({
+      systemPrompt: { section(s) { registered.push({ name: s.name, order: s.order }); return () => {} } },
+      log: { warn: (m) => noEffectLogs.push(String(m)) },
+    }, { settingsText: 'S', rulesText: 'R' })
+  } catch (e) {
+    threwNoEffect = e
+  }
+  check('⑮-降级：ctx 无 effect ⇒ 仍注册成功（2 段）且不抛、有「未绑生命周期」提示',
+    threwNoEffect === null && registered.length === 2 && effectCalls.length === 0
+      && noEffectLogs.some((m) => m.includes('未绑生命周期')),
+    `throws=${String((threwNoEffect && threwNoEffect.message) || 'null')} registered=${registered.length} logs=${JSON.stringify(noEffectLogs)}`)
 
   // ---- 开关生效 ----
   registered.length = 0
