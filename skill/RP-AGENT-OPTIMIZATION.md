@@ -113,3 +113,125 @@ Code Mode 或结构化输出**失效**。收窄工具面的正确做法是**组�
    从 `standard` 复制后删行时漏了它，长对话必撞上下文窗口（调研 §2.11：自建 RP 预设最容易漏的一行）。
 4. 被 `cordis:group` + `isolate:` 包着的块要么整块留、要么整块删，不能只抄里面的行
    （`agent.cordis.yml:11-18` 注释原话：isolate 外的行会发布进 root realm，与别的 preset 冲突，挂载被拒）。
+
+---
+
+# 选卡：读什么 / 产出什么 / 格式契约（v5 P1b）
+
+> 契约出处：《选卡-读卡与pack输出契约.md》（2026-09-13 修订见《选卡-设计修订与组装骨架-20260913.md》，冲突以后者为准）。
+> 一句话：**插件不解析卡字段 —— 卡的原始数据全给你（AI），你读、你判断、你产出；插件只负责定义格式 + 校验 + 路由。**
+> 为什么必须这样（实测）：① 卡的键是 **camelCase**（`systemPrompt`/`firstMessage`/`postHistoryInstructions`），按 snake_case 读一律 `undefined`；
+> ② 「主提示词」在卡里有**两份且大面积不同**（`data.systemPrompt` 6732 字 vs `data.extensions.system_prompt` 8432 字）——不许由插件写死读哪份，**由你判断并向用户说明**；
+> ③ 描述字段可能是空壳（`description` 5 字、`personality`/`scenario` 0 长度）——别按"四字段拼接"机械干活；
+> ④ 卡是注入段的语义权威（它定义 `躯体/密氛/恐惧` 怎么算）——读漏了卡，模型就不知道那些数字是什么。
+> ⛔ **世界书（characterBook）这次留空**：不接、不检索、不写进产物。
+
+## 你能读到什么（全都给，不做预筛）
+
+| # | 数据 | 来源 |
+|---|---|---|
+| 1 | **卡的原始全字段**（JSON 原样，含 `data.*` / `extensions.*` / `compatibility.*` / `characterBook`，一个字段不省） | `GET /dsh-memory-archive/api/agent/card?id=<文件名>` |
+| 2 | **可用卡清单**（id / name / creatorNotes / 字数概览——只是导航提示） | `GET /dsh-memory-archive/api/agent/cards` |
+| 3 | **当前 RP preset 的现状**（persona 全文、工具面脚本是否在） | 既有 `GET /agent` / `GET /agent/backups` |
+| 4 | ★ **两个固定段**（见下） | 插件内置（你只读，⛔ 不许改、不许重复其职责） |
+| 5 | 用户当前根 / 绑定 | `dma-binding.json`（经既有端点可见） |
+
+⛔ 你不许做的：替用户决定"读哪份 systemPrompt"、做字段优先级、把空字段补默认值。
+✅ 你要做的：读全、列 `readFields`/`missing`、做取舍、**把该问的写成 QUESTIONS 问玩家**。
+
+## 你要产出两份文档（缺一不可，都是机器可校验的接口）
+
+### 第一份：`RP-AGENT-QUESTIONS v1` —— 给玩家看的白话选择题（先出这份）
+
+```
+RP-AGENT-QUESTIONS v1
+
+## 说明
+<一两句白话：这是给你定的几件事，不选也能用，我会按默认来。>
+
+## 要你定的第 1 件事
+问：<一句白话问题，⛔ 不许出现技术词>
+  · <选项 A 的白话名字>：<选了会怎样 —— 说后果，不说原理>
+  · <选项 B 的白话名字>：<选了会怎样>
+我的建议：<选项名>。因为 <一句话理由>。
+不选也行：默认「<选项名>」。
+```
+
+校验器会拦：`BAD_MAGIC` / `NO_QUESTIONS`（一题都没有）/ `QUESTION_INCOMPLETE`（四要素缺一）/
+`TECH_JARGON`（**术语禁令**，见下一节）/ `NO_FALLBACK`（缺「不选也行」）/ `TOO_FEW_OPTIONS`（选项 <2，警告）。
+
+### 第二份：`RP-AGENT-PACK v1` —— 可执行产物（玩家答完后再出）
+
+```markdown
+RP-AGENT-PACK v1
+
+## META
+name: <角色显示名>
+sourceCard: <卡 id 或文件名>
+readFields: <实际读到并采用过的字段清单，含长度，如 data.systemPrompt(6732)、data.firstMessage(1022)>
+missing: <为空/缺失的字段清单；如实列。全都有就写 NONE>
+decisions: <你替用户做的取舍，逐条一行；没做就写 NONE。★ 只留给无关体验的小事；凡影响体验的一律进 QUESTIONS>
+identity: <★ 新增：它以为自己是干什么的（扮演角色 / 当 KP…），≤400 字，要短 —— 这段落最前，需用户认可>
+thinkMode: <★ 新增：analysis | immersion | off（封闭枚举；缺省 = analysis；概率性效果，由实测裁决）>
+cardHash: <卡文件的 sha256 前 16 位>
+
+## SETTINGS
+<★「设定与规则」：将被放到对话历史之前的整段文本。
+ 应覆盖：世界与社会形态 / 核心数值及其语义 / 判定与检定规则（那些被注入的块是什么，由固定段 B 解释，你不要重复）。
+ ⛔ 不要写成对模型的元指令（"你必须…"那类）。>
+
+## TONE
+<KEEP 或 演出规范文本。若写正文：只写"怎么演"（人称/段落/文风/节奏），不写世界规则。>
+
+## OPENING
+<首轮开场文本（通常来自卡的 firstMessage，可做最小必要改写）。卡没有开场就写 NONE。>
+
+## POST
+<可选。靠后生效的规则。没有就写 NONE。>
+
+## CONFLICTS
+<★ 需要用户拍板的问题，逐条三段式：问题 / 你的建议 / 影响。没有就写 NONE。
+ 这就是"跟用户商量"的入口 —— 不要自己闷着决定。>
+```
+
+校验器会拦（错误级）：`BAD_MAGIC` / `MISSING_SECTION`（META/SETTINGS/TONE/OPENING/CONFLICTS 必备，POST 可选）/
+`META_INCOMPLETE`（name/readFields/missing/decisions/cardHash 五项）/ `EMPTY_SETTINGS` / `BAD_TONE`（非 KEEP 也得有正文）/
+**`CARD_HASH_MISMATCH`**（拿旧 pack 套新卡，必拦）/ `BAD_THINK_MODE`（封闭枚举外）/ `BAD_IDENTITY`（缺失、空、或 >400 字）。
+警告级（不阻断但会显示）：`DUPLICATES_CONTRACT`（SETTINGS 里写了固定段 B 的职责）/ `SETTINGS_TOO_LONG`（>8000 字）/
+`HAS_CONFLICTS`（非 NONE ⇒ **不许写盘**，先商量）。
+
+## 两个固定段（⛔ 不要重复它们的职责）
+
+| 固定段 | 内容 | 落点 | 谁维护 |
+|---|---|---|---|
+| **A · persona 槽（deployment:persona，order 0）** | ★ **IDENTITY**：「你是 KP / 你扮演 X」——由你产出、**用户认可**后才用 | 最前（`harness:identity` 只有一句 "You are an AI agent…"，在它前面且可关） | **你产出 + 用户认可** |
+| **B · 对接层（seam contract）** | 6 条**注入缝解读**：`<recalledMemories>` 是历史资料不是此刻 · `<storyAnchor>` 是当前坐标且冲突以它为准 · `【当前状态】` 是权威数值 · `OOC:`/`导演:` 前缀路由 · 不出戏边界 · 数值单列 | 插件内置常量 | **插件（⛔ 不被卡/你覆盖）** |
+
+★ 为什么 B 必须固定（实测）：卡的两份 systemPrompt 里 **0 个尖括号标签**、完全不提 `OOC`/`导演`/`【当前状态】`
+⇒ 你的文本若把 B 的职责也写了，会两处说法冲突；校验器会以 `DUPLICATES_CONTRACT` 提醒。
+★ 注：早期那份「用户手写 7 段演出规范」的前提**已作废**（用户只维护规则书）——persona 槽可由你的 IDENTITY/演出文本替换，是否替换**问玩家**。
+★ 写入面归 P1b-2（路由/组装/压缩保护）；**当前版本只产出与校验，不会自动写进任何文件**。
+
+---
+
+# 怎么跟玩家说话（★ skill 默认玩家完全不懂计算机知识，只会用微信聊天）
+
+1. **不许出现技术词**。禁用词（校验器会拦，报 `TECH_JARGON`）：
+   `order` / `section` / `prompt` / `system` / `token` / `压缩` / `注入` / `枚举` / `schema` / `preset` / `JSON` / `字段` / `路径` / `配置项` / `durable` / `hash` / `scope` / `realm`
+2. **每件事都要**：一句白话问题 + 每个选项**说后果**（不说原理）+ **我的建议 + 一句话为什么** + **不选也行（默认值）**。
+3. **优先问玩家，不要替他定**。`META.decisions` 只留给**无关体验的小事**（例如"卡里有两份主提示词，我取了归一化那份"）；凡影响体验的，一律进 QUESTIONS。
+4. ★ **翻译对照表**（照抄，给 AI 当范例用）：
+
+| ⛔ 不许对玩家这么说 | ✅ 要这么说 |
+|---|---|
+| 组装顺序 / order | 「先说什么、后说什么 —— **越靠后说的，它越当回事**」 |
+| 首轮不收纳 / 压缩保护 | 「**开场和你的第一句话永远留着**，不会被'记成摘要'以后就忘了」 |
+| 思考模式 marker | 「它想事情的时候，是**入戏地在心里嘀咕**，还是**冷静地盘算**」 |
+| 世界书 | 「设定小册子（**这次先不放**）」 |
+| 规则书 / SETTINGS | 「你那本规则书」 |
+| IDENTITY / persona 槽 | 「它**以为自己是干什么的**」 |
+| `<recalledMemories>` | 「它翻出来的**往事**」 |
+| 工具面 / restrict | 「它能用哪些本事」 |
+| 回滚 / 备份 | 「改坏了能一键变回去（每次改之前都会先存一份）」 |
+
+5. ★ **面板上用同一套白话**：同一个选项，skill 里和界面上**说法一致**（玩家点的时候不用重新理解）。
