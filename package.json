@@ -1,0 +1,78 @@
+{
+  "name": "dsh-memory-archive",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "DSH 记忆库：并入的提示词查看器（看每次模型请求真正发出的全文）+ 阅读优先界面（连续滚动读摘要与原文、全屏）+ 真名解析（工作区 catalog.json 的角色名/周目名/周目↔会话映射与多级回退）+ 提示词面板（压缩指令/收纳占位可编辑落盘）；会话与工作区两种根模式，只读会话与归档，复用 DSH 自身的压缩机制与检索索引。",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "docs",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "check": "node --check lib/index.js && node --check lib/client.js"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "memory",
+    "archive",
+    "session-search",
+    "compaction",
+    "context",
+    "prompt-viewer",
+    "checkpoint"
+  ],
+  "author": "dsh-memory-archive contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vv5v5/dsh-memory-archive.git"
+  },
+  "homepage": "https://github.com/vv5v5/dsh-memory-archive#readme",
+  "bugs": {
+    "url": "https://github.com/vv5v5/dsh-memory-archive/issues"
+  },
+  "engines": {
+    "node": ">=22.13",
+    "dsh": "*"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "react": "*",
+    "pmp-dsh-tavern": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "pmp-dsh-tavern": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  }
+}

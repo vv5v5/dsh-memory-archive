@@ -1,0 +1,5 @@
+﻿# 仓库内统一 LF；二进制文件不做行尾转换
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.zstd binary

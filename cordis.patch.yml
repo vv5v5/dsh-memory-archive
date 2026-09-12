@@ -1,0 +1,17 @@
+# dsh-memory-archive —— bundle patch
+#
+# 作用：把本插件的**宿主半侧**挂进 DSH 的组合树。
+# **浏览器半侧不需要在这里声明** —— 它由 DSH 通过 package.json 的
+# `exports["./client"]` + `dsh.client` 自动发现，并从 `/plugins` 提供。
+# （范本：pmp-dsh-tavern 的 cordis.patch.yml 原话 "Mount the host half.
+#   The browser half is discovered through package.json."）
+#
+# 为什么这个文件是必须的：`dsh.profile.bundles` **只接受声明了 `dsh.bundle.patch`
+# 的包**，否则宿主启动时会直接抛错：
+#   `dsh: profile bundle "…" declares no dsh.bundle in its package.json`
+#   （packages/boot/app-boot/src/profile.ts:834）—— 我第一次登记就踩了这个。
+#
+# 宿主半侧 v1 是空的（功能全在 lib/client.js），所以这里没有任何 config。
+- insert:
+    - id: memory-archive
+      name: 'dsh-memory-archive'
