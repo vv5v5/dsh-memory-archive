@@ -102,6 +102,24 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 1. 这里保存的「压缩指令」**只是文本** —— 要真正生效，需要把它填进对应 preset 的 `customInstruction`；
 2. 本插件**尚未实现收纳执行器**：「收纳占位」目前是**待用的配置位**，保存它**不改变任何 DSH 行为**。
 
+### Agent 编辑器（侧边栏第二个入口，v5 起只读）
+
+侧边栏底部的「Agent 编辑器」（窄屏显示「词」）与记忆库分工：**记忆库管内容，编辑器管 agent**。面板分三块 + 两区：
+
+- **组成** —— 当前会话所用 preset 的段/插件/order 清单，每项一句「谁注入 · order · 作用」注释；
+- **每次请求** —— 上文并入的提示词查看器整体搬入（工作区分组的会话列表 → 请求 → `system/tools/inventory/消息流/完整`）；
+- **可写项** —— 4 类 knob 的当前值（压缩指令 / 收纳占位 / 注入 order·上限 / 记忆·状态开关）与
+  ★ **「面板值 vs preset 实际值是否一致」**（不一致就明说「面板改了也不会生效」）。
+  「预览差异 / 应用 / 回滚」按钮**渲染但禁用**（写入面是后续版本；当前版本**零写入**，连备份目录都不建）；
+- **Skill 区** —— 「启用 RP agent 优化」开关只改本界面状态（刷新后需重新勾选），随包提供
+  [`skill/RP-AGENT-OPTIMIZATION.md`](skill/RP-AGENT-OPTIMIZATION.md) 作为 AI 助手日后执行优化时的原则文档；
+- **生成 / 修复 RP agent（检测与预览）** —— 只读检测：有没有用户自带（`trust === 'user'`）的 RP preset、
+  记忆库根是否配好、缺什么，以及官方 `agentPresets.copy('standard', …)` 生成路线的逐条事实预览。**不落盘**。
+
+数据来自宿主只读接口 `GET /dsh-memory-archive/api/agent` 与 `/agent/detect`（优先 `agentPresets` 服务，
+退回扫描 `~/.dsh/.agent-presets/`；路径由 `DSH_HOME`/`homedir()` 推导）。拿不到的服务一律如实显示
+「未知」，绝不猜测。
+
 ### 设置（次级视图）
 
 - **根模式** —— 会话 / 工作区；工作区需 Tavern 可达，否则置灰并给出原因。
@@ -132,7 +150,7 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 
 | 前缀 | 内容 | 降级行为 |
 |---|---|---|
-| `/dsh-memory-archive/api` | 配置读写、会话精确读，以及 `GET/PUT /api/templates`（提示词模板读写） | 模板缺省或值为 `null`/空串时**回落内置默认**（配置段 `prompts` 缺失同理，老配置兼容） |
+| `/dsh-memory-archive/api` | 配置读写、会话精确读，`GET/PUT /api/templates`（提示词模板读写），以及 `GET /api/agent`、`GET /api/agent/detect`（Agent 编辑器只读数据面） | 模板缺省或值为 `null`/空串时**回落内置默认**（配置段 `prompts` 缺失同理，老配置兼容）；agent 两端点**零写入**，服务拿不到时返回 `ok:false` + 可读 `code`，绝不抛、绝不 500 |
 | `/dsh-memory-archive/prompt` | 并入查看器的数据面：`/health`、`/api/sessions`、`/api/sessions/resolve`、`/api/session`、`/api/part` | 读取出错时**不崩溃**：HTTP 200，错误信息放响应体（`ok:false` + `error`） |
 
 宿主 API 整体不可用时面板不白屏：浏览区退回工作区模式。

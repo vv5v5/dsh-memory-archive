@@ -16,7 +16,8 @@
     "README.en.md",
     "docs",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "skill"
   ],
   "scripts": {
     "check": "node --check lib/index.js && node --check lib/client.js"
