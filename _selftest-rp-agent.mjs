@@ -18,6 +18,10 @@
  *      用 schemas( 不用 list( / 无 ALLOW、deny 构造用 RESERVED_TRANSPORT / 订阅 tools/change +
  *      applying 重入保护 / 喂会抛的假 ctx 不抛 / 行为级：真跑 apply 后 deny 不含 run_code 且含
  *      mcp__chrome__take_screenshot / 反向对照：tools.list( 与 ALLOW 文本被校验器抓到。
+ *   12)（补·裁定 A）第二拍行为断言：订阅 tools/change 后 MCP 晚注册 ⇒ 手动触发回调 ⇒
+ *      回调不抛、restrict 恰 +1、新 deny 更长且含 mcp__chrome__navigate_page、仍不含 run_code；
+ *      第二次 restrict 之前第一次的 dispose 已被调用（先撤后 apply）；restrict 内部同步 emit
+ *      tools/change 不引发递归（重入保护）；正向对照：一次触发 ⇒ 回调恰跑一次。
  *   11)（修复单 v2 补）TOCTOU：applyToPreset 与 restoreFromBackup 注入 _fault:'recheck' ⇒
  *      都 ok:false CONCURRENT_MODIFICATION 且零写入（文件逐字节未变 + .dma-backup/ 条数不变）；
  *      dryRun 检测到并发修改时 ok:true 但 recheck.ok=false 且计划如实报告。
@@ -403,6 +407,97 @@ let afterWrite = null
   check('⑩-2 ALLOW = [...] 文本 ⇒ ok:false 且含 HAS_ALLOWLIST',
     badAllow.ok === false && badAllow.violations.some((v) => v.code === 'HAS_ALLOWLIST'), JSON.stringify(badAllow.violations))
   check('⑩-3 对照组：生成物本身过校验器（ok:true 零违例）', goodOne.ok === true && goodOne.violations.length === 0, JSON.stringify(goodOne.violations))
+
+  // —— ⑫ 第二拍：tools/change 晚注册 ⇒ 重算（行为级；裁定 A 的落地）。文本里写了「订阅」
+  //      不等于回调真的会重算 —— 「订阅了但回调逻辑坏了」只在 MCP 插件晚启动时才发作。
+  //      假 ctx 全程记账：schemas() 可变（模拟 MCP 晚注册）、restrict() 记 deny + 返回 disposer
+  //      并在内部同步 emit tools/change（官方行为，同时把重入保护一起锁了）。
+  {
+    // ★ 用「新模块实例」跑本节：生成物是模块级 state（applying/lastKey/liftLast），生产里
+    // 每个 preset 目录各一份独立实例；这里若复用 ⑨ 那次 import，⑨ 留下的 lastKey 指纹会把
+    // 第一拍误判成「无变化」而跳过（那是 memo 在正确工作，不是 bug）。cache-bust 一次即可。
+    const modFresh = await import(pathToFileURL(scopePath).href + '?second-beat')
+    const applyFresh = typeof modFresh === 'function' ? modFresh : modFresh.apply
+    const changeHandlers = []
+    const restrictCalls = [] // { deny, seenDisposes }：seenDisposes = 这次 restrict 时已被调用过的 dispose 数
+    let disposeCount = 0
+    let handlerFired = 0
+    let emitCount = 0
+    let emitting = false
+    const emitChange = () => {
+      if (emitting) return
+      emitting = true
+      try {
+        for (const h of changeHandlers.slice()) {
+          emitCount++
+          if (emitCount > 50) throw new Error('recursion guard：emit 超 50 次（重入保护失效）')
+          h()
+        }
+      } finally {
+        emitting = false
+      }
+    }
+    const beatCtx = {
+      tools: {
+        names: ['run_code', 'anvil_query', 'mcp__chrome__take_screenshot'],
+        schemas() {
+          return this.names.slice()
+        },
+        restrict(body) {
+          const deny = (body && body.deny) || []
+          restrictCalls.push({ deny, seenDisposes: disposeCount })
+          const dispose = () => {
+            disposeCount++
+          }
+          emitChange() // 模拟官方：restrict() 自身会通知 tools/change（同步）
+          return dispose
+        },
+        on(type, fn) {
+          // 记账：type==='tools/change' 的 handler 都收着（可能被订阅多次），包一层计数
+          if (type === 'tools/change') changeHandlers.push(() => {
+            handlerFired++
+            fn()
+          })
+          return () => {}
+        },
+      },
+    }
+    // 第一拍：真跑 apply ⇒ 一次订阅、一次 restrict，deny1 不含 run_code
+    applyFresh(beatCtx, {})
+    const deny1 = restrictCalls[0] && restrictCalls[0].deny
+    check('⑫-1 第一拍：恰 1 次订阅、恰 1 次 restrict，deny1 = 全局 − run_code',
+      changeHandlers.length === 1 && restrictCalls.length === 1 && Array.isArray(deny1)
+      && !deny1.includes('run_code') && deny1.includes('mcp__chrome__take_screenshot'),
+      `handlers=${changeHandlers.length} restrictCalls=${restrictCalls.length} deny1=${JSON.stringify(deny1)}`)
+    // 第二拍（本单核心）：MCP 晚注册补进 navigate_page ⇒ 手动触发订阅的回调 ⇒ 必须重算
+    beatCtx.tools.names.push('mcp__chrome__navigate_page')
+    let threwBeat2 = null
+    handlerFired = 0 // 只数这次手动触发（含被 applying 挡住的重入调用）
+    const restrictBefore = restrictCalls.length
+    try {
+      for (const h of changeHandlers) h()
+    } catch (e) {
+      threwBeat2 = e
+    }
+    const deny2 = restrictCalls[restrictCalls.length - 1] && restrictCalls[restrictCalls.length - 1].deny
+    // 正向对照（规格第 6 条）：一次触发 ⇒ 回调确实跑了（handlerFired ≥1）且【生效的重算恰一次】
+    //（restrict 恰 +1 —— restrict 内部同步 emit 引起的额外 handler 调用全被 applying 挡住，不再产生 restrict）
+    check('⑫-2 第二拍：回调不抛、回调确实被收集并运行、生效重算恰一次（restrict 恰 +1）',
+      threwBeat2 === null && handlerFired >= 1 && restrictCalls.length === restrictBefore + 1,
+      `throws=${String((threwBeat2 && threwBeat2.message) || 'null')} handlerFired=${handlerFired} restrictCalls=${restrictCalls.length}（前 ${restrictBefore}）`)
+    check('⑫-3 新 deny 比第一次长、含 mcp__chrome__navigate_page、仍不含 run_code',
+      Array.isArray(deny2) && deny2.length > deny1.length && deny2.includes('mcp__chrome__navigate_page') && !deny2.includes('run_code'),
+      `deny1=${JSON.stringify(deny1)} deny2=${JSON.stringify(deny2)}`)
+    console.log('   [info] ⑫ deny 前后 = ' + JSON.stringify(deny1) + ' -> ' + JSON.stringify(deny2))
+    // 先撤后 apply：第二次 restrict 之前，第一次的 dispose 已被调用（否则限制按层越堆越多）
+    check('⑫-4 先撤上一次：第二次 restrict 时 dispose 恰已被调用 1 次',
+      restrictCalls.length === 2 && restrictCalls[1].seenDisposes === 1 && disposeCount === 1,
+      `seenDisposes=${JSON.stringify(restrictCalls.map((c) => c.seenDisposes))} disposeCount=${disposeCount}`)
+    // 重入保护：restrict 内部同步 emit 的那几次全被 applying 挡住 ⇒ 总次数有限（2 次）而非爆炸
+    check('⑫-5 重入保护：emit-inside-restrict 未引发递归（restrict 总数有限、emit 被 applying 挡住）',
+      restrictCalls.length === 2 && emitCount <= 50 && emitCount >= 1,
+      `restrictCalls=${restrictCalls.length} emitCount=${emitCount}`)
+  }
 
   // —— ⑪ TOCTOU（写前重核）：用现成的 _fault:'recheck' 注入口；两处都要有 + 零写入证据 ——
   //   零写入 = 目标文件逐字节未变 + .dma-backup/ 条数不变（证明重核发生在备份之前，不留半截）。
