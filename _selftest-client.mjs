@@ -24,10 +24,11 @@
  *     #4=disc #5=catalog #6=tick #7=pickedSessionId；
  *   AgentEditorPanel #0=fullscreen #1=health #2=sessions #3=hostRows #4=nameIdx #5=sessionId
  *     #6=detail #7=turn #8=part #9=partState #10=fullState #11=query #12=note
- *     （#13/#14 是 ref，默认即可）#15=agent #16=detect #17=detectTick #18=skillOn；
+ *     （#13/#14 是 ref，默认即可）#15=agent #16=detect #17=detectTick #18=skillOn
+ *     #19=apply #20=backups #21=backupsTick #22=rollback；
  *   ViewerSessionList #0=filter #1=expanded #2=showAll；
  *   TemplatesView #0=tab；TemplateCard #0=load #1=draft #2=save #3=refOpen #4=tick；
- *   CompositionBlock #0=open；KnobsPanel #0=open #1=tpl。
+ *   CompositionBlock #0=open；KnobsPanel #0=open #1=tpl #2=diffPlan。
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -453,7 +454,7 @@ await check('★ v5 P0 编辑器面板（独立浮层）：三块在（组成/�
     assert.ok(s.includes('← 先选一个会话'), '每次请求块·中栏请求列表不在')
     assert.ok(s.includes('← 再选一次请求（第 N 次）'), '每次请求块·右栏部件视图不在')
     for (const t of ['system', 'tools', 'inventory', '消息流', '完整']) assert.ok(s.includes(t), '缺版块 tab: ' + t)
-    assert.ok(s.includes('4 类 knob（本版只读展示）'), '可写项块不在')
+    assert.ok(s.includes('4 类 knob（当前值 · 一致性 · 写入入口）'), '可写项块不在')
     assert.ok(s.includes('Skill：启用「RP agent 优化」'), 'Skill 区开关不在')
     assert.ok(s.includes('生成 / 修复 RP agent'), '检测按钮不在')
     assert.ok(s.includes('⛶') && s.includes('✕'), '独立浮层缺全屏/关闭按钮')
@@ -1160,14 +1161,17 @@ await check('★ D 单：CSS 兼容备忘两处逐字（设置视图一行 + CHA
   assert.equal(src.includes('.css'), false, '不该出现读取 CSS 文件的迹象')
 })
 
-// ---------- v5 P0：Agent 编辑器（只读）静态与渲染核对 ----------
-await check('★ v5 P0 文案逐字：Skill 两段（规格 §五）+ 「刷新后需重新勾选」+ 预览底部一行 + 禁用理由「P2 才实现写入」', () => {
+// ---------- v5 P0→修复单 v2：Agent 编辑器静态核对（§五.2：断言改成三态新契约，⛔ 不许删） ----------
+await check('★ 可写项块三态文案逐字：Skill 两段（规格 §五）+ 「刷新后需重新勾选」+ 预览底部一行 + 可写/只读(官方语义)/未知/读取中', () => {
   for (const t of [
     '启用后，AI 助手会按「RP agent 优化原则」帮你调整这个 RP agent（只动由本插件生成、位于沙箱内的那个 preset）。',
     '风险提示：改动会写入你的 agent preset 文件（每次应用前会自动备份，可一键回滚）。未启用时本编辑器只读。',
     '勾选只保存在本界面（组件内 state，不落任何本地存储）；刷新后需重新勾选。',
     '本版只做检测与预览，不会写入任何文件。',
-    'P2 才实现写入',
+    '可写（应用前自动备份；改完需新开会话或重启才完全生效）',
+    '随部署附带，不可修改（agent-preset/read-only）',
+    '读不到 preset，先修数据面',
+    '正在读取可写性…',
     'Agent 编辑器 · 组成 / 每次请求 / 可写项',
   ]) assert.ok(src.includes(t), '缺逐字文案: ' + t)
 })
@@ -1184,17 +1188,51 @@ await check('★ v5 P0 零写入：/agent 两个 rest 只经 requestJson（GET�
   assert.equal(/mutateJson\(HOST_API_BASE \+ '\/agent/.test(src), false, '/agent 出现在写请求里')
 })
 
-await check('★ v5 P0 渲染：可写项块的 预览差异/应用/回滚 三按钮渲染但禁用，悬停理由=P2 才实现写入；Skill 勾选框是 checkbox', () => {
+await check('★ 可写项块三态渲染（修复单 v2 §五.2）：读取中⇒禁用+如实理由；可写⇒三按钮启用；只读⇒禁用+官方语义；未知⇒禁用+可读理由；Skill 勾选框是 checkbox', () => {
+  const collectBtns = (tree, pred, out) => collectNodes(tree, (n) => n.$$element === 'button' && n.props && pred(n), out)
+  const agentReady = (writable) => ({
+    status: 'ready',
+    data: {
+      preset: { id: writable == null ? null : 'roleplay', name: null, trust: writable == null ? null : (writable ? 'user' : 'deployment'), writable: writable == null ? null : writable },
+      sections: [],
+      compaction: {},
+    },
+  })
+  // 态 1 · 读取中（默认 loading）：三按钮禁用，理由 = 正在读取可写性…（如实，无过期承诺）
   fakeReact.__setPreset({ AgentEditorButton: { 0: true } })
   try {
     const tree = fakeReact.createElement(viewerBtn, { wide: true })
     const disabled = []
-    collectNodes(tree, (n) => n.$$element === 'button' && n.props && n.props.disabled === true && n.props.title === 'P2 才实现写入', disabled)
-    assert.ok(disabled.length >= 3, '禁用按钮（预览差异/应用/回滚）不足 3 个: ' + disabled.length)
+    collectBtns(tree, (n) => n.props.disabled === true && n.props.title === '正在读取可写性…', disabled)
+    assert.ok(disabled.length >= 3, '读取中态：禁用按钮（预览差异/应用/回滚）不足 3 个: ' + disabled.length)
     const boxes = []
     collectNodes(tree, (n) => n.$$element === 'input' && n.props && n.props.type === 'checkbox', boxes)
     assert.equal(boxes.length, 1, 'Skill 勾选框应恰好 1 个')
     assert.equal(boxes[0].props.checked, false, 'Skill 勾选默认应为关')
+  } finally { fakeReact.__setPreset(null) }
+  // 态 2 · 可写（preset.writable === true）⇒ 三按钮 disabled === false（P2 起的真实契约，必须断言到）
+  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(true) } })
+  try {
+    const tree = fakeReact.createElement(viewerBtn, { wide: true })
+    const enabled = []
+    collectBtns(tree, (n) => !n.props.disabled && ['预览差异', '应用', '回滚'].includes(String(n.props.children)), enabled)
+    assert.ok(enabled.length >= 3, '可写态：启用的三按钮（预览差异/应用/回滚）不足 3 个: ' + enabled.length)
+  } finally { fakeReact.__setPreset(null) }
+  // 态 3 · 只读（writable === false）⇒ 三按钮禁用 + 官方语义理由（agent-preset/read-only）
+  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(false) } })
+  try {
+    const tree = fakeReact.createElement(viewerBtn, { wide: true })
+    const disabled = []
+    collectBtns(tree, (n) => n.props.disabled === true && n.props.title === '随部署附带，不可修改（agent-preset/read-only）', disabled)
+    assert.ok(disabled.length >= 3, '只读态：禁用按钮不足 3 个: ' + disabled.length)
+  } finally { fakeReact.__setPreset(null) }
+  // 态 4 · 未知（读不到 preset）⇒ 三按钮禁用 + 可读理由（不猜）
+  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(null) } })
+  try {
+    const tree = fakeReact.createElement(viewerBtn, { wide: true })
+    const disabled = []
+    collectBtns(tree, (n) => n.props.disabled === true && n.props.title === '读不到 preset，先修数据面', disabled)
+    assert.ok(disabled.length >= 3, '未知态：禁用按钮不足 3 个: ' + disabled.length)
   } finally { fakeReact.__setPreset(null) }
 })
 
