@@ -235,33 +235,33 @@ const [B1, B2] = names
     })
   try {
     const before = snapshot(presetsRoot)
-    const d = await call('POST', '/dsh-memory-archive/api/agent/rollback', { presetId: 'roleplay', backupFile: B2, dryRun: true })
+    const d = await call('POST', '/magictarven/api/agent/rollback', { presetId: 'roleplay', backupFile: B2, dryRun: true })
     check('HTTP dryRun：200 + ok:true + 计划 + 零写入', d.status === 200 && d.json.ok === true && d.json.dryRun === true && Array.isArray(d.json.plan) && snapEqual(before, snapshot(presetsRoot)))
 
     const names0 = backupNames(backupDir()).length
-    const r = await call('POST', '/dsh-memory-archive/api/agent/rollback', { presetId: 'roleplay', backupFile: B2 })
+    const r = await call('POST', '/magictarven/api/agent/rollback', { presetId: 'roleplay', backupFile: B2 })
     const afterR = readFileSync(compositionPath(), 'utf8')
     check('HTTP 真回滚：200 + ok:true + 文件内容 = B2（逐字节）', r.status === 200 && r.json.ok === true && r.json.dryRun === false && afterR === readFileSync(join(backupDir(), B2), 'utf8'))
     check('HTTP 真回滚：restoredFrom/backup 齐 + 安全备份落盘（+1）', r.json.restoredFrom && r.json.restoredFrom.name === B2 && r.json.backup && r.json.backup.name && backupNames(backupDir()).length === names0 + 1)
     check('HTTP 真回滚：recompose 拿不到时明说「要新开会话（或重启）」且绝不写「已生效」', r.json.recompose && r.json.recompose.ok === false && r.json.recompose.method === 'unavailable' && String(r.json.recompose.note).includes('新开会话'))
     check('HTTP 真回滚：nextStep 明说需新开会话或重启', typeof r.json.nextStep === 'string' && r.json.nextStep.includes('新开会话'))
 
-    const evil = await call('POST', '/dsh-memory-archive/api/agent/rollback', { presetId: 'roleplay', backupFile: '../evil.yml' })
+    const evil = await call('POST', '/magictarven/api/agent/rollback', { presetId: 'roleplay', backupFile: '../evil.yml' })
     check('HTTP 目录穿越：200 + ok:false BAD_BACKUP_NAME（绝不 500）', evil.status === 200 && evil.json.ok === false && evil.json.error.code === 'BAD_BACKUP_NAME')
 
-    const missing = await call('POST', '/dsh-memory-archive/api/agent/rollback', { presetId: 'roleplay' })
+    const missing = await call('POST', '/magictarven/api/agent/rollback', { presetId: 'roleplay' })
     check('HTTP 缺 backupFile：200 + ok:false BAD_REQUEST', missing.status === 200 && missing.json.ok === false && missing.json.error.code === 'BAD_REQUEST')
 
-    const bad = await call('POST', '/dsh-memory-archive/api/agent/rollback', undefined)
+    const bad = await call('POST', '/magictarven/api/agent/rollback', undefined)
     check('HTTP 空体：200 + ok:false（BAD_JSON/BAD_REQUEST）', bad.status === 200 && bad.json.ok === false)
 
-    const get = await call('GET', '/dsh-memory-archive/api/agent/rollback?presetId=roleplay')
+    const get = await call('GET', '/magictarven/api/agent/rollback?presetId=roleplay')
     check('HTTP GET /agent/rollback ⇒ 405 METHOD_NOT_ALLOWED（ENDPOINTS 口径）', get.status === 405 && get.json.error.code === 'METHOD_NOT_ALLOWED', `${get.status}`)
 
-    const b = await call('GET', '/dsh-memory-archive/api/agent/backups?presetId=roleplay')
+    const b = await call('GET', '/magictarven/api/agent/backups?presetId=roleplay')
     check('HTTP 既有 /agent/backups 契约不挂：200 + ok:true + 倒序非空', b.status === 200 && b.json.ok === true && b.json.backups.length >= 5 && b.json.backups[0].mtimeMs >= b.json.backups[b.json.backups.length - 1].mtimeMs)
 
-    const a = await call('POST', '/dsh-memory-archive/api/agent/apply', { presetId: 'roleplay', dryRun: true })
+    const a = await call('POST', '/magictarven/api/agent/apply', { presetId: 'roleplay', dryRun: true })
     check('HTTP 既有 /agent/apply 契约不挂：200 + ok:true + 计划 + diff 字段', a.status === 200 && a.json.ok === true && Array.isArray(a.json.plan) && a.json.diff && Number.isInteger(a.json.diff.line))
   } finally {
     server.closeAllConnections?.()

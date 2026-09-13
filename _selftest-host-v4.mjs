@@ -75,13 +75,13 @@ try {
 //   ctx.effect 必须在 apply 调用栈内执行；此处故意不轮询、不等待）。
 check('同步断言：恰好注册 2 条路由', routes.length === 2, `实际 ${routes.length}；warn/error 日志：${JSON.stringify(logs.filter(([l]) => l !== 'info'))}`)
 check(
-  '路由1 = prefix /dsh-memory-archive/api',
-  routes[0]?.kind === 'prefix' && routes[0]?.path === '/dsh-memory-archive/api',
+  '路由1 = prefix /magictarven/api',
+  routes[0]?.kind === 'prefix' && routes[0]?.path === '/magictarven/api',
   JSON.stringify(routes[0]?.path),
 )
 check(
-  '路由2 = prefix /dsh-memory-archive/prompt',
-  routes[1]?.kind === 'prefix' && routes[1]?.path === '/dsh-memory-archive/prompt',
+  '路由2 = prefix /magictarven/prompt',
+  routes[1]?.kind === 'prefix' && routes[1]?.path === '/magictarven/prompt',
   JSON.stringify(routes[1]?.path),
 )
 check(
@@ -103,7 +103,7 @@ if (routes.length !== 2) {
 } else {
   const server = http.createServer((req, res) => {
     const p = new URL(req.url, 'http://t').pathname
-    if (p === '/dsh-memory-archive/prompt' || p.startsWith('/dsh-memory-archive/prompt/')) {
+    if (p === '/magictarven/prompt' || p.startsWith('/magictarven/prompt/')) {
       return routes[1].handler(req, res)
     }
     return routes[0].handler(req, res)
@@ -142,21 +142,21 @@ if (routes.length !== 2) {
   }
 
   try {
-    let r = await request('GET', '/dsh-memory-archive/api/health')
+    let r = await request('GET', '/magictarven/api/health')
     check(
       'GET /api/health → 200 ok:true',
       r.status === 200 && r.json?.ok === true,
       `${r.status} ${r.text.slice(0, 140)}`,
     )
 
-    r = await request('GET', '/dsh-memory-archive/prompt/health')
+    r = await request('GET', '/magictarven/prompt/health')
     check(
       'GET /prompt/health → 200 ok:true',
       r.status === 200 && r.json?.ok === true,
       `${r.status} ${r.text.slice(0, 140)}`,
     )
 
-    r = await request('GET', '/dsh-memory-archive/api/templates')
+    r = await request('GET', '/magictarven/api/templates')
     check('GET /api/templates → 200 ok:true', r.status === 200 && r.json?.ok === true, `${r.status}`)
     check(
       'compaction.builtin 含 「## 未回收的伏笔」',
@@ -175,7 +175,7 @@ if (routes.length !== 2) {
     )
     const builtinZh = r.json?.templates?.compaction?.builtin ?? ''
 
-    r = await request('PUT', '/dsh-memory-archive/api/templates', { compaction: 'X' })
+    r = await request('PUT', '/magictarven/api/templates', { compaction: 'X' })
     check(
       'PUT {"compaction":"X"} → 200、custom:true、current==="X"',
       r.status === 200 &&
@@ -184,7 +184,7 @@ if (routes.length !== 2) {
       `${r.status} ${r.text.slice(0, 160)}`,
     )
 
-    r = await request('PUT', '/dsh-memory-archive/api/templates', { compaction: null })
+    r = await request('PUT', '/magictarven/api/templates', { compaction: null })
     check(
       'PUT {"compaction":null} → custom:false、current===builtin',
       r.status === 200 &&
@@ -193,7 +193,7 @@ if (routes.length !== 2) {
       `${r.status}`,
     )
 
-    r = await request('PUT', '/dsh-memory-archive/api/templates', { compaction: 123 })
+    r = await request('PUT', '/magictarven/api/templates', { compaction: 123 })
     check(
       'PUT {"compaction":123} → 400 CONFIG_INVALID',
       r.status === 400 && r.json?.error?.code === 'CONFIG_INVALID',
@@ -247,7 +247,7 @@ try {
   }
   check(
     '降级实证：只同步注册 1 条路由（仅 /api）',
-    degradeRoutes.length === 1 && degradeRoutes[0]?.path === '/dsh-memory-archive/api',
+    degradeRoutes.length === 1 && degradeRoutes[0]?.path === '/magictarven/api',
     `实际 ${degradeRoutes.length}`,
   )
   check(

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * dsh-memory-archive · lib/client.js 自检（任务书 §5，v4.1 A 单版）
+ * magictarven · lib/client.js 自检（任务书 §5，v4.1 A 单版）
  * 用法：node _selftest-client.mjs
  *
  * 第 1 步（node --check）在命令行单独跑；本脚本覆盖：
@@ -134,7 +134,7 @@ function collectText(node, out) {
 const FULL_UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-/i
 function visibleText(tree) { return collectText(tree, []).join('\n') }
 
-console.log('== _selftest-client.mjs · dsh-memory-archive 客户端自检（v4） ==')
+console.log('== _selftest-client.mjs · magictarven 客户端自检（v4） ==')
 
 // ---------- 第 2 步：真加载 ----------
 const win = { __ModuleLoader__: { load(def) { win.__def = def } } }
@@ -143,10 +143,10 @@ globalThis.window = win
 const fakeReact = makeFakeReact()
 let mod = null
 
-await check('ModuleLoader.load 被接住（顶层 IIFE 真执行），id=dsh-memory-archive，factory 是函数', () => {
+await check('ModuleLoader.load 被接住（顶层 IIFE 真执行），id=magictarven，factory 是函数', () => {
   ;(0, eval)(src)
   assert.ok(win.__def, 'load() 未被调用 —— 顶层 IIFE 没执行')
-  assert.equal(win.__def.id, 'dsh-memory-archive')
+  assert.equal(win.__def.id, 'magictarven')
   assert.equal(typeof win.__def.factory, 'function')
 })
 
@@ -158,8 +158,8 @@ await check('factory(require) 真执行并返回 module.exports（只 require re
   assert.ok(mod && typeof mod === 'object')
 })
 
-await check("exports.name === 'dsh-memory-archive'；apply 是函数；inject 是数组", () => {
-  assert.equal(mod.name, 'dsh-memory-archive')
+await check("exports.name === 'magictarven'；apply 是函数；inject 是数组", () => {
+  assert.equal(mod.name, 'magictarven')
   assert.equal(typeof mod.apply, 'function')
   assert.ok(Array.isArray(mod.inject))
 })
@@ -781,10 +781,10 @@ await check('★ ⛶ 全屏：外壳切 inset/100vw/100vh/直角，且全屏时�
 })
 
 // ---------- 第 3 步：宿主 API 契约静态核对 ----------
-await check('★ API 根路径常量恰好是 /dsh-memory-archive/api；Tavern 通路恰好是既定 URL', () => {
+await check('★ API 根路径常量恰好是 /magictarven/api；Tavern 通路恰好是既定 URL', () => {
   const m = src.match(/const HOST_API_BASE = '([^']+)'/)
   assert.ok(m, '未找到 HOST_API_BASE 常量')
-  assert.equal(m[1], '/dsh-memory-archive/api')
+  assert.equal(m[1], '/magictarven/api')
   const m2 = src.match(/const TAVERN_API_BASE = '([^']+)'/)
   assert.ok(m2, '未找到 TAVERN_API_BASE 常量')
   assert.equal(m2[1], '/pmp-dsh-tavern/api/v2/workspace/files')
@@ -861,10 +861,10 @@ await check('★ §0.2 自查：client.js 里零 session-<uuid> 字面量（真�
   assert.deepEqual(hits, [], '出现 session-<uuid> 字面量: ' + hits.join(', '))
 })
 
-await check('★ 提示词数据面在位：PROMPT_API_BASE=/dsh-memory-archive/prompt，五个 rest 全用到', () => {
+await check('★ 提示词数据面在位：PROMPT_API_BASE=/magictarven/prompt，五个 rest 全用到', () => {
   const m = src.match(/const PROMPT_API_BASE = '([^']+)'/)
   assert.ok(m, '未找到 PROMPT_API_BASE 常量')
-  assert.equal(m[1], '/dsh-memory-archive/prompt')
+  assert.equal(m[1], '/magictarven/prompt')
   const found = [...src.matchAll(/PROMPT_API_BASE \+ '([^']+)'/g)].map((x) => x[1].split('?')[0])
   for (const rest of ['/health', '/api/sessions', '/api/sessions/resolve', '/api/session', '/api/part']) {
     assert.ok(found.includes(rest), 'prompt rest 未使用: ' + rest)

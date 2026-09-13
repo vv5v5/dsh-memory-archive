@@ -68,13 +68,13 @@ try {
 
 check('同步断言：恰好注册 2 条路由', routes.length === 2, `实际 ${routes.length}；日志：${JSON.stringify(logs.filter(([l]) => l !== 'info'))}`)
 check(
-  '路由1 = prefix /dsh-memory-archive/api',
-  routes[0]?.kind === 'prefix' && routes[0]?.path === '/dsh-memory-archive/api',
+  '路由1 = prefix /magictarven/api',
+  routes[0]?.kind === 'prefix' && routes[0]?.path === '/magictarven/api',
   JSON.stringify(routes[0]?.path),
 )
 check(
-  '路由2 = prefix /dsh-memory-archive/prompt',
-  routes[1]?.kind === 'prefix' && routes[1]?.path === '/dsh-memory-archive/prompt',
+  '路由2 = prefix /magictarven/prompt',
+  routes[1]?.kind === 'prefix' && routes[1]?.path === '/magictarven/prompt',
   JSON.stringify(routes[1]?.path),
 )
 check(
@@ -94,7 +94,7 @@ try {
 if (routes.length === 2) {
   const server = http.createServer((req, res) => {
     const p = new URL(req.url, 'http://t').pathname
-    if (p.startsWith('/dsh-memory-archive/prompt')) return routes[1].handler(req, res)
+    if (p.startsWith('/magictarven/prompt')) return routes[1].handler(req, res)
     return routes[0].handler(req, res)
   })
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
@@ -117,11 +117,11 @@ if (routes.length === 2) {
         .on('error', rejectP)
     })
   try {
-    const r1 = await request('/dsh-memory-archive/api/health')
+    const r1 = await request('/magictarven/api/health')
     check('GET /api/health → 200 ok:true（契约未变）', r1.status === 200 && r1.json?.ok === true, `${r1.status} ${r1.text.slice(0, 120)}`)
-    const r2 = await request('/dsh-memory-archive/prompt/health')
+    const r2 = await request('/magictarven/prompt/health')
     check('GET /prompt/health → 200 ok:true（契约未变）', r2.status === 200 && r2.json?.ok === true, `${r2.status} ${r2.text.slice(0, 120)}`)
-    const r3 = await request('/dsh-memory-archive/api/unknown-path')
+    const r3 = await request('/magictarven/api/unknown-path')
     check('GET /api/未知路径 → 404 NOT_FOUND（降级语义未变）', r3.status === 404 && r3.json?.error?.code === 'NOT_FOUND', `${r3.status}`)
   } finally {
     server.closeAllConnections?.()
