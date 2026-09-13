@@ -1,4 +1,4 @@
-# dsh-memory-archive · 记忆库
+# magictarven · 记忆库
 
 > **不发明记忆，只把 DSH 已经压掉的东西重新变得「取得到」。**
 
@@ -21,7 +21,7 @@ v4 起还包含：**并入的提示词查看器**（看每次模型请求真正�
 
 ```sh
 # 从 npm（发布后）
-dsh plugin --profile <你的 profile 名> add dsh-memory-archive
+dsh plugin --profile <你的 profile 名> add magictarven
 
 # 或直接从 GitHub
 dsh plugin --profile <你的 profile 名> add github:vv5v5/dsh-memory-archive
@@ -116,7 +116,7 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 - **生成 / 修复 RP agent（检测与预览）** —— 只读检测：有没有用户自带（`trust === 'user'`）的 RP preset、
   记忆库根是否配好、缺什么，以及官方 `agentPresets.copy('standard', …)` 生成路线的逐条事实预览。**不落盘**。
 
-数据来自宿主只读接口 `GET /dsh-memory-archive/api/agent` 与 `/agent/detect`（优先 `agentPresets` 服务，
+数据来自宿主只读接口 `GET /magictarven/api/agent` 与 `/agent/detect`（优先 `agentPresets` 服务，
 退回扫描 `~/.dsh/.agent-presets/`；路径由 `DSH_HOME`/`homedir()` 推导）。拿不到的服务一律如实显示
 「未知」，绝不猜测。
 
@@ -134,7 +134,7 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 ## 配置存在哪
 
 ```
-<DSH_HOME 或 ~/.dsh>/dsh-memory-archive/config.json
+<DSH_HOME 或 ~/.dsh>/magictarven/config.json
 ```
 
 - **权限 0600**（里面有 API 密钥），**原子写**（临时文件 + `rename`），**读坏不崩**（回落默认值并如实报错）。
@@ -150,8 +150,8 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 
 | 前缀 | 内容 | 降级行为 |
 |---|---|---|
-| `/dsh-memory-archive/api` | 配置读写、会话精确读，`GET/PUT /api/templates`（提示词模板读写），以及 `GET /api/agent`、`GET /api/agent/detect`（Agent 编辑器只读数据面） | 模板缺省或值为 `null`/空串时**回落内置默认**（配置段 `prompts` 缺失同理，老配置兼容）；agent 两端点**零写入**，服务拿不到时返回 `ok:false` + 可读 `code`，绝不抛、绝不 500 |
-| `/dsh-memory-archive/prompt` | 并入查看器的数据面：`/health`、`/api/sessions`、`/api/sessions/resolve`、`/api/session`、`/api/part` | 读取出错时**不崩溃**：HTTP 200，错误信息放响应体（`ok:false` + `error`） |
+| `/magictarven/api` | 配置读写、会话精确读，`GET/PUT /api/templates`（提示词模板读写），以及 `GET /api/agent`、`GET /api/agent/detect`（Agent 编辑器只读数据面） | 模板缺省或值为 `null`/空串时**回落内置默认**（配置段 `prompts` 缺失同理，老配置兼容）；agent 两端点**零写入**，服务拿不到时返回 `ok:false` + 可读 `code`，绝不抛、绝不 500 |
+| `/magictarven/prompt` | 并入查看器的数据面：`/health`、`/api/sessions`、`/api/sessions/resolve`、`/api/session`、`/api/part` | 读取出错时**不崩溃**：HTTP 200，错误信息放响应体（`ok:false` + `error`） |
 
 宿主 API 整体不可用时面板不白屏：浏览区退回工作区模式。
 
@@ -191,8 +191,8 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 npm run check   # node --check lib/index.js && node --check lib/client.js
 ```
 
-- `lib/index.js` —— **宿主半侧**：配置存储 + 同源 HTTP API（前缀路由 `/dsh-memory-archive/api`
-  与 `/dsh-memory-archive/prompt`）+ 会话精确读。
+- `lib/index.js` —— **宿主半侧**：配置存储 + 同源 HTTP API（前缀路由 `/magictarven/api`
+  与 `/magictarven/prompt`）+ 会话精确读。
 - `lib/prompt-viewer.js` —— 并入的提示词查看器宿主半侧：解析 DSH 会话存储供「每次请求」取数，零交叉依赖。
 - `lib/client.js` —— **浏览器半侧**：工厂形式 CJS，只 `require('react')`，**无 JSX、无需构建**。
 

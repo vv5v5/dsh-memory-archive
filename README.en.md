@@ -1,4 +1,4 @@
-# dsh-memory-archive · Memory Archive
+# magictarven · Memory Archive
 
 > **We don't invent memory. We make what DSH already compacted away reachable again.**
 
@@ -25,7 +25,7 @@ and a **prompt panel** (compaction instruction / placeholder preamble, editable 
 
 ```sh
 # From npm (once published)
-dsh plugin --profile <your-profile> add dsh-memory-archive
+dsh plugin --profile <your-profile> add magictarven
 
 # Or straight from GitHub
 dsh plugin --profile <your-profile> add github:vv5v5/dsh-memory-archive
@@ -133,7 +133,7 @@ Three sub-pages:
 ## Where configuration lives
 
 ```
-<DSH_HOME or ~/.dsh>/dsh-memory-archive/config.json
+<DSH_HOME or ~/.dsh>/magictarven/config.json
 ```
 
 - Mode **0600** (it holds an API key), **atomic writes** (temp file + `rename`), and **corruption-tolerant reads**
@@ -152,8 +152,8 @@ All endpoints are same-origin HTTP, and the two route prefixes are **registered 
 
 | Prefix | Contents | Degradation |
 |---|---|---|
-| `/dsh-memory-archive/api` | Config read/write, exact session reads, and `GET/PUT /api/templates` (prompt-template read/write) | A missing template or a `null`/empty value **falls back to the built-in default** (same when the `prompts` section is absent; older configs stay compatible) |
-| `/dsh-memory-archive/prompt` | The integrated viewer's data plane: `/health`, `/api/sessions`, `/api/sessions/resolve`, `/api/session`, `/api/part` | Read errors **never crash**: HTTP 200 with the error carried in the body (`ok:false` + `error`) |
+| `/magictarven/api` | Config read/write, exact session reads, and `GET/PUT /api/templates` (prompt-template read/write) | A missing template or a `null`/empty value **falls back to the built-in default** (same when the `prompts` section is absent; older configs stay compatible) |
+| `/magictarven/prompt` | The integrated viewer's data plane: `/health`, `/api/sessions`, `/api/sessions/resolve`, `/api/session`, `/api/part` | Read errors **never crash**: HTTP 200 with the error carried in the body (`ok:false` + `error`) |
 
 When the host API as a whole is unavailable, the panel never goes blank: browsing falls back to workspace mode.
 
@@ -199,7 +199,7 @@ npm run check   # node --check lib/index.js && node --check lib/client.js
 ```
 
 - `lib/index.js` — **host half**: configuration store + same-origin HTTP API
-  (prefix routes `/dsh-memory-archive/api` and `/dsh-memory-archive/prompt`) + exact session reads.
+  (prefix routes `/magictarven/api` and `/magictarven/prompt`) + exact session reads.
 - `lib/prompt-viewer.js` — the integrated prompt viewer's host half: parses the DSH session store
   to feed "per request", with zero cross-dependencies.
 - `lib/client.js` — **browser half**: factory-form CJS, `require('react')` only, **no JSX, no build step**.

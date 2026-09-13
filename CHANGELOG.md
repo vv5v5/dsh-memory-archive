@@ -1,8 +1,14 @@
 # Changelog
 
-本文件记录 dsh-memory-archive 的所有显著变更。
+本文件记录 magictarven 的所有显著变更。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
+
+## [Unreleased]
+
+### Changed
+
+- **改名**：`dsh-memory-archive` → `magictarven`（包名 / cordis 挂载 id 与 name / 客户端 loader id / 存储目录名同步）；路由前缀同步（`/dsh-memory-archive/…` → `/magictarven/…`）；行为未变。
 
 ## [0.2.0] - 2026-09-12
 
