@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "sessionId": "fixture-session-static",
+  "total": 10,
+  "latestIndex": 9,
+  "messages": [
+    { "index": 0, "seq": 16, "turn": 1, "role": "user", "preview": "开始吧", "chars": 3, "isToolResult": false, "isCompacted": false },
+    { "index": 1, "seq": 18, "turn": 1, "role": "assistant", "preview": "（fixture）好的，我们开始。", "chars": 17, "isToolResult": false, "isCompacted": false },
+    { "index": 2, "seq": 20, "turn": 1, "role": "user", "preview": "（fixture）请继续", "chars": 12, "isToolResult": false, "isCompacted": false },
+    { "index": 3, "seq": 520, "turn": 2, "role": "user", "preview": "（fixture）先查一下状态", "chars": 15, "isToolResult": false, "isCompacted": false },
+    { "index": 4, "seq": 523, "turn": 2, "role": "assistant", "preview": "（fixture）正在查询……", "chars": 14, "isToolResult": false, "isCompacted": false },
+    { "index": 5, "seq": 526, "turn": 2, "role": "tool", "preview": "（fixture）工具结果：ok", "chars": 16, "isToolResult": true, "isCompacted": false },
+    { "index": 6, "seq": 529, "turn": 2, "role": "assistant", "preview": "（fixture）查询完成。", "chars": 14, "isToolResult": false, "isCompacted": false },
+    { "index": 7, "seq": 1188, "turn": 3, "role": "user", "preview": "（fixture）[压缩摘要] 前情提要……", "chars": 22, "isToolResult": false, "isCompacted": true },
+    { "index": 8, "seq": 1190, "turn": 3, "role": "assistant", "preview": "（fixture）已了解背景。", "chars": 15, "isToolResult": false, "isCompacted": false },
+    { "index": 9, "seq": 1192, "turn": 3, "role": "user", "preview": "（fixture）继续推进", "chars": 13, "isToolResult": false, "isCompacted": false }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "sessionId": "fixture-session-static",
+  "turn": 2,
+  "part": "tools",
+  "requestLogged": false,
+  "headerCarried": true,
+  "mutabilityBasis": "header-equal",
+  "toolCount": 0,
+  "tools": []
+}

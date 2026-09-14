@@ -1,0 +1,40 @@
+{
+  "ok": true,
+  "sessionId": "fixture-session-static",
+  "latest": 3,
+  "turns": [
+    {
+      "turn": 1,
+      "startedAt": "2026-09-13T10:00:00.000+08:00",
+      "endedAt": "2026-09-13T10:00:41.000+08:00",
+      "messageCount": 3,
+      "seqRange": [14, 517],
+      "requestLogged": true,
+      "headerCarried": false,
+      "systemChars": 1946,
+      "toolCount": 0
+    },
+    {
+      "turn": 2,
+      "startedAt": "2026-09-13T10:01:12.000+08:00",
+      "endedAt": "2026-09-13T10:01:55.000+08:00",
+      "messageCount": 4,
+      "seqRange": [519, 1184],
+      "requestLogged": false,
+      "headerCarried": true,
+      "systemChars": 1946,
+      "toolCount": 0
+    },
+    {
+      "turn": 3,
+      "startedAt": "2026-09-13T10:02:30.000+08:00",
+      "endedAt": "2026-09-13T10:03:08.000+08:00",
+      "messageCount": 3,
+      "seqRange": [1187, 1392],
+      "requestLogged": false,
+      "headerCarried": true,
+      "systemChars": 1946,
+      "toolCount": 0
+    }
+  ]
+}

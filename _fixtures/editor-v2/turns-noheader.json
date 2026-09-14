@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "sessionId": "fixture-session-noheader",
+  "headerAvailable": false,
+  "latest": 2,
+  "turns": [
+    {
+      "turn": 1,
+      "startedAt": "2026-09-13T12:00:00.000+08:00",
+      "endedAt": "2026-09-13T12:00:18.000+08:00",
+      "messageCount": 2,
+      "seqRange": [1, 88],
+      "requestLogged": false,
+      "headerCarried": false,
+      "systemChars": null,
+      "toolCount": null
+    },
+    {
+      "turn": 2,
+      "startedAt": "2026-09-13T12:01:00.000+08:00",
+      "endedAt": "2026-09-13T12:01:26.000+08:00",
+      "messageCount": 3,
+      "seqRange": [90, 200],
+      "requestLogged": false,
+      "headerCarried": false,
+      "systemChars": null,
+      "toolCount": null
+    }
+  ]
+}

@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Agent 编辑器 · 视觉方案（mock · 不含真机私域内容）</title>
+<style>
+  :root{
+    --canvas:#ffffff; --canvas2:#f6f7f8; --text:#1f2328; --dim:#6e7781;
+    --border:#d0d7de; --border-strong:#afb8c1;
+    --red:#dc143c; --yellow:#b8860b; --blue:#4169e1; --gray:#6e7781;
+    --accent:#0969da;
+    --mono:Consolas,"Sarasa Mono SC","Microsoft YaHei Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#e9ecef;color:var(--text);font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}
+  .stage{display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px}
+
+  /* ── mock 自身的控制条（不属于被评审的面板） ─────────────── */
+  .statebar{width:1280px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;
+    background:#fff;border:1px solid var(--border);border-radius:8px;padding:8px 10px}
+  .statebar b{font-size:13px;margin-right:4px}
+  .sbtn{border:1px solid var(--border);background:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;font-size:13px}
+  .sbtn:hover{border-color:var(--accent)}
+  .sbtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .tagToggle{margin-left:auto;display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;user-select:none}
+  .footnote{width:1280px;font-size:12.5px;color:var(--dim);line-height:1.7}
+  .footnote code{font-family:var(--mono);background:#eef1f4;padding:0 4px;border-radius:4px}
+
+  /* ── 被评审的面板：与真机同规格 1280×860 居中浮层 ─────────── */
+  .panel{position:relative;width:1280px;height:860px;background:var(--canvas);
+    border:1px solid var(--border-strong);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);
+    display:flex;flex-direction:column;gap:8px;padding:12px;overflow:hidden}
+
+  /* 顶栏：压成一行小字 */
+  .topbar{display:flex;align-items:center;gap:8px;flex:none;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px}
+  .topbar .title{font-size:14px;font-weight:700}
+  .badge{border:1px solid var(--border);border-radius:999px;padding:0 8px;font-size:11px;line-height:18px;white-space:nowrap}
+  .badge.warn{color:var(--yellow);border-color:color-mix(in srgb,var(--yellow) 45%,transparent)}
+  .badge.ok{color:green;border-color:color-mix(in srgb,green 40%,transparent)}
+  .badge.err{color:var(--red);border-color:color-mix(in srgb,var(--red) 45%,transparent)}
+  .iconbtn{border:1px solid var(--border);background:#fff;border-radius:6px;width:26px;height:22px;cursor:pointer;font-size:12px;line-height:1}
+
+  /* 主体两栏 */
+  .main{flex:1;min-height:0;display:flex;gap:10px}
+  .col-left{width:260px;flex:none;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--border);padding-right:10px}
+  .col-map{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
+
+  /* 左：会话列表 */
+  .left-head{display:flex;align-items:center;gap:6px;font-weight:700;font-size:13px}
+  .filterbox{border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--dim);background:var(--canvas2)}
+  .session-list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:4px}
+  .ws-group{font-size:11px;color:var(--dim);margin:6px 0 2px}
+  .sess{border:1px solid transparent;border-radius:6px;padding:5px 8px;display:flex;flex-direction:column;gap:1px;cursor:pointer}
+  .sess:hover{background:var(--canvas2)}
+  .sess.sel{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent)}
+  .sess .row1{display:flex;align-items:center;gap:6px}
+  .sess .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+  .sess .row2{display:flex;gap:8px;font-size:11px;color:var(--dim)}
+  .cnt{font-family:var(--mono);font-size:11px;border-radius:999px;padding:0 7px;line-height:17px;flex:none}
+  .cnt.ok{background:#eaf3ea;color:#1a7f37}
+  .cnt.zero{background:#eef1f4;color:var(--dim)}
+  .cnt.fail{background:#fdeef1;color:var(--red);font-weight:700}
+  .cnt.unparsed{background:#eef1f4;color:var(--dim)}
+  .rescan{font-size:11px;color:var(--dim);display:flex;gap:6px;align-items:center}
+  .legend5{border:1px dashed var(--accent);border-radius:6px;padding:6px 8px;font-size:11.5px;color:var(--accent);background:color-mix(in srgb,var(--accent) 4%,transparent)}
+
+  /* 中：轮次切换条 + 地图三框 */
+  .turnbar{display:flex;align-items:center;gap:6px;flex:none;font-size:12px}
+  .turnbtn{border:1px solid var(--border);background:#fff;border-radius:6px;padding:2px 10px;font-size:12px;cursor:pointer;font-family:var(--mono)}
+  .turnbtn.on{background:var(--text);color:#fff;border-color:var(--text)}
+  .subtotal{margin-left:auto;color:var(--dim);font-size:12px}
+  .map-scroll{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding-right:2px}
+  .mapbox{border:1px solid var(--border);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:5px}
+  .mapbox .boxhead{display:flex;align-items:baseline;gap:8px;font-weight:700;font-size:12.5px}
+  .mapbox .boxhead .mini{font-weight:400;color:var(--dim);font-size:11px}
+  .blk{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-left:4px solid var(--gray);
+    border-radius:6px;padding:4px 8px;font-size:12.5px;cursor:pointer}
+  .blk:hover{background:var(--canvas2)}
+  .blk.red{border-left-color:var(--red)} .blk.red .cname{color:var(--red)}
+  .blk.yellow{border-left-color:var(--yellow)} .blk.yellow .cname{color:var(--yellow)}
+  .blk.blue{border-left-color:var(--blue)} .blk.blue .cname{color:var(--blue)}
+  .blk.dashed{border-style:dashed;color:var(--dim);cursor:default;background:transparent}
+  .blk .cname{font-weight:600}
+  .blk .ord{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .blk .mut{margin-left:auto;font-size:11px;flex:none}
+  .blk .mut.static{color:var(--gray)} .blk .mut.perturn{color:var(--yellow);font-weight:700}
+  .blk .chars{font-family:var(--mono);font-size:11px;color:var(--dim);flex:none}
+  .collapse{border:1px dashed var(--border);border-radius:6px;padding:5px 10px;font-size:12px;color:var(--dim);cursor:pointer}
+  .collapse:hover{border-color:var(--border-strong)}
+
+  /* 下钻（③） */
+  .drill{flex:1;min-height:0;display:flex;flex-direction:column;gap:6px;border:1px solid var(--border);border-radius:8px;padding:8px 10px}
+  .drill .dh{display:flex;align-items:center;gap:8px}
+  .drill pre{flex:1;min-height:0;overflow:auto;margin:0;background:var(--canvas2);border:1px solid var(--border);border-radius:6px;
+    padding:10px 12px;font-family:var(--mono);font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+  .drill .tools{display:flex;gap:6px;align-items:center;font-size:12px}
+  .minibtn{border:1px solid var(--border);background:#fff;border-radius:6px;padding:2px 10px;font-size:12px;cursor:pointer}
+
+  /* 维护抽屉（④） */
+  .drawer{position:absolute;top:52px;right:12px;bottom:46px;width:380px;background:var(--canvas);
+    border:1px solid var(--border-strong);border-radius:10px;box-shadow:-6px 0 20px rgba(0,0,0,.12);
+    display:flex;flex-direction:column;gap:0;overflow:hidden;z-index:5}
+  .drawer .dhead{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);font-weight:700;font-size:13px}
+  .drawer .dbody{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:10px}
+  .dcard{border:1px solid var(--border);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:5px}
+  .dcard .dt{font-weight:700;font-size:12.5px;display:flex;gap:6px;align-items:baseline}
+  .dcard .dt .mini{font-weight:400;color:var(--dim);font-size:11px}
+  .knob{display:flex;align-items:center;gap:8px;font-size:12.5px}
+  .knob select{border:1px solid var(--border);border-radius:6px;font-size:12px;padding:1px 4px}
+  .knob .kdesc{color:var(--dim);font-size:11px;flex:1;min-width:0}
+  .drow{display:flex;gap:6px;flex-wrap:wrap}
+  .dnote{font-size:11.5px;color:var(--dim)}
+
+  /* 底栏：压成一行 */
+  .botbar{flex:none;display:flex;align-items:center;gap:10px;border-top:1px solid var(--border);padding-top:8px;font-size:12px;color:var(--dim);min-width:0}
+  .botbar .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* 对照标注（可开关） */
+  .ctag{display:inline-block;background:#fff8e6;border:1px dashed #d4a72c;color:#7a5b00;border-radius:4px;
+    font-size:10.5px;line-height:15px;padding:0 5px;font-weight:400;vertical-align:middle}
+  body.no-tags .ctag{display:none}
+  .ctag.keep{background:#eaf3ea;border-color:#2da44e;color:#116329}
+  .ctag.drop{background:#fdeef1;border-color:#ea4aa3;color:#a11756}
+  .ctag.fold{background:#eaf1fb;border-color:#409cff;color:#0a4da3}
+
+  .empty-map{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--dim)}
+  .empty-map .big{font-size:15px}
+  .errcard{border:1px solid color-mix(in srgb,var(--red) 45%,transparent);background:color-mix(in srgb,var(--red) 5%,transparent);
+    border-radius:8px;padding:10px 12px;font-size:13px}
+  .ex{display:inline-block;background:var(--yellow);color:#fff;border-radius:4px;font-size:10px;line-height:15px;padding:0 5px;vertical-align:middle}
+  /* 决策清单页 */
+  .checklist{position:absolute;inset:0;background:var(--canvas);z-index:20;display:flex;flex-direction:column;padding:16px 20px;overflow:hidden}
+  .checklist h2{margin:0 0 4px;font-size:17px}
+  .checklist .sub{color:var(--dim);font-size:12.5px;margin-bottom:10px}
+  .checklist .tbl{flex:1;overflow-y:auto}
+  .checklist table{border-collapse:collapse;width:100%;font-size:12.5px}
+  .checklist th,.checklist td{border:1px solid var(--border);padding:5px 8px;text-align:left;vertical-align:top}
+  .checklist th{background:var(--canvas2);font-size:12px;position:sticky;top:0}
+  .pill{display:inline-block;border-radius:999px;padding:0 8px;font-size:11px;line-height:18px;font-weight:700}
+  .pill.keep{background:#eaf3ea;color:#116329}.pill.drop{background:#fdeef1;color:#a11756}
+  .pill.fold{background:#eaf1fb;color:#0a4da3}.pill.ask{background:#fff3cd;color:#7a5b00;border:1px dashed #d4a72c}
+</style>
+</head>
+<body class="">
+<div class="stage">
+
+  <!-- mock 控制条（非面板内容） -->
+  <div class="statebar">
+    <b>演示状态：</b>
+    <button class="sbtn" data-s="s1" onclick="go('s1')">① 默认态（未选会话）</button>
+    <button class="sbtn" data-s="s2" onclick="go('s2')">② 地图填充态</button>
+    <button class="sbtn" data-s="s3" onclick="go('s3')">③ 色块下钻</button>
+    <button class="sbtn" data-s="s4" onclick="go('s4')">④ 「维护」展开</button>
+    <button class="sbtn" data-s="s5" onclick="go('s5')">⑤ 调用次数三形态</button>
+    <button class="sbtn" data-s="s6" onclick="go('s6')">⑥ 错误态</button>
+    <label class="tagToggle"><input type="checkbox" id="tagChk" checked onchange="document.body.classList.toggle('no-tags',!this.checked)">
+      显示「原组件对照 + 留/去/收起」标注</label>
+    <button class="sbtn" onclick="document.getElementById('ck').style.display='flex'">📋 决策清单（待拍板）</button>
+  </div>
+
+  <!-- ============ 被评审的面板（1280×860，与真机同规格） ============ -->
+  <div class="panel" id="panel"></div>
+
+  <div class="footnote" id="foot"></div>
+</div>
+
+<!-- 决策清单覆盖层 -->
+<div class="checklist" id="ck" style="display:none">
+  <h2>留 / 去 / 收起 · 决策清单 <span class="ex">每行都需要你拍板</span></h2>
+  <div class="sub">「建议」是执行方的倾向，不是结论；凡标 <span class="pill ask">待拍板</span> 的行，请直接说编号 + 你的选择。</div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th style="width:26px">#</th><th style="width:230px">部件（现在的组件 · 行号）</th><th style="width:70px">建议</th><th>一句话理由 / 待拍板问题</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>会话列表 <code>ViewerSessionList :1945</code></td><td><span class="pill keep">留</span></td><td>左列主入口；新增每行「调用次数」+ 相对时间 + 工作区分组。<span class="pill ask">待拍板</span>：次数徽标配色与位置（行尾 vs 标题前）。</td></tr>
+        <tr><td>2</td><td>装配地图 <code>PromptMap :2694 / PromptMapView :2663</code></td><td><span class="pill keep">留</span></td><td>升为主查看界面，占中间全部空间；轮次切换条贴在它头顶（第四维「静态/每轮」依赖轮次）。</td></tr>
+        <tr><td>3</td><td>请求列表 <code>PromptRequestList :2051</code></td><td><span class="pill drop">去</span></td><td>整列只干一件事：「共 N 次 · #1 #2 …」，压成地图上方一条轮次切换条，省一整列。</td></tr>
+        <tr><td>4</td><td>部件查看 <code>PromptPartView :2124</code></td><td><span class="pill fold">收起</span></td><td>从常驻一列改为：点地图上任意色块 → 下钻看该段原文（保留搜索、复制）。<span class="pill ask">待拍板</span>：下钻时地图收起还是左右分屏。</td></tr>
+        <tr><td>5</td><td>完整视图 <code>FullPromptView :2198</code></td><td><span class="pill ask">待拍板</span></td><td>「完整 prompt 一次复制」偶尔有用。选项 A：收进下钻的「完整」页签；选项 B：彻底去掉。</td></tr>
+        <tr><td>6</td><td>清单视图 <code>PromptInventoryView :2768</code> + inventory 页签</td><td><span class="pill ask">待拍板</span></td><td>工具清单的小计视图，地图的 [tools] 框已能表达大半。选项 A：去；选项 B：收进 tools 下钻。</td></tr>
+        <tr><td>7</td><td>preset 组成 <code>CompositionBlock :2801</code></td><td><span class="pill fold">收起</span></td><td>从常驻一列改为地图底部折叠块「来源：preset 组成」。<span class="pill ask">待拍板</span>：收起保留 vs 彻底去（去掉则缺陷 2 可暂不修，但「中途换 preset 读成 standard」的问题仍在）。</td></tr>
+        <tr><td>8</td><td>可写项 4 旋钮 <code>KnobsPanel :2849</code></td><td><span class="pill fold">收起</span></td><td>低频写操作，收进「维护」抽屉，主界面只读。<span class="pill ask">待拍板</span>：维护入口按钮放顶栏右侧还是底栏。</td></tr>
+        <tr><td>9</td><td>「启用 RP agent 优化」勾选 + Skill 文案 + 风险提示 <code>:4196</code></td><td><span class="pill drop">去</span></td><td>已查证：纯组件内 state，唯一作用是改检测报告一行文案，无任何功能（skill 早已默认注册）。去掉零损失。</td></tr>
+        <tr><td>10</td><td>检测报告 4 卡 <code>ApplyCard :3024 / BackupsCard :3156 / PackCard :3243 / ProvisionCard :3362</code></td><td><span class="pill keep">留</span></td><td>原样搬进「维护」抽屉：一键生成预设 / 修复 RP agent / 备份与应用。</td></tr>
+        <tr><td>11</td><td>顶栏 <code>:4135-4151</code> / 底栏 <code>:4181-4187</code></td><td><span class="pill keep">留</span></td><td>各压成一行小字；信息不减（preset / 信任 / 生效 / 数据面健康 / 状态 / cwd / 会话 ID）。</td></tr>
+        <tr><td>12</td><td><code>ToolScopeWarnLine :2108</code> / <code>PartTabs :1928</code> / <code>SectionNote :1918</code></td><td><span class="pill fold">收起</span></td><td>随下钻走：警告行只在 tools 下钻里出现，页签由下钻头部的切换取代。</td></tr>
+        <tr><td>13</td><td>messages 框「首轮开场」灰块（标注：待实现）</td><td><span class="pill ask">待拍板</span></td><td>现在地图上有这块占位。选项 A：本轮就实现；选项 B：先去掉占位，以后再说。</td></tr>
+        <tr><td>14</td><td>缺陷 2 · <code>/agent</code> 取错 preset（<code>lib/index.js:1449</code>，未修）</td><td><span class="pill ask">待拍板</span></td><td>只要保留「组成」或「可写项」任何一样，这条必须先修（中途换过 preset 的会话组成读成 standard ⇒ 写路径锁死）。选项 A：先修再施工（推荐）；选项 B：暂不修并把受影响的功能一并标只读。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div style="margin-top:8px"><button class="sbtn" onclick="document.getElementById('ck').style.display='none'">← 回到视觉方案</button></div>
+</div>
+
+<script>
+/* ================= 数据 =================
+   来源标注：§6.4-A = 沙箱 3093 · roleplay-mt · 2 轮（实测，安全可用）
+   §6.4-B = 只用形状；凡 A 里没有的数字一律挂「示例」徽标。本页无任何真机标题/正文。 */
+const REAL = {
+  subtotal: 'system 1,946 字 · 工具 0 个 / 0 字 · 消息 5 条',
+  system: [
+    {c:'red',    name:'harness identity', ord:'≈-1000', mut:'static', chars:'48 字'},
+    {c:'red',    name:'persona（人设段）', ord:'0', mut:'static', chars:'1,896 字', t2per:true},
+    {c:'gray',   name:'世界书条目', dashed:'按设计留空'},
+    {c:'gray',   name:'state:card', dashed:'未检出'},
+    {c:'gray',   name:'anima:memory', dashed:'未检出'},
+    {c:'gray',   name:'storyAnchor', dashed:'未检出'},
+    {c:'gray',   name:'dma:settings', dashed:'未检出'},
+    {c:'gray',   name:'dma:rules', dashed:'未检出'},
+  ],
+  tools: [{c:'gray', name:'工具定义数组（request.header.tools）', dashed:'未检出 · toolCount: 0'}],
+  messages: [
+    {c:'gray',   name:'首轮开场', dashed:'未检出（待实现）'},
+    {c:'yellow', name:'玩家消息', ord:'×3', mut:'perturn'},
+    {c:'yellow', name:'角色消息', ord:'×2', mut:'perturn'},
+    {c:'gray',   name:'role=tool', dashed:'未检出'},
+  ],
+};
+/* 会话列表：共 13 个（快路径 requests = -1 ⇒ 全部显示为「—」直到解析）。
+   标题全部为占位示例；次数 5/3/13 为真机实测值（只用数字）。 */
+const SESSIONS = [
+  {n:2,   name:'沙箱靶子 · roleplay-mt · 2 轮', ws:'dsh-accept', time:'2 小时前', sel:true, real:true},
+  {n:'?', name:'会话 02（示例标题）', ws:'dsh-accept', time:'昨天'},
+  {n:5,   name:'会话 03（示例标题）', ws:'dsh-accept', time:'昨天'},
+  {n:3,   name:'会话 04（示例标题）', ws:'dsh-accept', time:'3 天前'},
+  {n:13,  name:'会话 05（示例标题）', ws:'dsh-accept', time:'3 天前'},
+  {n:'fail', name:'会话 06（示例标题）', ws:'dsh-accept', time:'一周前'},
+  {n:0,   name:'会话 07（示例标题）', ws:'dsh-accept', time:'一周前'},
+  {n:'?', name:'会话 08（示例标题）', ws:'其它工作区', time:'两周前'},
+  {n:'?', name:'会话 09（示例标题）', ws:'其它工作区', time:'两周前'},
+];
+const EXTRA_N = 4; // 「…还有 N 个」
+const DRILL_DEFAULT = 'persona（人设段）';
+
+/* ================= 渲染 ================= */
+let state = 's1', turn = 1, drill = DRILL_DEFAULT, tagsOn = true;
+
+const tag = (cls, txt) => `<span class="ctag ${cls}">${txt}</span>`;
+const ex = () => '<span class="ex">示例</span>';
+
+function cntBadge(n){
+  if (n === '?')  return `<span class="cnt unparsed" title="未解析：快路径哨兵 -1，选中或解析后才出真值">—</span>`;
+  if (n === 'fail') return `<span class="cnt fail" title="解析失败 —— 不是 0！不再被折成 0 而当成空会话隐藏">⚠ 失败</span>`;
+  if (n === 0)    return `<span class="cnt zero" title="解析过，确实没有请求">0</span>`;
+  return `<span class="cnt ok" title="解析成功：共 N 次模型请求">${n}</span>`;
+}
+
+function sessRow(s){
+  const sel = (state !== 's1' && state !== 's6' && s.sel) ? ' sel' : '';
+  const hl = state === 's5' ? 'outline:1.5px dashed var(--accent);outline-offset:1px;' : '';
+  return `<div class="sess${sel}" style="${hl}">
+    <div class="row1"><span class="name">${s.name}${s.real ? ' ' + ex() : ''}</span>${cntBadge(s.n)}</div>
+    <div class="row2"><span>${s.time}</span><span>· ${s.ws}</span></div>
+  </div>`;
+}
+
+function leftCol(){
+  const legend = state === 's5'
+    ? `<div class="legend5"><b>⑤ 调用次数的三种形态</b>（对照虚线框看）：<br>
+       「—」未解析（快路径 -1）· <b>N</b> 解析成功 · <b>⚠ 失败</b> 解析失败（<b>绝不允许画成 0</b>）<br>
+       「0」只表示“解析过、确实没有请求”。</div>` : '';
+  const err = state === 's6'
+    ? `<div class="errcard">会话列表加载失败：提示词数据面不可用（照抄现状文案语义，不猜原因）</div>` : '';
+  return `<div class="col-left">
+    <div class="left-head">会话列表 ${tag('keep','原·ViewerSessionList :1945 · 留')}</div>
+    ${legend}
+    <div class="filterbox">🔍 过滤（按标题/工作区）</div>
+    <div class="session-list">
+      ${state === 's6' ? '' : SESSIONS.map(sessRow).join('')}
+      <div class="ws-group">…还有 ${EXTRA_N} 个（共 13 个 · ${ex()}）</div>
+    </div>
+    <div class="rescan">↻ 重扫 <span title="fs 索引有 30 秒 TTL：刚跑完一轮 30 秒内看不到，重扫给可见反馈">⏳30s 索引缓存</span></div>
+    ${err}
+  </div>`;
+}
+
+function blk(b, i, box){
+  const drillable = !b.dashed;
+  const onclick = drillable && (state==='s2'||state==='s3'||state==='s4')
+    ? `onclick="openDrill('${b.name}')" style="cursor:pointer"` : '';
+  const hl = (state === 's3' && drillable && b.name === drill) ? 'outline:2px solid var(--accent);outline-offset:1px;' : '';
+  const mut = b.mut === 'perturn' ? '<span class="mut perturn">★每轮</span>'
+            : b.mut === 'static'  ? '<span class="mut static">静态</span>' : '';
+  const chars = b.chars ? `<span class="chars">${b.chars}</span>` : '';
+  const ord = b.ord ? `<span class="ord">${b.ord}</span>` : '';
+  const dashedNote = b.dashed ? `<span style="font-size:11px">· ${b.dashed}</span>` : '';
+  const t2note = (turn === 2 && b.t2per) ? ' <span class="ex">示例：第 2 轮 persona 变每轮注入（按 §6.4-B 形状）</span>' : '';
+  return `<div class="blk ${b.c}${b.dashed ? ' dashed':''}" ${onclick} data-blk="${b.name}" style="${hl}">
+    <span class="cname">${b.name}</span>${ord}${dashedNote}${t2note}${mut}${chars}
+  </div>`;
+}
+
+function mapArea(){
+  const sub = turn === 1
+    ? REAL.subtotal
+    : `<span class="ex">示例</span> system 2,1xx 字 · 消息 5 条（第 2 轮形状按 §6.4-B 推演）`;
+  const err = state === 's6'
+    ? `<div class="empty-map" style="justify-content:flex-start;padding-top:40px">
+         <div class="errcard" style="width:100%">
+           <b>⚠ 提示词数据面不可用</b>（顶栏同步亮红）<br>
+           <span style="color:var(--dim)">取不到三段原文：不渲染假地图、不显示「未知」块——如实说明读不到，给「重试」按钮。</span><br>
+           <button class="minibtn" style="margin-top:6px">↻ 重试</button>
+         </div>
+       </div>` : '';
+  if (state === 's6') return `<div class="col-map">${turnbar('—（数据面不可用）')}${err}</div>`;
+
+  if (state === 's1') {
+    return `<div class="col-map">
+      ${turnbar('（未选会话 · 小计在选中后出现）')}
+      <div class="empty-map" style="flex:1">
+        <div class="big">在左侧选一个会话</div>
+        <div style="max-width:420px;text-align:center">
+          现状问题：未选会话时这里会显示一片「未知」。建议改为这张引导空态：<br>
+          一句「选会话」+ 半透明地图骨架（三框轮廓灰显），<b>不显示「未知」字样</b>——未知属于“读了但读不到”，和“还没读”是两回事。
+        </div>
+        <div style="width:70%;display:flex;flex-direction:column;gap:6px;opacity:.35">
+          <div class="mapbox"><div class="boxhead">system</div><div class="blk dashed">…</div><div class="blk dashed">…</div></div>
+          <div class="mapbox"><div class="boxhead">tools</div><div class="blk dashed">…</div></div>
+          <div class="mapbox"><div class="boxhead">messages</div><div class="blk dashed">…</div></div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  const boxes = [
+    `<div class="mapbox"><div class="boxhead">[system] <span class="mini">色块=红(身份/人设) · 灰虚线=未检出 ${tag('keep','原·地图渲染 :2630-2688 · 留')}</span></div>
+      ${REAL.system.map((b,i)=>blk(b,i,'system')).join('')}</div>`,
+    `<div class="mapbox"><div class="boxhead">[tools] <span class="mini">蓝=工具定义</span></div>
+      ${REAL.tools.map((b,i)=>blk(b,i,'tools')).join('')}</div>`,
+    `<div class="mapbox"><div class="boxhead">[messages] <span class="mini">黄=消息块</span></div>
+      ${REAL.messages.map((b,i)=>blk(b,i,'messages')).join('')}</div>`,
+  ];
+
+  const drillView = state === 's3' ? drillPane() : '';
+
+  return `<div class="col-map">
+    ${turnbar(sub)}
+    <div class="map-scroll" ${state==='s3' ? 'style="display:none"' : ''}>
+      ${boxes.join('')}
+      <div class="collapse">▸ 来源：preset 组成（roleplay-mt · 段/插件/order 明细收在这里） ${tag('fold','原·CompositionBlock :2801 · 收起为折叠块')}</div>
+    </div>
+    ${drillView}
+  </div>`;
+}
+
+function turnbar(sub){
+  if (state === 's6') {
+    return `<div class="turnbar">
+      <b style="font-size:13px">装配地图</b> ${tag('keep','主查看界面 · 原·PromptMapView :2663 · 留')}
+      <span style="color:var(--dim)">读不到数据 —— 不显示轮次数，也不渲染假轮次按钮</span>
+      <span class="subtotal">小计：—</span>
+    </div>`;
+  }
+  return `<div class="turnbar">
+    <b style="font-size:13px">装配地图</b> ${tag('keep','主查看界面 · 原·PromptMapView :2663 · 留')}
+    <span style="color:var(--dim)">共 2 次模型请求 ${turn===2 ? ex() : ''}</span>
+    <button class="turnbtn ${turn===1?'on':''}" onclick="setTurn(1)">#1</button>
+    <button class="turnbtn ${turn===2?'on':''}" onclick="setTurn(2)">#2</button>
+    ${tag('fold','原·PromptRequestList :2051 · 去独立列，并入此条')}
+    <span class="subtotal">小计：${sub}</span>
+  </div>`;
+}
+
+function drillPane(){
+  const SAMPLE = {
+    'persona（人设段）':
+`【示例占位文本 —— 真实实现里这里是该轮 system 段的逐字原文，可搜索、可复制】
+（第 1 行）角色设定……
+（第 2 行）语气与称呼……
+（第 3 行）禁区与安全……
+…
+右下角同时显示：字符数 1,896 · 字节数（UTF-8）· 是否截断`,
+    'harness identity':
+`【示例占位文本 —— 宿主注入的固定身份段，≈-1000 序，48 字】`,
+  };
+  const text = SAMPLE[drill] || `【示例占位文本】`;
+  return `<div class="drill">
+    <div class="dh">
+      <button class="minibtn" onclick="closeDrill()">← 回地图</button>
+      <b style="font-size:13px">下钻：${drill}</b>
+      <span style="color:var(--dim);font-size:12px">#${turn} 轮 · 该段原文</span>
+      ${tag('fold','原·PromptPartView :2124 · 收起为点块下钻')}
+    </div>
+    <div class="tools">🔍 <span class="filterbox" style="flex:1">在此段内搜索…</span>
+      <button class="minibtn">复制</button><span style="color:var(--dim)">1,896 字 · 5,3xx 字节(UTF-8) ${ex()}</span></div>
+    <pre>${text}</pre>
+  </div>`;
+}
+
+function drawer(){
+  return `<div class="drawer">
+    <div class="dhead">维护 ${tag('fold','原·KnobsPanel :2849 + DetectReport 4 卡 · 收起进此抽屉')}
+      <span style="flex:1"></span><button class="iconbtn" onclick="go('s2')">✕</button></div>
+    <div class="dbody">
+      <div class="dcard"><div class="dt">一键生成 RP 预设 ${tag('','ProvisionCard :3362')}</div>
+        <div class="drow"><button class="minibtn">生成</button><span class="dnote">生成到沙箱/仓库目标；用户预设只走备份+回滚</span></div></div>
+      <div class="dcard"><div class="dt">修复 RP agent / 检测报告 ${tag('','DetectReport :3484')}</div>
+        <div class="drow"><button class="minibtn">检测</button><button class="minibtn">按 pack 更新</button></div>
+        <div class="dnote">检测结果（应用 / 回滚）在此展开，不再占主界面</div></div>
+      <div class="dcard"><div class="dt">备份与应用 ${tag('','BackupsCard :3156 / ApplyCard :3024')}</div>
+        <div class="drow"><button class="minibtn">备份列表</button><button class="minibtn">预览差异</button><button class="minibtn">应用</button><button class="minibtn">回滚</button></div>
+        <div class="dnote">写盘纪律不变：先备份、写后回读校验、不一致自动回滚</div></div>
+      <div class="dcard"><div class="dt">可写项 4 旋钮 ${tag('','KnobsPanel :2849')}</div>
+        <div class="knob"><span>压缩指令</span><select><option>开</option><option>关</option></select><span class="kdesc">……</span></div>
+        <div class="knob"><span>收纳占位</span><select><option>开</option><option>关</option></select></div>
+        <div class="knob"><span>注入 order·maxChars</span><select><option>默认</option><option>自定义</option></select></div>
+        <div class="knob"><span>记忆·状态开关</span><select><option>开</option><option>关</option></select></div>
+      </div>
+      <div class="dnote">★ 已从本抽屉移除：「启用 RP agent 优化」勾选、Skill 文案、风险提示
+        ${tag('drop','原·:4196 · 去（零功能的组件内 state）')}</div>
+    </div>
+  </div>`;
+}
+
+function topbar(){
+  const presetOk = state !== 's6';
+  return `<div class="topbar">
+    <span class="title">Agent 编辑器</span>
+    <span style="font-family:var(--mono)">当前 preset：${presetOk ? 'roleplay-mt' : '未知（读不到 —— 不猜）'} ${presetOk ? '' : '<span class="badge warn">⚠ 读不到</span>'}</span>
+    <span class="badge ok" title="信任来源">✓ 信任</span>
+    <span class="badge ok" title="生效状态">✓ 已生效</span>
+    ${state === 's6'
+      ? '<span class="badge err">· 提示词数据面不可用</span>'
+      : '<span style="color:var(--dim)">· 数据面可用 · 宿主侧共 13 个会话</span>'}
+    ${tag('keep','原·顶栏 :4135-4151 · 留，压成一行小字')}
+    <span style="flex:1"></span>
+    <button class="minibtn" onclick="go('s4')">🛠 维护 ${tag('fold','新入口')}</button>
+    <button class="iconbtn">⛶</button><button class="iconbtn">✕</button>
+  </div>`;
+}
+
+function botbar(){
+  return `<div class="botbar">
+    <span>就绪</span>
+    <span class="grow">cwd: D:\\apps\\dsh-accept\\workspace ${ex()} · preset: roleplay-mt</span>
+    <span style="font-family:var(--mono)">会话 id: sess-****-****（点击复制）</span>
+    ${tag('keep','原·底栏 :4181-4187 · 留，压成一行')}
+  </div>`;
+}
+
+function render(){
+  const maint = state === 's4' ? drawer() : '';
+  document.getElementById('panel').innerHTML =
+    topbar() + `<div class="main">${leftCol()}${mapArea()}</div>` + botbar() + maint;
+  document.querySelectorAll('.sbtn[data-s]').forEach(b =>
+    b.classList.toggle('on', b.dataset.s === state));
+  document.getElementById('foot').innerHTML = footText();
+}
+
+function footText(){
+  return `<b>数据来源声明：</b>所有界面数字取自 <code>§6.4-A</code>（沙箱 3093 · roleplay-mt · 2 轮实测：system 1,946 字 / 工具 0 / 消息 5 条；system 框 48+1,896 字等）；次数 5 / 3 / 13 为真机实测<b>数字</b>；凡 A 里没有的数字（第 2 轮形状、cwd、字节换算、会话标题）一律挂 <span class="ex">示例</span> 徽标。会话标题全部为占位符，<b>本页不含任何真机会话的标题或正文</b>。当前状态：${state} · 轮次 #${turn}`;
+}
+
+/* 交互 */
+function go(s){ state = s; if (s === 's1' || s === 's6') turn = 1; render(); }
+function setTurn(t){ turn = t; render(); }
+function openDrill(name){ drill = name; state = 's3'; render(); }
+function closeDrill(){ state = 's2'; render(); }
+render();
+</script>
+</body>
+</html>

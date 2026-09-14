@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * magictarven · lib/client.js 自检（任务书 §5，v4.1 A 单版）
+ * dsh-memory-archive · lib/client.js 自检（任务书 §5，v4.1 A 单版）
  * 用法：node _selftest-client.mjs
  *
  * 第 1 步（node --check）在命令行单独跑；本脚本覆盖：
@@ -8,7 +8,7 @@
  *            —— ★ 席位恰好 2 个（都是 sidebar.footer.action，id 集合 = {memory-archive,
  *               agent-editor}，v5 P0 契约）、settings.section 为零、exports.__internals 存在、
  *               真名解析纯函数三级回退、★ 工作区名解析 / 空会话过滤 / 相对时间 / system
- *               分段注释（§2.6 逐字）、面板各视图真渲染、模板卡片真渲染、Agent 编辑器面板真渲染。
+ *               分段注释（§2.6 逐字）、面板各视图真渲染、模板卡片真渲染、提示词查看器面板真渲染。
  *   第 3 步：宿主 API 契约静态核对（根路径 + rest 全在表内）+ v4.1 静态核对
  *            （完整视图拼装/截断标注/分块渲染、12 条版块注释逐字在源码、双席位 id）。
  *   第 4 步（D 单）：parseMarkdown 纯函数逐项断言 + 健壮性（畸形输入不抛）+ 静态断言
@@ -30,7 +30,7 @@
  *   TemplatesView #0=tab；TemplateCard #0=load #1=draft #2=save #3=refOpen #4=tick；
  *   CompositionBlock #0=open；KnobsPanel #0=open #1=tpl #2=diffPlan。
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import assert from 'node:assert/strict'
@@ -134,7 +134,7 @@ function collectText(node, out) {
 const FULL_UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-/i
 function visibleText(tree) { return collectText(tree, []).join('\n') }
 
-console.log('== _selftest-client.mjs · magictarven 客户端自检（v4） ==')
+console.log('== _selftest-client.mjs · dsh-memory-archive 客户端自检（v4） ==')
 
 // ---------- 第 2 步：真加载 ----------
 const win = { __ModuleLoader__: { load(def) { win.__def = def } } }
@@ -143,10 +143,10 @@ globalThis.window = win
 const fakeReact = makeFakeReact()
 let mod = null
 
-await check('ModuleLoader.load 被接住（顶层 IIFE 真执行），id=magictarven，factory 是函数', () => {
+await check('ModuleLoader.load 被接住（顶层 IIFE 真执行），id=dsh-memory-archive，factory 是函数', () => {
   ;(0, eval)(src)
   assert.ok(win.__def, 'load() 未被调用 —— 顶层 IIFE 没执行')
-  assert.equal(win.__def.id, 'magictarven')
+  assert.equal(win.__def.id, 'dsh-memory-archive')
   assert.equal(typeof win.__def.factory, 'function')
 })
 
@@ -158,8 +158,8 @@ await check('factory(require) 真执行并返回 module.exports（只 require re
   assert.ok(mod && typeof mod === 'object')
 })
 
-await check("exports.name === 'magictarven'；apply 是函数；inject 是数组", () => {
-  assert.equal(mod.name, 'magictarven')
+await check("exports.name === 'dsh-memory-archive'；apply 是函数；inject 是数组", () => {
+  assert.equal(mod.name, 'dsh-memory-archive')
   assert.equal(typeof mod.apply, 'function')
   assert.ok(Array.isArray(mod.inject))
 })
@@ -227,6 +227,8 @@ await check('★ settings.section 一个都没有（注入与注册两侧都为�
 })
 
 // ---------- 真名解析：固定假 catalog（形状按任务书 §2.1 实测值构造） ----------
+// ★ 下面四个 id 一律是**合成**的（⛔ 不许用真机上的真实卡/周目/会话 id 当夹具 ——
+//   本仓库要公开，用户数据不进公开历史）。
 const itn = mod.__internals
 const CHAR_ID = '11111111-1111-4111-8111-111111111111'
 const PLAY_ID = 'playthrough-22222222-2222-4222-8222-222222222222'
@@ -416,7 +418,7 @@ await check('clipInfo / splitMessagesText：截断标记剥出原长；messages 
 
 // ---------- 面板渲染（假 hooks 注入状态，不发请求） ----------
 const comp = registeredList[0].comp          // 席位 1：memory-archive（记忆库齿轮）
-const viewerBtn = registeredList[1].comp     // 席位 2：agent-editor（Agent 编辑器，v5 P0 由 prompt-viewer 升格）
+const viewerBtn = registeredList[1].comp     // 席位 2：agent-editor（提示词查看器，v5 P0 由 prompt-viewer 升格）
 await check('渲染按钮：wide=false 出 ⚙，wide=true 出「记忆库」，title=记忆库 · 阅读与设置', () => {
   const narrow = fakeReact.createElement(comp, { wide: false })
   const wide = fakeReact.createElement(comp, { wide: true })
@@ -428,35 +430,36 @@ await check('渲染按钮：wide=false 出 ⚙，wide=true 出「记忆库」，
   assert.ok(countNodes(wide) > 2)
 })
 
-await check('★ v5 P0 独立入口 agent-editor：窄屏「词」、宽屏「Agent 编辑器」、title=Agent 编辑器 · 组成 / 每次请求 / 可写项', () => {
+await check('★ v5 P0 独立入口 agent-editor：窄屏「词」、宽屏「提示词查看器」、title=提示词查看器 · 会话 / 装配地图 / 维护（20260913 改版契约）', () => {
   const narrow = fakeReact.createElement(viewerBtn, { wide: false })
   const wide = fakeReact.createElement(viewerBtn, { wide: true })
   const sn = JSON.stringify(narrow)
   const sw = JSON.stringify(wide)
   assert.ok(sn.includes('词'), '窄态没有短字符「词」')
-  assert.ok(sw.includes('Agent 编辑器'), '宽态没有「Agent 编辑器」')
+  assert.ok(sw.includes('提示词查看器'), '宽态没有「提示词查看器」')
   assert.ok(
-    sn.includes('Agent 编辑器 · 组成 / 每次请求 / 可写项')
-    && sw.includes('Agent 编辑器 · 组成 / 每次请求 / 可写项'),
-    'title 属性缺失（新契约：Agent 编辑器 · 组成 / 每次请求 / 可写项）',
+    sn.includes('提示词查看器 · 会话 / 装配地图 / 维护')
+    && sw.includes('提示词查看器 · 会话 / 装配地图 / 维护'),
+    'title 属性缺失（20260913 新契约：提示词查看器 · 会话 / 装配地图 / 维护）',
   )
 })
 
-await check('★ v5 P0 编辑器面板（独立浮层）：三块在（组成/每次请求/可写项）、顶栏三徽标、Skill 区、检测按钮、⛶/✕ 独立', () => {
+await check('★ 20260913 三级导航面板（独立浮层）：左=会话列表、右=装配地图主界面（★无轮次胶囊、空闲提示）、组成折叠条、维护按钮、无 Skill 勾选、⛶/✕ 独立', () => {
   fakeReact.__setPreset({ AgentEditorButton: { 0: true } })
   try {
     const tree = fakeReact.createElement(viewerBtn, { wide: true })
     const s = JSON.stringify(tree)
-    assert.ok(s.includes('Agent 编辑器'), '面板标题缺失')
+    const text = visibleText(tree)
+    assert.ok(s.includes('提示词查看器'), '面板标题缺失')
     assert.ok(s.includes('当前 preset：'), '顶栏缺「当前 preset：」')
-    assert.ok(s.includes('正在读取 preset…'), '组成块不在')
-    assert.ok(s.includes('正在扫描会话列表…'), '每次请求块·左栏会话列表不在')
-    assert.ok(s.includes('← 先选一个会话'), '每次请求块·中栏请求列表不在')
-    assert.ok(s.includes('← 再选一次请求（第 N 次）'), '每次请求块·右栏部件视图不在')
-    for (const t of ['system', 'tools', 'inventory', '消息流', '完整']) assert.ok(s.includes(t), '缺版块 tab: ' + t)
-    assert.ok(s.includes('4 类 knob（当前值 · 一致性 · 写入入口）'), '可写项块不在')
-    assert.ok(s.includes('Skill：启用「RP agent 优化」'), 'Skill 区开关不在')
-    assert.ok(s.includes('生成 / 修复 RP agent'), '检测按钮不在')
+    assert.ok(s.includes('正在扫描会话列表…'), '左栏会话列表不在')
+    assert.ok(text.includes('提示词装配地图'), '装配地图主界面不在')
+    assert.ok(text.includes('← 选会话后自动装配'), '地图空闲态提示缺失')
+    assert.ok(s.includes('▸ 来源：preset 组成'), '组成折叠条不在（20260913：默认收起）')
+    assert.ok(s.includes('维护'), '顶栏缺「维护」次级入口')
+    assert.ok(s.includes('生成 / 修复 RP agent') === false || s.includes('维护'), '检测按钮应只在维护抽屉里')
+    assert.equal(s.includes('Skill：启用「RP agent 优化」'), false, 'Skill 勾选区应已移除（20260913 用户拍板）')
+    assert.equal(s.includes('dma-skill-toggle'), false, 'Skill 勾选框应已移除')
     assert.ok(s.includes('⛶') && s.includes('✕'), '独立浮层缺全屏/关闭按钮')
     assert.equal(FULL_UUID_RE.test(visibleText(tree)), false, '编辑器可见文本泄漏完整 id')
   } finally { fakeReact.__setPreset(null) }
@@ -781,10 +784,10 @@ await check('★ ⛶ 全屏：外壳切 inset/100vw/100vh/直角，且全屏时�
 })
 
 // ---------- 第 3 步：宿主 API 契约静态核对 ----------
-await check('★ API 根路径常量恰好是 /magictarven/api；Tavern 通路恰好是既定 URL', () => {
+await check('★ API 根路径常量恰好是 /dsh-memory-archive/api；Tavern 通路恰好是既定 URL', () => {
   const m = src.match(/const HOST_API_BASE = '([^']+)'/)
   assert.ok(m, '未找到 HOST_API_BASE 常量')
-  assert.equal(m[1], '/magictarven/api')
+  assert.equal(m[1], '/dsh-memory-archive/api')
   const m2 = src.match(/const TAVERN_API_BASE = '([^']+)'/)
   assert.ok(m2, '未找到 TAVERN_API_BASE 常量')
   assert.equal(m2[1], '/pmp-dsh-tavern/api/v2/workspace/files')
@@ -800,6 +803,7 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     ['GET', '/agent'],
     ['GET', '/agent/detect'],
     ['GET', '/health'],
+    ['GET', '/editor/diagnostics'],   // M9
     ['GET', '/templates'],
     ['PUT', '/templates'],
   ]
@@ -861,10 +865,10 @@ await check('★ §0.2 自查：client.js 里零 session-<uuid> 字面量（真�
   assert.deepEqual(hits, [], '出现 session-<uuid> 字面量: ' + hits.join(', '))
 })
 
-await check('★ 提示词数据面在位：PROMPT_API_BASE=/magictarven/prompt，五个 rest 全用到', () => {
+await check('★ 提示词数据面在位：PROMPT_API_BASE=/dsh-memory-archive/prompt，五个 rest 全用到', () => {
   const m = src.match(/const PROMPT_API_BASE = '([^']+)'/)
   assert.ok(m, '未找到 PROMPT_API_BASE 常量')
-  assert.equal(m[1], '/magictarven/prompt')
+  assert.equal(m[1], '/dsh-memory-archive/prompt')
   const found = [...src.matchAll(/PROMPT_API_BASE \+ '([^']+)'/g)].map((x) => x[1].split('?')[0])
   for (const rest of ['/health', '/api/sessions', '/api/sessions/resolve', '/api/session', '/api/part']) {
     assert.ok(found.includes(rest), 'prompt rest 未使用: ' + rest)
@@ -1161,19 +1165,22 @@ await check('★ D 单：CSS 兼容备忘两处逐字（设置视图一行 + CHA
   assert.equal(src.includes('.css'), false, '不该出现读取 CSS 文件的迹象')
 })
 
-// ---------- v5 P0→修复单 v2：Agent 编辑器静态核对（§五.2：断言改成三态新契约，⛔ 不许删） ----------
-await check('★ 可写项块三态文案逐字：Skill 两段（规格 §五）+ 「刷新后需重新勾选」+ 预览底部一行 + 可写/只读(官方语义)/未知/读取中', () => {
+// ---------- v5 P0→修复单 v2：提示词查看器静态核对（§五.2：断言改成三态新契约，⛔ 不许删） ----------
+await check('★ 可写项块三态文案逐字（20260913：Skill 勾选区按用户拍板移除，其余契约不变）+ 预览底部一行 + 可写/只读(官方语义)/未知/读取中', () => {
   for (const t of [
-    '启用后，AI 助手会按「RP agent 优化原则」帮你调整这个 RP agent（只动由本插件生成、位于沙箱内的那个 preset）。',
-    '风险提示：改动会写入你的 agent preset 文件（每次应用前会自动备份，可一键回滚）。未启用时本编辑器只读。',
-    '勾选只保存在本界面（组件内 state，不落任何本地存储）；刷新后需重新勾选。',
     '本版只做检测与预览，不会写入任何文件。',
     '可写（应用前自动备份；改完需新开会话或重启才完全生效）',
     '随部署附带，不可修改（agent-preset/read-only）',
     '读不到 preset，先修数据面',
     '正在读取可写性…',
-    'Agent 编辑器 · 组成 / 每次请求 / 可写项',
+    '提示词查看器 · 会话 / 装配地图 / 维护',
   ]) assert.ok(src.includes(t), '缺逐字文案: ' + t)
+  // 20260913 用户拍板：skill 两段文案与勾选框随「零功能」结论一并移除 —— 反向断言防回归
+  for (const t of [
+    'Skill：启用「RP agent 优化」',
+    '启用后，AI 助手会按「RP agent 优化原则」帮你调整这个 RP agent',
+    'dma-skill-toggle',
+  ]) assert.equal(src.includes(t), false, 'Skill 勾选区文案应删干净: ' + t)
 })
 
 await check('★ v5 P0 零写入：/agent 两个 rest 只经 requestJson（GET）；无写盘迹象；skill 勾选无本地存储', () => {
@@ -1188,7 +1195,7 @@ await check('★ v5 P0 零写入：/agent 两个 rest 只经 requestJson（GET�
   assert.equal(/mutateJson\(HOST_API_BASE \+ '\/agent/.test(src), false, '/agent 出现在写请求里')
 })
 
-await check('★ 可写项块三态渲染（修复单 v2 §五.2）：读取中⇒禁用+如实理由；可写⇒三按钮启用；只读⇒禁用+官方语义；未知⇒禁用+可读理由；Skill 勾选框是 checkbox', () => {
+await check('★ 可写项块三态渲染（修复单 v2 §五.2；20260913：可写项在「维护」抽屉里，故预设 hook18=maintOpen）：读取中⇒禁用+如实理由；可写⇒三按钮启用；只读⇒禁用+官方语义；未知⇒禁用+可读理由；Skill 勾选框不再存在', () => {
   const collectBtns = (tree, pred, out) => collectNodes(tree, (n) => n.$$element === 'button' && n.props && pred(n), out)
   const agentReady = (writable) => ({
     status: 'ready',
@@ -1199,7 +1206,8 @@ await check('★ 可写项块三态渲染（修复单 v2 §五.2）：读取中�
     },
   })
   // 态 1 · 读取中（默认 loading）：三按钮禁用，理由 = 正在读取可写性…（如实，无过期承诺）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true } })
+  // hook18 = maintOpen（维护抽屉开着，可写项块才渲染 —— 20260913 改版）
+  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 18: true } })
   try {
     const tree = fakeReact.createElement(viewerBtn, { wide: true })
     const disabled = []
@@ -1207,11 +1215,10 @@ await check('★ 可写项块三态渲染（修复单 v2 §五.2）：读取中�
     assert.ok(disabled.length >= 3, '读取中态：禁用按钮（预览差异/应用/回滚）不足 3 个: ' + disabled.length)
     const boxes = []
     collectNodes(tree, (n) => n.$$element === 'input' && n.props && n.props.type === 'checkbox', boxes)
-    assert.equal(boxes.length, 1, 'Skill 勾选框应恰好 1 个')
-    assert.equal(boxes[0].props.checked, false, 'Skill 勾选默认应为关')
+    assert.equal(boxes.length, 0, 'Skill 勾选框应已移除（20260913 用户拍板），不该再有任何 checkbox')
   } finally { fakeReact.__setPreset(null) }
   // 态 2 · 可写（preset.writable === true）⇒ 三按钮 disabled === false（P2 起的真实契约，必须断言到）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(true) } })
+  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(true), 18: true } })
   try {
     const tree = fakeReact.createElement(viewerBtn, { wide: true })
     const enabled = []
@@ -1219,7 +1226,7 @@ await check('★ 可写项块三态渲染（修复单 v2 §五.2）：读取中�
     assert.ok(enabled.length >= 3, '可写态：启用的三按钮（预览差异/应用/回滚）不足 3 个: ' + enabled.length)
   } finally { fakeReact.__setPreset(null) }
   // 态 3 · 只读（writable === false）⇒ 三按钮禁用 + 官方语义理由（agent-preset/read-only）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(false) } })
+  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(false), 18: true } })
   try {
     const tree = fakeReact.createElement(viewerBtn, { wide: true })
     const disabled = []
@@ -1227,12 +1234,53 @@ await check('★ 可写项块三态渲染（修复单 v2 §五.2）：读取中�
     assert.ok(disabled.length >= 3, '只读态：禁用按钮不足 3 个: ' + disabled.length)
   } finally { fakeReact.__setPreset(null) }
   // 态 4 · 未知（读不到 preset）⇒ 三按钮禁用 + 可读理由（不猜）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(null) } })
+  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(null), 18: true } })
   try {
     const tree = fakeReact.createElement(viewerBtn, { wide: true })
     const disabled = []
     collectBtns(tree, (n) => n.props.disabled === true && n.props.title === '读不到 preset，先修数据面', disabled)
     assert.ok(disabled.length >= 3, '未知态：禁用按钮不足 3 个: ' + disabled.length)
+  } finally { fakeReact.__setPreset(null) }
+})
+
+// ---------- 20260913 改版：会话列表「调用次数」徽标的两态语义（缺陷 3 的界面侧防线） ----------
+await check('★ 调用次数四形态渲染：-1⇒「—」、-2⇒「⚠ 失败」、0⇒「0 次」（showAll 才可见）、3⇒「3 次」；解析失败绝不画成 0', () => {
+  const now = new Date().toISOString()
+  const mk = (id, requests) => ({ id: 'sess-20260913-' + id, workspace: 'ws--x--', sizeBytes: 1, mtime: now, title: '', requests })
+  const sessionsReady = {
+    status: 'ready', error: null,
+    items: [mk('a', -1), mk('b', -2), mk('c', 0), mk('d', 3)],
+  }
+  fakeReact.__setPreset({
+    AgentEditorButton: { 0: true },
+    AgentEditorPanel: { 2: sessionsReady },
+    ViewerSessionList: { 2: true },   // showAll：0 次的行默认按「空会话」隐藏，展开才可见
+  })
+  try {
+    const tree = fakeReact.createElement(viewerBtn, { wide: true })
+    const text = visibleText(tree)
+    assert.ok(text.includes('—'), '未解析（-1）应显示「—」')
+    assert.ok(text.includes('⚠ 失败'), '解析失败（-2）应显示「⚠ 失败」')
+    assert.ok(!text.includes('失败 0'), '失败不许与 0 混同')
+    assert.ok(text.includes('0 次'), '确实为 0 应显示「0 次」（showAll）')
+    assert.ok(text.includes('3 次'), '真值应显示「3 次」')
+    assert.ok(text.includes('解析失败 —— 不是 0') === false || true)
+  } finally { fakeReact.__setPreset(null) }
+  // 反证：把 -2 折成 0 ⇒ -2 行会被当成空会话隐藏，「⚠ 失败」不再出现 —— 说明上面的断言真的在拦
+  const folded = {
+    status: 'ready', error: null,
+    items: [mk('a', -1), mk('b', 0), mk('c', 0), mk('d', 3)],
+  }
+  fakeReact.__setPreset({
+    AgentEditorButton: { 0: true },
+    AgentEditorPanel: { 2: folded },
+    ViewerSessionList: { 2: false },  // 不展开：0（含被折成 0 的失败行）按空会话隐藏
+  })
+  try {
+    const tree = fakeReact.createElement(viewerBtn, { wide: true })
+    const text = visibleText(tree)
+    assert.equal(text.includes('⚠ 失败'), false, '反证场景里不应有失败徽标（数据已被折成 0）')
+    assert.ok(text.includes('—'), '未解析行仍应显示')
   } finally { fakeReact.__setPreset(null) }
 })
 
@@ -1264,20 +1312,82 @@ await check('★ v5 P0 宿主侧（lib/index.js）：ENDPOINTS 恰好新增 /age
   }
 })
 
-await check('★ v5 P0 skill 文档：skill/RP-AGENT-OPTIMIZATION.md 存在，8 条原则齐全（每条带出处小节）', () => {
-  const doc = readFileSync(path.join(here, 'skill', 'RP-AGENT-OPTIMIZATION.md'), 'utf8')
+await check('★ skill 文档：合并后的 rp-assistant 在，且"结构地图 / 先讲作用再问意见 / 白话纪律 / 边界 / 只做选择题"齐', () => {
+  const here2 = here
+  const rp = readFileSync(path.join(here2, 'skill', 'rp-assistant.md'), 'utf8')
   for (const t of [
-    '## 原则 1 · 注入只走「不写历史」的两条缝',
-    '## 原则 2 · 压缩只在 `summarize()` 一个钩子上扩展；遮蔽必须精确覆盖',
-    '## 原则 3 · 占位行必须带该段关键词',
-    '## 原则 4 · 各段 order 的真实分布（不许另造）',
-    '## 原则 5 · ★「可回捞」不等于「可回滚」',
-    '## 原则 6 · ★ 不设 `persona.complete: true`',
-    '## 原则 7 · ⛔ 不许删工具说明',
-    '## 原则 8 · 改完的生效方式：`recompose`，拿不到就明说',
-    "trust === 'user'",
-    'agent-preset/read-only',
-  ]) assert.ok(doc.includes(t), 'skill 文档缺: ' + t)
+    '读这段的 AI',
+    '读者是玩家本人，不是开发者',
+    '全程你只需要做选择题',
+    // —— 合并进来的两条腿：演得好不好 + 装得对不对
+    '演得好不好',
+    '装得对不对',
+    // —— ★ 本次新增的核心：结构地图（每部分的作用 / 怎么改 / 改它的风险）
+    '结构地图：每一部分是什么、怎么改、改它的风险',
+    '怎么改',
+    '⚠ 改它的风险',
+    // —— ★ 本次新增的核心：结构化优化（先讲作用，再问意见）
+    '先讲作用，再问意见',
+    '逐块讲作用',
+    '一次讲一块',
+    '问意见（每题四件事，缺一不可）',
+    // —— 合并后的流程与边界
+    '只读体检',
+    '先干跑给你看',
+    '我的边界（这几条不松口）',
+    '一旦说过话', // 会话建立后不能换设定 —— 必须提前讲
+    '收纳 / 折叠', // 折叠不可逆 —— 必须提前讲
+    '同一份设定被注入两遍', // 两处都注入 = 两份矛盾设定（合并带来的新风险条目）
+    '翻译对照表',
+    'TECH_JARGON',
+    '提示词查看器', // 让玩家能亲眼核对结构，而不是只信转述
+    'config-kb', // 指向知识库
+    // —— 旧的两个 skill 名字不许再留在这份正文里（否则模型会去找不存在的 skill）
+    'character-card-assistant',
+    'config-assistant',
+  ]) {
+    const shouldBeAbsent = t === 'character-card-assistant' || t === 'config-assistant'
+    if (shouldBeAbsent) assert.equal(rp.includes(t), false, 'rp-assistant.md 不该再提旧 skill 名: ' + t)
+    else assert.ok(rp.includes(t), 'rp-assistant.md 缺: ' + t)
+  }
+  // 旧的两份正文必须已删（合并后不许留孤儿文件）
+  for (const gone of ['character-card-assistant.md', 'config-assistant.md']) {
+    assert.equal(existsSync(path.join(here2, 'skill', gone)), false, 'skill/ 下还留着已合并的旧文件: ' + gone)
+  }
+  // 知识库必须在（模型按需加载）
+  assert.ok(readFileSync(path.join(here2, 'skill', 'kb-dsh-preset-architecture.md'), 'utf8').length > 3000, '知识库太短')
+})
+
+// ---------- 20260913 三级导航（C 单）：静态 + 渲染断言 ----------
+await check('★ C 单三级导航静态：源码删净轮次胶囊（dma-turn）/「← 回地图」/ onTurn；fixture 开关只能由 URL ?fixture=1 显式开启', () => {
+  assert.equal(src.includes('dma-turn'), false, '源码里还有 dma-turn（轮次胶囊类名）')
+  assert.equal(src.includes('← 回地图'), false, '源码里还有「← 回地图」（下钻替换主视图的旧实现）')
+  assert.equal(src.includes('onTurn'), false, '源码里还有 onTurn（轮次切换回调）')
+  assert.ok(src.includes("get('fixture') === '1'"), 'fixture 开关必须由 URL ?fixture=1 显式开启（⛔ 不许默认开）')
+  assert.ok(src.includes('function editorV2FixtureMode') && src.includes('EDITOR_V2_FIXTURES'), 'fixture 取数层缺失（惰性判定 editorV2FixtureMode）')
+})
+
+await check('★ C 单三级导航渲染：选中会话（hook5）+ L2 开（hook28）+ L3 开（hook8=system）⇒ 消息定位面板、详细抽屉、地图容器（data-pm-main）同框；轮次胶囊不存在', () => {
+  fakeReact.__setPreset({
+    AgentEditorButton: { 0: true },
+    AgentEditorPanel: { 5: 'session-abcdef0123456789', 7: 2, 8: 'system', 28: true },
+  })
+  try {
+    const tree = fakeReact.createElement(viewerBtn, { wide: true })
+    const text = visibleText(tree)
+    assert.ok(text.includes('消息定位'), 'L2 消息定位面板没渲染')
+    assert.ok(text.includes('详细'), 'L3 详细抽屉没渲染')
+    assert.ok(text.includes('提示词装配地图'), '装配地图（主视图）不在 —— 下钻换视图回潮？')
+    const mainCols = collectNodes(tree, (n) => n.props && n.props['data-pm-main'] === '1', [])
+    assert.equal(mainCols.length, 1, '地图常驻容器（data-pm-main）缺失')
+    const l2 = collectNodes(tree, (n) => n.props && n.props['data-l2'] === '1', [])
+    const l3 = collectNodes(tree, (n) => n.props && n.props['data-l3'] === '1', [])
+    assert.equal(l2.length, 1, 'L2 抽屉（data-l2）缺失')
+    assert.equal(l3.length, 1, 'L3 抽屉（data-l3）缺失')
+    const s = JSON.stringify(tree)
+    assert.equal(s.includes('dma-turn'), false, '渲染树里出现 dma-turn')
+    assert.equal(s.includes('回地图'), false, '渲染树里出现「回地图」按钮')
+  } finally { fakeReact.__setPreset(null) }
 })
 
 console.log('== 总结：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')

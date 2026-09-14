@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "sessionId": "fixture-session-static",
+  "turn": 2,
+  "part": "messages",
+  "requestLogged": false,
+  "headerCarried": true,
+  "count": 4,
+  "text": "（fixture 构造文本 —— 注意：这是第 2 楼实际发出的历史，不是整份会话历史）\n\nuser: （fixture）先查一下状态\nassistant: （fixture）正在查询……\ntool: （fixture）工具结果：ok\nassistant: （fixture）查询完成。",
+  "messages": [
+    { "seq": 520, "role": "user", "preview": "（fixture）先查一下状态", "chars": 15, "isToolResult": false, "isCompacted": false },
+    { "seq": 523, "role": "assistant", "preview": "（fixture）正在查询……", "chars": 14, "isToolResult": false, "isCompacted": false },
+    { "seq": 526, "role": "tool", "preview": "（fixture）工具结果：ok", "chars": 16, "isToolResult": true, "isCompacted": false },
+    { "seq": 529, "role": "assistant", "preview": "（fixture）查询完成。", "chars": 14, "isToolResult": false, "isCompacted": false }
+  ]
+}

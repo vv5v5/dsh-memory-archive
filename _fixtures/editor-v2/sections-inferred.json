@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "sessionId": "fixture-session-static",
+  "source": "inferred",
+  "capturedAt": null,
+  "turn": 2,
+  "inferred": {
+    "reason": "no-capture-record",
+    "message": "fixture（构造数据）：该楼没有组装捕获记录（会话早于本插件加载，或记录已按上限淘汰），以下段结构由文本推断，仅供定位 —— 界面必须明示「结构为文本推断」，不许当作捕获事实展示。"
+  },
+  "sections": [
+    { "name": "identity", "order": -1000, "chars": 48, "hash": null, "mutability": "unknown", "mutabilityBasis": "unknown" },
+    { "name": "persona", "order": null, "chars": 1200, "hash": null, "mutability": "unknown", "mutabilityBasis": "unknown" },
+    { "name": "unknown", "order": null, "chars": 698, "hash": null, "mutability": "unknown", "mutabilityBasis": "unknown" }
+  ],
+  "contexts": [],
+  "tools": []
+}

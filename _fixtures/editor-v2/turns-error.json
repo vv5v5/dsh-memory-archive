@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "sessionId": "fixture-session-broken",
+  "error": {
+    "code": "session-parse-failed",
+    "message": "fixture（构造数据）：会话日志解析失败，无法枚举轮次"
+  },
+  "latest": 0,
+  "turns": []
+}

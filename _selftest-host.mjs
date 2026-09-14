@@ -1,5 +1,5 @@
 /**
- * magictarven 宿主半侧自检（可保留）
+ * dsh-memory-archive 宿主半侧自检（可保留）
  *
  * ★ 不写用户家里的 ~/.dsh：DSH_HOME 指到 <repo>/_selftest-home，测完删掉。
  * ★ 不发真网络请求：/config/test 只测「缺字段 → 400 CONFIG_INCOMPLETE」这条无网络分支。
@@ -16,7 +16,7 @@ import { apply } from './lib/index.js'
 
 const HOME = resolve('_selftest-home')
 process.env.DSH_HOME = HOME
-const PREFIX = '/magictarven/api'
+const PREFIX = '/dsh-memory-archive/api'
 
 let failed = false
 function check(name, cond, extra) {
@@ -117,10 +117,10 @@ try {
   apply({ get: () => undefined })
 } catch {}
 check(
-  '静态：1条路由 kind=prefix path=/magictarven/api handler=函数；webServer 缺失（两形态）apply 不抛',
+  '静态：1条路由 kind=prefix path=/dsh-memory-archive/api handler=函数；webServer 缺失（两形态）apply 不抛',
   route &&
     route.kind === 'prefix' &&
-    route.path === '/magictarven/api' &&
+    route.path === '/dsh-memory-archive/api' &&
     typeof route.handler === 'function' &&
     okA &&
     okB,
@@ -177,8 +177,8 @@ try {
     "配置回环+密钥语义：workspace 读回；key→keySet=true keyHint=…1234 无原文；''保留；__CLEAR__→false；盘上有 config.json 无 .tmp",
     cRoot.data?.rootMode === 'workspace' && cK.data?.keySet === true && cK.data?.keyHint === '…1234' &&
       !cK.text.includes('sk-TEST-abcd1234') && !('key' in (cK.data?.api || {})) && cKeep.data?.keySet === true &&
-      cClear.data?.keySet === false && existsSync(join(HOME, 'magictarven', 'config.json')) &&
-      !existsSync(join(HOME, 'magictarven', 'config.json.tmp')),
+      cClear.data?.keySet === false && existsSync(join(HOME, 'dsh-memory-archive', 'config.json')) &&
+      !existsSync(join(HOME, 'dsh-memory-archive', 'config.json.tmp')),
   )
 
   const bad1 = await call('PUT', '/config', { rootMode: 'bogus' })

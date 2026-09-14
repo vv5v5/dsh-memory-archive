@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "sessionId": "fixture-session-static",
+  "turn": 2,
+  "part": "system",
+  "requestLogged": false,
+  "headerCarried": true,
+  "mutabilityBasis": "header-equal",
+  "chars": 1946,
+  "text": "（fixture 构造文本，非真实内容）You are an AI agent powered by DeepSeek Harness.\n\n……本楼未记录自己的 request/header（requestLogged:false），system 与第 1 楼逐字相等（headerCarried:true，宿主 headerEquals 判定）。\n静态会话回归夹具：切到第 2/3 楼时 system 必须仍然有值且与第 1 楼相同。"
+}
