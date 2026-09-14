@@ -1013,6 +1013,64 @@ await check('★31 M7 去赘文：地图与抽屉的可见文字不再出现「�
   assert.ok(guideText.includes('≠ 不存在'), 'M10：诚实边界必须仍在 —— 只是搬到了 ? 说明书里')
 })
 
+// ---------- 31（20260914 结构性修复）：归属文案里**不许出现 order 数字** ----------
+// 为什么非有这条：WHO_* 常量同时喂给「文本推断路径」（SYS_SECTION_DEFS —— 那条路**没有 order 数据**）
+// 与「装配地图图例」（PROMPT_MAP_DEFS —— 图例自带 order/orderNum，数字校对过）。
+// 把数字写进共享文案 ⇒ 推断路径会"继承"一个具体数字，于是漂了：
+// 真人踩到 —— harness identity 的归属写成 `order ≈ -100`，而真机捕获是 **-1000**。
+// ⇒ 归属只说"谁"；**数字一律来自捕获**，没有捕获就写"未知（按文本推断）"。
+await check('★31 归属文案里零 order 数字：WHO_* 常量不得含「order/≈ + 数字」（数字只能来自捕获）', () => {
+  const srcWho = readFileSync(path.join(here, 'lib', 'client.js'), 'utf8')
+  const lines = srcWho.split('\n')
+  const offenders = []
+  for (let i = 0; i < lines.length; i++) {
+    const m = /const\s+WHO_[A-Z_]+\s*=\s*(['"])(.*?)\1/.exec(lines[i])
+    if (m === null) continue
+    if (/order\s*[≈~]?\s*-?\d|≈\s*-?\d/.test(m[2])) offenders.push(`第 ${i + 1} 行：${m[2]}`)
+  }
+  assert.equal(offenders.length, 0,
+    '归属文案里出现了 order 数字（必须来自捕获数据，不能手写）：\n    ' + offenders.join('\n    '))
+  // ★ 反证：这把尺子必须量得出**当年那个错串**，否则它只是橡皮图章
+  assert.ok(/order\s*[≈~]?\s*-?\d/.test('DSH 核心（harness identity，order ≈ -100）'),
+    '反证失败：这把尺子量不出旧的错串（≈-100），说明它拦不住这类漂移')
+})
+
+// ---------- 32（20260914）：归属**按段名前缀**认 + 两条"近似"标注 ----------
+// 为什么非有：以前"谁注册的"既有手写常量表、又有捕获里的通用话术，手写那份漂过
+// （identity 的 order 写成 ≈-100）。现在归属只有一个来源 —— **段名本身**。
+await check('★32 归属按前缀认：dma:*=本插件、pmp-dsh-tavern*=上游、harness:*=DSH 核心、认不出=null（⛔ 不猜）', () => {
+  const pm = win.__def.factory(() => fakeReact).__promptMap ?? {}
+  const own = pm.pmSectionOwner
+  assert.equal(typeof own, 'function', 'pmSectionOwner 没导出给自检台')
+  assert.ok(own('dma:card:description').includes('本插件'), 'dma:* 应认成本插件注册')
+  assert.ok(own('pmp-dsh-tavern:profile').includes('pmp-dsh-tavern'), 'pmp-dsh-tavern* 应认成上游')
+  assert.ok(own('rp:policy').includes('pmp-dsh-tavern'), 'rp:* 应认成上游的 RP 策略段')
+  assert.ok(own('harness:identity').includes('DSH 核心'), 'harness:* 应认成 DSH 核心')
+  assert.ok(own('tool:pwsh').includes('DSH 核心'), 'tool:* 应认成 DSH 核心')
+  assert.equal(own('who-knows:whatever'), null, '认不出的前缀必须返回 null（⛔ 不许猜一个归属出来）')
+  // ★ 与 ★31 同一条纪律：这张新表里也不许出现 order 数字（数字一律来自捕获）
+  const bad = (pm.PM_SECTION_OWNERS ?? []).filter(([, label]) => /order\s*[≈~]?\s*-?\d|≈\s*-?\d/.test(String(label)))
+  assert.deepEqual(bad, [], '前缀归属表里出现了 order 数字：' + JSON.stringify(bad))
+})
+
+await check('★32 两条"近似"如实标注：PHI 与 depth 各有 honesty，普通卡字段没有', () => {
+  const pm = win.__def.factory(() => fakeReact).__promptMap ?? {}
+  const h = pm.pmSectionHonesty
+  assert.equal(typeof h, 'function', 'pmSectionHonesty 没导出给自检台')
+  const phi = h('dma:card:post-history-instructions')
+  const dep = h('dma:card:depth-prompt')
+  assert.ok(typeof phi === 'string' && phi.includes('近似') && phi.includes('玩家消息'),
+    'PHI 的标注必须点明"DSH 没有玩家消息之后的槽位"：' + phi)
+  assert.ok(typeof dep === 'string' && dep.includes('近似') && dep.includes('深度'), 'depth 的标注要点明深度插入：' + dep)
+  assert.equal(h('dma:card:description'), null, '普通卡字段不该有"近似"标注')
+  // ★ 反证：标注缺失时，同一条判据必须红（证明它不是空跑）
+  const stripped = () => null // 模拟"有人把 PHI 的标注删了"
+  assert.throws(() => {
+    const v = stripped()
+    if (!(typeof v === 'string' && v.includes('近似'))) throw new Error('PHI 缺"近似"标注')
+  }, /近似/, '反证失败：标注缺失时这条判据没红')
+})
+
 console.log('== 汇总：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
 if (fails.length > 0) {
   console.log('失败项：\n  - ' + fails.join('\n  - '))
