@@ -289,8 +289,8 @@ writeFileSync(join(presetDir, 'preset.yml'), 'name: 角色扮演\n', 'utf8')
 
 // ---- 7) HTTP 集成：POST /agent/pack/apply 一律 200、错误放 body ----
 {
-  mkdirSync(join(home, 'magictarven'), { recursive: true })
-  writeFileSync(join(home, 'magictarven', 'config.json'), JSON.stringify({ schemaVersion: 1, rootMode: 'session', root: { sessionId: 's1' }, api: { url: '', model: '', key: '' }, prompts: { compaction: null, placeholder: null } }), 'utf8')
+  mkdirSync(join(home, 'dsh-memory-archive'), { recursive: true })
+  writeFileSync(join(home, 'dsh-memory-archive', 'config.json'), JSON.stringify({ schemaVersion: 1, rootMode: 'session', root: { sessionId: 's1' }, api: { url: '', model: '', key: '' }, prompts: { compaction: null, placeholder: null } }), 'utf8')
   const { apply } = await import('./lib/index.js')
   const routes = []
   const fakeCtx = {
@@ -325,13 +325,13 @@ writeFileSync(join(presetDir, 'preset.yml'), 'name: 角色扮演\n', 'utf8')
       req.end()
     })
   try {
-    const d = await call('POST', '/magictarven/api/agent/pack/apply', { presetId: 'roleplay', packText: PACK, dryRun: true })
+    const d = await call('POST', '/dsh-memory-archive/api/agent/pack/apply', { presetId: 'roleplay', packText: PACK, dryRun: true })
     check('HTTP dryRun：200 + ok:true + plan + persona', d.status === 200 && d.json.ok === true && Array.isArray(d.json.plan) && d.json.persona.written === true)
-    const bad = await call('POST', '/magictarven/api/agent/pack/apply', { presetId: 'roleplay', packText: 'junk' })
+    const bad = await call('POST', '/dsh-memory-archive/api/agent/pack/apply', { presetId: 'roleplay', packText: 'junk' })
     check('HTTP 坏 pack：200 + ok:false PACK_INVALID', bad.status === 200 && bad.json.ok === false && bad.json.error.code === 'PACK_INVALID')
-    const empty = await call('POST', '/magictarven/api/agent/pack/apply', { presetId: 'roleplay' })
+    const empty = await call('POST', '/dsh-memory-archive/api/agent/pack/apply', { presetId: 'roleplay' })
     check('HTTP 缺 packText：200 + ok:false BAD_REQUEST', empty.status === 200 && empty.json.ok === false && empty.json.error.code === 'BAD_REQUEST')
-    const get = await call('GET', '/magictarven/api/agent/pack/apply')
+    const get = await call('GET', '/dsh-memory-archive/api/agent/pack/apply')
     check('HTTP GET ⇒ 405（ENDPOINTS 口径）', get.status === 405)
   } finally {
     server.closeAllConnections?.()

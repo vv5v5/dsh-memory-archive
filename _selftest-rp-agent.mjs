@@ -246,9 +246,9 @@ let afterWrite = null
 // ---- 8) HTTP 集成：路由恰好 2 条；两条新 rest 一律 200；dryRun 零写入；真写全链路 ----
 {
   // 配置：选了根（session） ⇒ 真写后绑定的 memoryArchiveRoot 应为 session/<id>
-  mkdirSync(join(home, 'magictarven'), { recursive: true })
+  mkdirSync(join(home, 'dsh-memory-archive'), { recursive: true })
   writeFileSync(
-    join(home, 'magictarven', 'config.json'),
+    join(home, 'dsh-memory-archive', 'config.json'),
     JSON.stringify({ schemaVersion: 1, rootMode: 'session', root: { sessionId: 'sess-root-1' }, api: { url: '', model: '', key: '' }, prompts: { compaction: null, placeholder: null } }),
     'utf8',
   )
@@ -287,26 +287,26 @@ let afterWrite = null
     })
   try {
     const before = snapshot(presetsRoot)
-    const d = await call('POST', '/magictarven/api/agent/apply', { presetId: 'roleplay', dryRun: true })
+    const d = await call('POST', '/dsh-memory-archive/api/agent/apply', { presetId: 'roleplay', dryRun: true })
     check('HTTP dryRun：200 + ok:true + 计划', d.status === 200 && d.json.ok === true && d.json.dryRun === true && Array.isArray(d.json.plan) && d.json.plan.length >= 3)
     check('HTTP dryRun：零写入', snapEqual(before, snapshot(presetsRoot)))
 
-    const w = await call('POST', '/magictarven/api/agent/apply', { presetId: 'roleplay', dryRun: false })
+    const w = await call('POST', '/dsh-memory-archive/api/agent/apply', { presetId: 'roleplay', dryRun: false })
     check('HTTP 真写：200 + ok:true + applied/backup/nextStep 齐', w.status === 200 && w.json.ok === true && w.json.applied.length === 1 && w.json.backup.files.length === 1 && String(w.json.nextStep).includes('新开会话'), w.text.slice(0, 300))
     check('HTTP 真写：recompose 拿不到时明说「要新开会话」且绝不写「已生效」', w.json.recompose && w.json.recompose.ok === false && w.json.recompose.method === 'unavailable' && String(w.json.recompose.note).includes('新开会话'))
     check('HTTP 真写：绑定记下了本次根（session/sess-root-1）', w.json.binding.written === true && w.json.binding.memoryArchiveRoot === 'session/sess-root-1')
 
-    const b = await call('GET', '/magictarven/api/agent/backups?presetId=roleplay')
+    const b = await call('GET', '/dsh-memory-archive/api/agent/backups?presetId=roleplay')
     check('HTTP 备份列表：200 + ok:true + 倒序非空', b.status === 200 && b.json.ok === true && b.json.backups.length >= 3 && b.json.backups[0].mtimeMs >= b.json.backups[b.json.backups.length - 1].mtimeMs)
 
-    const nb = await call('GET', '/magictarven/api/agent/backups')
+    const nb = await call('GET', '/dsh-memory-archive/api/agent/backups')
     check('HTTP 备份列表缺参：200 + ok:false BAD_REQUEST', nb.status === 200 && nb.json.ok === false && nb.json.error.code === 'BAD_REQUEST')
 
     const wlDir = makePreset('unknown-rp', COMPOSITION) // 存在但没登记（无绑定）⇒ 白名单外
-    const w2 = await call('POST', '/magictarven/api/agent/apply', { presetId: 'unknown-rp', dryRun: false })
+    const w2 = await call('POST', '/dsh-memory-archive/api/agent/apply', { presetId: 'unknown-rp', dryRun: false })
     check('HTTP 白名单外：200 + ok:false + 可读原因', w2.status === 200 && w2.json.ok === false && String(w2.json.error.message).includes('白名单'), w2.text.slice(0, 200))
 
-    const bad = await call('POST', '/magictarven/api/agent/apply', undefined)
+    const bad = await call('POST', '/dsh-memory-archive/api/agent/apply', undefined)
     check('HTTP 空体：200 + ok:false（BAD_JSON/BAD_REQUEST，绝不 500）', bad.status === 200 && bad.json.ok === false, `${bad.status} ${bad.text.slice(0, 120)}`)
   } finally {
     server.closeAllConnections?.()

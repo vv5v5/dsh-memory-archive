@@ -309,28 +309,28 @@ const PACK_GOOD = PACK_LINES.join('\n')
       req.end()
     })
   try {
-    const cards = await call('GET', '/magictarven/api/agent/cards')
+    const cards = await call('GET', '/dsh-memory-archive/api/agent/cards')
     check('HTTP GET /agent/cards：200 + ok:true + 三条文件 + 导航提示',
       cards.status === 200 && cards.json.ok === true && cards.json.cards.length === 3
       && cards.json.cards[0].systemPromptChars === 6732, cards.text.slice(0, 200))
 
-    const card = await call('GET', '/magictarven/api/agent/card?id=card-test-0001.json')
+    const card = await call('GET', '/dsh-memory-archive/api/agent/card?id=card-test-0001.json')
     check('HTTP GET /agent/card：200 + 原样全字段 + sha256',
       card.status === 200 && card.json.ok === true && card.json.sha256 === sha256
       && card.json.raw.spec === 'chara_card_v3' && card.json.data.firstMessage.length === 1022)
 
-    const evil = await call('GET', '/magictarven/api/agent/card?id=../evil.json')
+    const evil = await call('GET', '/dsh-memory-archive/api/agent/card?id=../evil.json')
     check('HTTP 穿越：200 + ok:false BAD_CARD_ID（绝不 500）',
       evil.status === 200 && evil.json.ok === false && evil.json.error.code === 'BAD_CARD_ID')
-    const sub = await call('GET', '/magictarven/api/agent/card?id=sub%2Fx.json')
+    const sub = await call('GET', '/dsh-memory-archive/api/agent/card?id=sub%2Fx.json')
     check('HTTP 穿越：sub/x.json ⇒ 200 + ok:false', sub.status === 200 && sub.json.ok === false)
-    const nope = await call('GET', '/magictarven/api/agent/card?id=nope.json')
+    const nope = await call('GET', '/dsh-memory-archive/api/agent/card?id=nope.json')
     check('HTTP 不存在：200 + ok:false CARD_NOT_FOUND', nope.status === 200 && nope.json.error.code === 'CARD_NOT_FOUND')
-    const noid = await call('GET', '/magictarven/api/agent/card')
+    const noid = await call('GET', '/dsh-memory-archive/api/agent/card')
     check('HTTP 缺 id：200 + ok:false BAD_REQUEST', noid.status === 200 && noid.json.error.code === 'BAD_REQUEST')
-    const post = await call('POST', '/magictarven/api/agent/cards')
+    const post = await call('POST', '/dsh-memory-archive/api/agent/cards')
     check('HTTP 方法错：POST /agent/cards ⇒ 405（ENDPOINTS 口径）', post.status === 405)
-    const b = await call('GET', '/magictarven/api/agent/backups?presetId=roleplay')
+    const b = await call('GET', '/dsh-memory-archive/api/agent/backups?presetId=roleplay')
     check('HTTP 既有 /agent/backups 不受影响：200 + ok:false（临时根没有该 preset，可读错误而非 500）',
       b.status === 200 && typeof b.json.ok === 'boolean')
   } finally {
