@@ -1,10 +1,12 @@
 # 记忆库 · 思路与实现逻辑
 
-> 对象：`magictarven`（DSH 插件，本项目的交付物）
+> 对象：`dsh-memory-archive`（DSH 插件，本项目的交付物）
 > 写法：**先讲第一块基石（复用 DSH 自身的压缩机制），再往上讲架构** —— 因为这个项目的每一个设计决定，
 > 几乎都是被 DSH 原生已有的机制**逼出来或者让出来**的，不是凭空设计的。
 > 证据约定：标【源码】的给 `文件:行号`（路径相对 DSH 检出）；标【实测】的是本项目跑出来的数；
 > 标【推断】/【未验证】的不许当结论引用。
+> 许可与署名：本作品以 **CC BY-NC 4.0**（Attribution-NonCommercial 4.0 International）授权；
+> 移植自 [anima-rag](https://github.com/Ellinav/anima-rag)（原作者 Ellinav）。
 
 ---
 
@@ -474,7 +476,7 @@ eventFilters: [
 
 ### 10.1 提示词查看器并入本包
 原先作为独立插件存在的提示词查看器（看「每次模型请求真正发出的全文」）**两半代码搬进了本插件**，
-宿主半侧挂成**第二条同源路由** `prefix /magictarven/prompt`，客户端变成一个子页。
+宿主半侧挂成**第二条同源路由** `prefix /dsh-memory-archive/prompt`，客户端变成一个子页。
 并入的动机是入口收敛：一个齿轮、一个面板。两条路由必须**同步注册**（都在 `apply()` 的 effect 里），
 否则在 `patchReload: live` 的宿主上热重载会留下野路由。
 

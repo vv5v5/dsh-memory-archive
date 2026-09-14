@@ -1,14 +1,28 @@
 # Changelog
 
-本文件记录 magictarven 的所有显著变更。
+本文件记录 dsh-memory-archive 的所有显著变更。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.3.0] - 2026-09-14
+
+> 首次面向公开仓库/插件市场的版本：包名改回 `dsh-memory-archive`，与 GitHub 仓库同名。
 
 ### Changed
 
-- **改名**：`dsh-memory-archive` → `magictarven`（包名 / cordis 挂载 id 与 name / 客户端 loader id / 存储目录名同步）；路由前缀同步（`/dsh-memory-archive/…` → `/magictarven/…`）；行为未变。
+- **改回 `dsh-memory-archive`**（2026-09-14）：包名 / cordis 挂载 id 与 name / 客户端 loader id / 存储目录名 /
+  两条路由前缀（`/dsh-memory-archive/api`、`/dsh-memory-archive/prompt`）全部回到本名，
+  与 GitHub 仓库名一致（上架插件市场要求"包认领它被收录的那个仓库"）。
+  - **兼容**：存储目录在新名目录**不存在**时回退读旧名目录（老用户不会"数据没了"）；两个都在时用新名目录，
+    并库由一次性迁移工具做。组装捕获文件只按 `v` 读、文件名里的 `kind` 仅写侧使用 ⇒ 老捕获文件照常可读。
+  - **防漂移**：`_selftest-sections.mjs` 新增三条断言 —— 新名优先 / 只有旧名时回退 / 两个都没有时给新名路径，
+    且每条都额外断言 `lib/index.js` 与 `lib/sections-capture.js` 两份 `storageDir` **解析结果必须一致**。
+- **README 新增「设计思路」**（中英各一份）：① 用原生机制、不污染原生编程架构；② RP 是一个模式、
+  与编程模式的工具注册表互不透明、搭配上游 dsh-tavern 做成一站式「agent 酒馆 / 酒馆 agent」；
+  ③ **对 DSH 本体一行都没改**（逐条列出用到的官方扩展点）+ 完成度如实标注。
+- （历史）2026-09-13 曾把本包改名为 `magictarven`（包名 / id / 路由 / 存储目录同步，行为未变）；
+  2026-09-14 已按上条改回 `dsh-memory-archive`。
+- **许可**：由 MIT 统一改为 CC BY-NC 4.0（含上游 anima-rag 署名与场景限制；法律正文逐字节照抄上游副本，代码零改动）。
 
 ## [0.2.0] - 2026-09-12
 

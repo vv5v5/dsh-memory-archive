@@ -1,4 +1,4 @@
-# magictarven —— bundle patch
+# dsh-memory-archive —— bundle patch
 #
 # 作用：把本插件的**宿主半侧**挂进 DSH 的组合树。
 # **浏览器半侧不需要在这里声明** —— 它由 DSH 通过 package.json 的
@@ -13,5 +13,5 @@
 #
 # 宿主半侧 v1 是空的（功能全在 lib/client.js），所以这里没有任何 config。
 - insert:
-    - id: magictarven
-      name: 'magictarven'
+    - id: dsh-memory-archive
+      name: 'dsh-memory-archive'

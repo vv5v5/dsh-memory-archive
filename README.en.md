@@ -1,4 +1,4 @@
-# magictarven · Memory Archive
+# dsh-memory-archive · Memory Archive
 
 > **We don't invent memory. We make what DSH already compacted away reachable again.**
 
@@ -21,11 +21,62 @@ and a **prompt panel** (compaction instruction / placeholder preamble, editable 
 
 ---
 
+## Design intent
+
+Three statements about what this plugin wants — and what it deliberately refuses to do.
+
+### 1 Use the native machinery; do not pollute the native coding setup
+
+Both "unlimited context" and the prompt viewer are built on what DSH **already has**: compaction keeps folding,
+the session log stays the single source of truth, and retrieval and assembly go through official extension points.
+**No compaction rewrite, no second store, no forked official package.** Uninstall the plugin and the native coding
+environment is exactly as it was — sessions, tool surface and model selection are untouched.
+
+### 2 Roleplay is a *mode*, not a conversion of the coding setup
+
+The roleplay composition this plugin takes part in does **not** share a tool registry with the coding mode: the
+roleplay side mounts only the capabilities it needs, and coding-mode tools neither appear in its tool list nor
+consume its context budget. Together with upstream
+[Player-MINEPIG/dsh-tavern](https://github.com/Player-MINEPIG/dsh-tavern) this adds up to one place to manage both
+an "**agent tavern**" and a "**tavern agent**": the Tavern side owns character cards, world books, playthroughs and
+ST presets, while the agent side owns composition, tool surface, memory and archiving. The two sides only meet at
+official extension points, and neither makes decisions for the other.
+
+### 3 What we changed in DSH itself: **not one line**
+
+We do exactly two things — **write a plugin**, and **generate a preset directory when you explicitly ask for it**.
+Everything else is an official extension point (all verifiable):
+
+| Official extension point | What we use it for |
+|---|---|
+| `ctx.effect` lifecycle + two same-origin prefix routes via `webServer.register` | memory and viewer data planes: `/dsh-memory-archive/api`, `/dsh-memory-archive/prompt` |
+| `sessionQuery` exact session reads | read back what compaction folded out of context; no index rebuild |
+| `system-prompt/assemble` waterfall | per-turn **metadata** capture (section name / order / chars / offset / hash / mutability) — **never the text itself** |
+| `systemPrompt.section()` | read-only display of registered sections; the two roleplay sections are registered by a plugin inside the preset directory |
+| `compaction` service subclass | the Chinese roleplay archival instruction as a compaction backend (overrides `summarize` only) |
+| `skills.register()` | two skills: RP assistant / configuration knowledge base |
+| client `slots` | two sidebar entries (memory archive, prompt viewer) |
+| **agent preset (realm)** | roleplay mode: narrowed tools, injected sections, no shared registry with coding mode — via a **generated preset directory**, not a core change |
+
+Standing rules: before touching a preset directory we **dry-run it for you**, **read every byte back** afterwards,
+and **roll back automatically** on mismatch; we never overwrite an existing file, never hardcode an absolute path
+(relative to the config, so it survives a move), and never touch the profile configuration in your `~/.dsh`.
+
+### Where it stands today (honest labelling)
+
+| | Status |
+|---|---|
+| **Prompt viewer** | ✅ usable once the environment is set up: assembly map, per-section offsets, click through to the **real text** of a section, registry export, and honest diagnostics when a log cannot be read |
+| **Memory archive** (reading / search / real-name resolution / prompt panel) | ✅ usable |
+| Collection writer (moving compacted ranges into the playthrough archive) and the chat-import adapter | ⚠️ **not in this release** — they are on a separate branch and will land when finished |
+
+---
+
 ## Install
 
 ```sh
 # From npm (once published)
-dsh plugin --profile <your-profile> add magictarven
+dsh plugin --profile <your-profile> add dsh-memory-archive
 
 # Or straight from GitHub
 dsh plugin --profile <your-profile> add github:vv5v5/dsh-memory-archive
@@ -133,7 +184,7 @@ Three sub-pages:
 ## Where configuration lives
 
 ```
-<DSH_HOME or ~/.dsh>/magictarven/config.json
+<DSH_HOME or ~/.dsh>/dsh-memory-archive/config.json
 ```
 
 - Mode **0600** (it holds an API key), **atomic writes** (temp file + `rename`), and **corruption-tolerant reads**
@@ -152,8 +203,8 @@ All endpoints are same-origin HTTP, and the two route prefixes are **registered 
 
 | Prefix | Contents | Degradation |
 |---|---|---|
-| `/magictarven/api` | Config read/write, exact session reads, and `GET/PUT /api/templates` (prompt-template read/write) | A missing template or a `null`/empty value **falls back to the built-in default** (same when the `prompts` section is absent; older configs stay compatible) |
-| `/magictarven/prompt` | The integrated viewer's data plane: `/health`, `/api/sessions`, `/api/sessions/resolve`, `/api/session`, `/api/part` | Read errors **never crash**: HTTP 200 with the error carried in the body (`ok:false` + `error`) |
+| `/dsh-memory-archive/api` | Config read/write, exact session reads, and `GET/PUT /api/templates` (prompt-template read/write) | A missing template or a `null`/empty value **falls back to the built-in default** (same when the `prompts` section is absent; older configs stay compatible) |
+| `/dsh-memory-archive/prompt` | The integrated viewer's data plane: `/health`, `/api/sessions`, `/api/sessions/resolve`, `/api/session`, `/api/part` | Read errors **never crash**: HTTP 200 with the error carried in the body (`ok:false` + `error`) |
 
 When the host API as a whole is unavailable, the panel never goes blank: browsing falls back to workspace mode.
 
@@ -199,11 +250,40 @@ npm run check   # node --check lib/index.js && node --check lib/client.js
 ```
 
 - `lib/index.js` — **host half**: configuration store + same-origin HTTP API
-  (prefix routes `/magictarven/api` and `/magictarven/prompt`) + exact session reads.
+  (prefix routes `/dsh-memory-archive/api` and `/dsh-memory-archive/prompt`) + exact session reads.
 - `lib/prompt-viewer.js` — the integrated prompt viewer's host half: parses the DSH session store
   to feed "per request", with zero cross-dependencies.
 - `lib/client.js` — **browser half**: factory-form CJS, `require('react')` only, **no JSX, no build step**.
 
-## License
+## License & Attribution
 
-MIT
+- License: **Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)**, SPDX identifier `CC-BY-NC-4.0`;
+  the full legal text and NOTICE live in [`LICENSE`](./LICENSE).
+- Copyright (c) 2026 dsh-memory-archive contributors
+
+### Porting source & attribution (kept at the upstream's request)
+
+| Item | Value |
+|---|---|
+| Original project | `anima-rag` |
+| Original author | `Ellinav` |
+| Original URL | <https://github.com/Ellinav/anima-rag> |
+| Original license | Attribution-NonCommercial 4.0 International (CC BY-NC 4.0) |
+| Porting permission | Ported with permission from the original author, Ellinav |
+
+### Scope restrictions (conditions of the porting permission)
+
+- Personal study and non-commercial use only;
+- No closed-source commercial use, and it must not be turned into a paid plugin/service;
+- No redistribution of any bundled private data.
+
+## Third-party licenses & provenance
+
+- **Derived from**: the official DeepSeek Harness `compaction-basic` (the compaction instruction
+  template is taken from its `summarize` hook) — MIT, Copyright (c) 2026 DeepSeek;
+  that portion of this work **retains its original MIT notice**.
+- **Ported/derived from**: [`anima-rag`](https://github.com/Ellinav/anima-rag) (by Ellinav)
+  — CC BY-NC 4.0; this work as a whole is therefore licensed CC BY-NC 4.0.
+- **Interoperability/acknowledgements** (⛔ interop, **not** derivation): `dsh-anima-rag`,
+  `dsh-state-bridge`, `pmp-dsh-tavern` — all MIT; this work **contains none of their code**
+  and only works alongside them.

@@ -1,4 +1,4 @@
-# magictarven · 记忆库
+# dsh-memory-archive · 记忆库
 
 > **不发明记忆，只把 DSH 已经压掉的东西重新变得「取得到」。**
 
@@ -17,11 +17,58 @@ v4 起还包含：**并入的提示词查看器**（看每次模型请求真正�
 
 ---
 
+## 设计思路
+
+三句话，说清它想要什么、不要什么。
+
+### 1 能用原生机制就用原生机制，不污染原生编程架构
+
+「无限上下文」与「提示词查看器」都建立在 DSH **已经有**的东西上：压缩机制照旧负责折叠、会话日志照旧是
+唯一真相源、检索与装配走的都是官方扩展点。**不重写压缩、不重写摘要、不建第二份存储、不 fork 任何官方包** ——
+插件卸载后，原生编程环境原样还在（会话、工具面、模型选择都不受它影响）。
+
+### 2 RP 是一个「模式」，不是把编程环境改造成 RP
+
+本插件参与的 RP 组装，与编程模式**工具注册表互不透明**：RP 那一侧只挂它需要的能力，编程模式的工具
+既不出现在它的工具目录里、也不占它的上下文预算。搭配上游
+[Player-MINEPIG 的 dsh-tavern](https://github.com/Player-MINEPIG/dsh-tavern)（「dsht」），
+可以做成一站式的「**agent 酒馆**」与「**酒馆 agent**」管理 ——
+酒馆那一侧管角色卡、世界书、周目与 ST 预设；agent 这一侧管组装、工具面、记忆与归档。
+两边只通过官方扩展点打交道，谁也不替谁做决定。
+
+### 3 对 DSH 本体做了什么修改：**一行都没改**
+
+我们只做两件事 —— **写插件**、以及**按你的显式操作生成预设目录**。用到的全是官方扩展点，逐条列清（都可以自己核）：
+
+| 用的官方扩展点 | 用来做什么 |
+|---|---|
+| `ctx.effect` 生命周期 + `webServer.register` 两条**同源 prefix 路由** | 记忆库与查看器的数据面：`/dsh-memory-archive/api`、`/dsh-memory-archive/prompt` |
+| `sessionQuery` 精确读会话事件 | 把「已经被压缩出上下文」的内容读回来；⛔ 不触发索引重建 |
+| `system-prompt/assemble` 瀑布 | 每轮装配的**元数据**捕获（段名 / 顺序 / 字数 / 偏移 / 哈希 / 可变性）—— ⛔ **不落正文** |
+| `systemPrompt.section()` | 只读呈现已注册的段；RP 预设里的两段由**预设目录里的插件**注册 |
+| `compaction` 服务子类 | 中文 RP 归档指令的压缩后端（只覆盖 `summarize`，其余参数照官方默认） |
+| `skills.register()` | 两个 skill：RP 助手 / 配置知识库 |
+| 客户端 `slots` | 侧边栏两个入口（记忆库、提示词查看器） |
+| **agent preset（realm）** | RP 模式：工具面收窄、段注入、与编程模式互不透明 —— 靠**生成预设目录**实现，不改核心 |
+
+几条一直守着的纪律：改预设目录前**先干跑给你看**、写入后**逐字节回读**、不一致**自动回滚**；
+⛔ 不覆盖已存在的文件、⛔ 不写死绝对路径（跟配置放一起的相对位置）、⛔ 不动你的 `~/.dsh` 里的 profile 配置。
+
+### 现在的完成度（如实标注）
+
+| | 状态 |
+|---|---|
+| **提示词查看器** | ✅ 配置好环境后可用：装配地图、段级偏移、点开看该段**真实正文**、注册表导出、读不出时的诊断 |
+| **记忆库**（阅读 / 检索 / 真名解析 / 提示词面板） | ✅ 可用 |
+| 收纳落库（把被压缩的区间写进周目归档）与聊天导入适配器 | ⚠️ **不在本次发布里** —— 它们在独立的一单上，做完再进 |
+
+---
+
 ## 安装
 
 ```sh
 # 从 npm（发布后）
-dsh plugin --profile <你的 profile 名> add magictarven
+dsh plugin --profile <你的 profile 名> add dsh-memory-archive
 
 # 或直接从 GitHub
 dsh plugin --profile <你的 profile 名> add github:vv5v5/dsh-memory-archive
@@ -116,7 +163,7 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 - **生成 / 修复 RP agent（检测与预览）** —— 只读检测：有没有用户自带（`trust === 'user'`）的 RP preset、
   记忆库根是否配好、缺什么，以及官方 `agentPresets.copy('standard', …)` 生成路线的逐条事实预览。**不落盘**。
 
-数据来自宿主只读接口 `GET /magictarven/api/agent` 与 `/agent/detect`（优先 `agentPresets` 服务，
+数据来自宿主只读接口 `GET /dsh-memory-archive/api/agent` 与 `/agent/detect`（优先 `agentPresets` 服务，
 退回扫描 `~/.dsh/.agent-presets/`；路径由 `DSH_HOME`/`homedir()` 推导）。拿不到的服务一律如实显示
 「未知」，绝不猜测。
 
@@ -134,7 +181,7 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 ## 配置存在哪
 
 ```
-<DSH_HOME 或 ~/.dsh>/magictarven/config.json
+<DSH_HOME 或 ~/.dsh>/dsh-memory-archive/config.json
 ```
 
 - **权限 0600**（里面有 API 密钥），**原子写**（临时文件 + `rename`），**读坏不崩**（回落默认值并如实报错）。
@@ -150,8 +197,8 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 
 | 前缀 | 内容 | 降级行为 |
 |---|---|---|
-| `/magictarven/api` | 配置读写、会话精确读，`GET/PUT /api/templates`（提示词模板读写），以及 `GET /api/agent`、`GET /api/agent/detect`（Agent 编辑器只读数据面） | 模板缺省或值为 `null`/空串时**回落内置默认**（配置段 `prompts` 缺失同理，老配置兼容）；agent 两端点**零写入**，服务拿不到时返回 `ok:false` + 可读 `code`，绝不抛、绝不 500 |
-| `/magictarven/prompt` | 并入查看器的数据面：`/health`、`/api/sessions`、`/api/sessions/resolve`、`/api/session`、`/api/part` | 读取出错时**不崩溃**：HTTP 200，错误信息放响应体（`ok:false` + `error`） |
+| `/dsh-memory-archive/api` | 配置读写、会话精确读，`GET/PUT /api/templates`（提示词模板读写），以及 `GET /api/agent`、`GET /api/agent/detect`（Agent 编辑器只读数据面） | 模板缺省或值为 `null`/空串时**回落内置默认**（配置段 `prompts` 缺失同理，老配置兼容）；agent 两端点**零写入**，服务拿不到时返回 `ok:false` + 可读 `code`，绝不抛、绝不 500 |
+| `/dsh-memory-archive/prompt` | 并入查看器的数据面：`/health`、`/api/sessions`、`/api/sessions/resolve`、`/api/session`、`/api/part` | 读取出错时**不崩溃**：HTTP 200，错误信息放响应体（`ok:false` + `error`） |
 
 宿主 API 整体不可用时面板不白屏：浏览区退回工作区模式。
 
@@ -191,11 +238,38 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 npm run check   # node --check lib/index.js && node --check lib/client.js
 ```
 
-- `lib/index.js` —— **宿主半侧**：配置存储 + 同源 HTTP API（前缀路由 `/magictarven/api`
-  与 `/magictarven/prompt`）+ 会话精确读。
+- `lib/index.js` —— **宿主半侧**：配置存储 + 同源 HTTP API（前缀路由 `/dsh-memory-archive/api`
+  与 `/dsh-memory-archive/prompt`）+ 会话精确读。
 - `lib/prompt-viewer.js` —— 并入的提示词查看器宿主半侧：解析 DSH 会话存储供「每次请求」取数，零交叉依赖。
 - `lib/client.js` —— **浏览器半侧**：工厂形式 CJS，只 `require('react')`，**无 JSX、无需构建**。
 
-## 许可
+## 许可与署名
 
-MIT
+- 许可证：**Attribution-NonCommercial 4.0 International（CC BY-NC 4.0）**，SPDX 标识符 `CC-BY-NC-4.0`；
+  完整法律文本与 NOTICE 见 [`LICENSE`](./LICENSE)。
+- Copyright (c) 2026 dsh-memory-archive contributors
+
+### 移植来源与署名（按上游要求保留）
+
+| 项目 | 内容 |
+|---|---|
+| 原项目 | `anima-rag` |
+| 原作者 | `Ellinav` |
+| 原项目地址 | <https://github.com/Ellinav/anima-rag> |
+| 原项目许可 | Attribution-NonCommercial 4.0 International（CC BY-NC 4.0） |
+| 移植许可 | 经原作者 Ellinav 许可后移植 |
+
+### 场景限制（移植许可的条件）
+
+- 仅限个人学习与非商业性用途；
+- 禁止闭源商用，禁止转为付费插件/服务；
+- 不重新分发任何预置私域数据。
+
+## 第三方许可与出处
+
+- **派生自**：DeepSeek Harness 官方 `compaction-basic`（压缩指令模板取自其 `summarize` 钩子）
+  —— MIT，Copyright (c) 2026 DeepSeek；本作品中该部分**保留原始 MIT 声明**。
+- **移植/派生自**：[`anima-rag`](https://github.com/Ellinav/anima-rag)（作者 Ellinav）
+  —— CC BY-NC 4.0；本作品随之整体以 CC BY-NC 4.0 授权。
+- **互操作/致谢**（⛔ 是互操作，**不是**派生）：`dsh-anima-rag`、`dsh-state-bridge`、`pmp-dsh-tavern`
+  —— 均为 MIT；本作品**不包含**它们的任何代码，只与其配合工作。

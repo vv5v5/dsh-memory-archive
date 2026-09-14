@@ -1,5 +1,12 @@
-﻿# 仓库内统一 LF；二进制文件不做行尾转换
+# 仓库内统一 LF；二进制文件不做行尾转换
 * text=auto eol=lf
 *.png binary
 *.jpg binary
 *.zstd binary
+
+# ★ LICENSE 不做任何行尾转换（-text）。
+#   理由：它的法律正文是从上游 anima-rag 的 LICENSE.txt **逐字节**拷来的（CC BY-NC 4.0，
+#   上游那份是 CRLF）。上面那条 `* text=auto eol=lf` 会在提交时把它转成 LF，
+#   于是「逐字节等于上游」这个可审计的出处声明就只在工作区成立、进不了仓库。
+#   法律文本的字节恒等比行尾统一更重要，所以这里显式豁免。
+LICENSE -text
