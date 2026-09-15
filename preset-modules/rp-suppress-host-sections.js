@@ -1,8 +1,8 @@
 /**
- * rp-suppress-host-sections —— 在 roleplay preset 作用域里**遮蔽**三段「宿主给编码 agent 的定位文字」。
+ * rp-suppress-host-sections —— 在 roleplay preset 作用域里**遮蔽四段「宿主给编码 agent 的定位文字」**。
  *
  * ## 为什么（2026-09-15 用户拍板：「那两个没有就去掉」「应装尽装」）
- * 实测 RP 请求里这三段对扮演毫无用处，还会把工程语境混进来：
+ * 实测这几段对扮演毫无用处，还会把工程语境混进来：
  *   · `harness:source`（332 字）—— `packages/boot/app-boot/src/index.ts:854-861`：把**本机检出路径**告诉模型，
  *     并说"这份检出只用于检视/扩展 DSH 本身"。RP 既不需要，又是本地路径外露。
  *   · `app:web-surface`（991 字）—— `packages/bundle/web-app/src/index.ts:135-146`：GUI 地址、"this page/this GUI" 的指代、
@@ -17,14 +17,16 @@
  * `systemPrompt.section()` 的契约（`packages/core/system-prompt/src/index.ts:440-444`）：
  *   「**作用域内的同名段遮蔽全局段**；同一层内重复与非有限 order 才抛。」
  * RP 预设本身就是作用域（`story-anchor` / `rp-tool-scope` 都挂在这儿），
- * 而这三段是**全局层**注册的（web-app bundle / system-prompt / file-reference-local 插件）
+ * 而这几段是**全局层**注册的（web-app bundle / system-prompt / file-reference-local / ui-deliverables）
  * ⇒ 在本作用域注册同名段 + `text: ''` = **遮蔽**，不是撞车。
  *
  * ⚠️ 为什么不是「注销」：上游**没有**注销别人注册的段的 API —— `section()` 只返回**自己那次**注册的 disposer。
  *    遮蔽是唯一能做、且被官方注释明确支持的路径。被遮蔽的段在装配里仍是**一行 0 字**，
  *    而 `renderPrompt` 只拼非空段（同文件 :263-268）⇒ **它一个字都不会进 system**。
- *    （面板侧另有一层：0 字的这三段会被折叠成一行汇总，不再各占一行 —— 见 `lib/client.js` 的
- *     `PM_HOST_ORIENT_SECTIONS`，两处名字必须一致。）
+ *    （面板侧**不折叠、不隐藏**这一行 —— 用户 2026-09-16 口径：它占了一个 order，字段要照给，
+ *     解释写进注释：来源 DSH 官方 + 作用 + RP 已禁用 ⇒ 占位但不会出现具体内容；
+ *     `lib/client.js` 里只对它加一个灰标「RP 遮蔽」，且仅当它**确实 0 字**时加。
+ *     两侧名单必须一致：本模块 `DEFAULT_SECTIONS` ↔ 客户端 `PM_HOST_ORIENT` ↔ `PM_SECTION_NOTES`。）
  *
  * ## 失败模式：**绝不抛**
  * 本模块抛异常 = preset 挂不上 = 用户开不了周目。整段包 `try/catch`，
