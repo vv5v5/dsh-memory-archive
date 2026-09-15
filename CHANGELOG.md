@@ -4,6 +4,50 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.5.0] - 2026-09-16
+
+> 面板侧收口：**提示词装配地图把每个字段的来路说清**，RP 预设遮蔽掉「给编码 agent 用的定位文字」，
+> 模板卡能直接把文本**应用**进预设，自动收纳加了「绑定」这道门。
+> ⚠️ 诚实边界：遮蔽作用在**预设作用域**，只对**新开的会话/周目**生效（已在跑的会话留在旧一代装配）；
+> 面板侧的注释、灰标、标蓝**刷新即生效**。
+
+### Added
+
+- **RP 遮蔽宿主定位段（预设模块）**：`preset-modules/rp-suppress-host-sections.js` —— 在 preset 作用域里把
+  `harness:source`(10000) / `app:web-surface`(10100) / `context:file-reference`(900) /
+  `ui:deliverable-file-references`(9000) 注册成**同名空文本**段（上游 `systemPrompt.section()` 契约：
+  *作用域内同名段遮蔽全局段*；上游**没有**「注销别人注册的段」的 API）。order 取 `getSectionOrder`
+  ⇒ 只换内容不换位置；逐段 `try/catch`、整体**绝不抛**（抛 = 预设挂不上 = 开不了周目）。
+- **地图的字段注释表**：按真机实测补齐 18 条，逐条写清「来源 + 作用」；上述 4 段另写清
+  「**RP 模式已禁用** ⇒ 占位、不会出现具体内容」，行上加灰标「RP 遮蔽」（**仅当该段确实 0 字**）。
+  这几行**照常逐行给出** —— 每段占一个 order，⛔ 不折叠、不隐藏。
+- **工具段的两个通道**：`tool:*` 行与抽屉标蓝药丸，并写明 ① 本段 = system 里的说明与纪律
+  ② 请求的 `tools` 字段 = 它的 JSON 定义。
+- **自动收纳**：加「绑定」这道门（只有绑定过的会话才自动收纳），失败如实播报并落
+  `<storageDir>/auto-collect.json`（面板顶栏标红）。
+- `_selftest-rp-suppress.mjs`：遮蔽模块的行为自检（8 项，含「把 text 改成非空则判据必红」的反证）。
+
+### Changed
+
+- 模板卡：压缩指令的「保存」改成「**应用**」，直接用 `/agent/apply` 写进预设
+  （`writable` 候选过滤 + 应用回读 + 失败带 hint）；「收纳占位」卡改**只读**（它没有可写目的地）；
+  撤掉多余的 ⚠️ 提示块与随之而来的空框。
+- 段归属收敛成一张表：**按段名前缀认 + 精确名覆盖**（`rp:policy`=上游 pmp-dsh-tavern、
+  `rp:storyAnchor`/`rp:firstRound`/`dma:echo`=本插件、`state:card`=本插件子包 state-bridge），
+  表里⛔ 不许写 order 数字（数字一律来自捕获）。
+- 导入：新增 `lib/import-apply.js`（导入应用路径）与配套字具。
+
+### Fixed
+
+- 服务端错误体解析：`{ok:false,error:{code,message}}` 以前把**整个 error 对象**当成消息 ⇒ 现在取 `error.message`。
+- 注释里残留的旧口径（旧版地图把这几段**折叠成一行汇总**；现行是「字段照给 + 注释说清」）已清干净。
+
+### Notes
+
+- 遮蔽的生效范围：**新会话 / 新周目**（预设是会话级换代）；已在跑的会话里那几段仍有内容
+  ⇒ 面板**不会**给它加灰标（说真话优先）。
+- 自检：**39 套全绿**（含新增的 `_selftest-rp-suppress.mjs`）。
+
 ## [0.4.0] - 2026-09-15
 
 > 一轮大版本：**服务端能力补齐 + 三处「读不到」的真机 bug 修复**。
