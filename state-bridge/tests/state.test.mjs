@@ -143,16 +143,16 @@ test('mergeStatus：恐惧不为负；数组裁到 12 项并字符串化', () =>
 
 test('mergeStatus：元身份空串不覆盖（照搬 :139-140）', () => {
   const cur = emptyStatus()
-  cur.元 = { 姓名: '顾筱潋', 种族: '半食血怪' }
+  cur.元 = { 姓名: '示例角色', 种族: '示例种族' }
   const { status } = mergeStatus(cur, { 元: { 姓名: '   ', 种族: '人' } })
-  assert.equal(status.元.姓名, '顾筱潋', '空串视为"剧情未给出"，不覆盖')
+  assert.equal(status.元.姓名, '示例角色', '空串视为"剧情未给出"，不覆盖')
   assert.equal(status.元.种族, '人')
 })
 
 test('mergeStatus：元.锚点/更新于 不受补丁影响（提示词禁止模型输出它们）', () => {
   const cur = emptyStatus()
-  cur.元 = { 锚点: 253, 更新于: '2026-09-11T00:00:00.000Z', 姓名: '顾筱潋' }
-  const { status } = mergeStatus(cur, { 元: { 锚点: 1, 更新于: 'x', 姓名: '顾筱潋' } })
+  cur.元 = { 锚点: 253, 更新于: '2026-09-11T00:00:00.000Z', 姓名: '示例角色' }
+  const { status } = mergeStatus(cur, { 元: { 锚点: 1, 更新于: 'x', 姓名: '示例角色' } })
   assert.equal(status.元.锚点, 253)
 })
 

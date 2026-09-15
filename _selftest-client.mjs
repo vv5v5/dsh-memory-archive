@@ -243,7 +243,7 @@ const fakeCatalog = {
     ext: {
       pmpDshTavern: {
         characterId: CHAR_ID,
-        characterName: '影子',
+        characterName: '示例角色',
         rootSessionId: SESS_ID,
         playthroughNumber: 1,
         autoTitle: true,
@@ -254,17 +254,17 @@ const fakeCatalog = {
 const idx = itn.buildCatalogIndex(fakeCatalog)
 
 await check('buildCatalogIndex：对象与 JSON 字符串两种入参都行；空/坏输入给空索引不抛', () => {
-  assert.equal(idx.charNames[CHAR_ID], '影子')
+  assert.equal(idx.charNames[CHAR_ID], '示例角色')
   assert.equal(idx.byPlaythrough[PLAY_ID].title, '1周目')
   assert.equal(idx.byRootSession[SESS_ID].playthroughId, PLAY_ID)
   const fromStr = itn.buildCatalogIndex(JSON.stringify(fakeCatalog))
-  assert.equal(fromStr.charNames[CHAR_ID], '影子')
+  assert.equal(fromStr.charNames[CHAR_ID], '示例角色')
   const empty = itn.buildCatalogIndex(null)
   assert.deepEqual(empty, { charNames: {}, byPlaythrough: {}, byRootSession: {} })
 })
 
-await check('labelCharacter：目录命中给真名「影子」，未命中给 8 位短 ID', () => {
-  assert.equal(itn.labelCharacter(CHAR_ID, idx), '影子')
+await check('labelCharacter：目录命中给真名「示例角色」，未命中给 8 位短 ID', () => {
+  assert.equal(itn.labelCharacter(CHAR_ID, idx), '示例角色')
   assert.equal(itn.labelCharacter(OTHER_ID, idx), 'aaaaaaaa…')
   assert.equal(itn.shortId(OTHER_ID), 'aaaaaaaa…')
 })
@@ -278,11 +278,11 @@ await check('labelPlaythrough：含「1周目」；默认带「最后打开」�
   assert.equal(itn.labelPlaythrough('playthrough-99999999-aaaa-bbbb-cccc-dddddddddddd', idx, { short: true }), 'playthro…')
 })
 
-await check('★ labelSession 三级回退：title → 周目目录「影子 · 1周目」→ 短 ID「session-…」', () => {
+await check('★ labelSession 三级回退：title → 周目目录「示例角色 · 1周目」→ 短 ID「session-…」', () => {
   const l1 = itn.labelSession({ sessionId: SESS_ID, title: '手动起的名' }, idx)
   assert.deepEqual(l1, { text: '手动起的名', source: 'title' })
   const l2 = itn.labelSession({ sessionId: SESS_ID, title: null }, idx)
-  assert.equal(l2.text, '影子 · 1周目')
+  assert.equal(l2.text, '示例角色 · 1周目')
   assert.equal(l2.source, 'playthrough')
   const l3 = itn.labelSession({ sessionId: SESS_ID, title: null }, {})
   assert.equal(l3.text, 'session-…')
@@ -311,7 +311,7 @@ await check('pad4：数字补零到 4 位', () => {
 // ⚠️ 这里用**合成路径**（/home/dev/... 与 C:/work/...）而不是本机真实路径：
 //    本文件是要提交进公开仓库的，写进真实路径会被上架闸门的泄露扫描命中（已经命中过一次）。
 await check('★ workspaceLabelFromCwd：取最后一段（正/反斜杠都认；坏输入给空串）', () => {
-  assert.equal(itn.workspaceLabelFromCwd('/home/dev/projects/dsh-tarven配置区'), 'dsh-tarven配置区')
+  assert.equal(itn.workspaceLabelFromCwd('/home/dev/projects/demo-ws配置区'), 'demo-ws配置区')
   assert.equal(itn.workspaceLabelFromCwd('C:/work/我的项目'), '我的项目')
   assert.equal(itn.workspaceLabelFromCwd('C:\\work\\我的项目'), '我的项目')
   assert.equal(itn.workspaceLabelFromCwd(null), '')
@@ -319,8 +319,8 @@ await check('★ workspaceLabelFromCwd：取最后一段（正/反斜杠都认�
   assert.equal(itn.workspaceLabelFromCwd(42), '')
 })
 
-await check('★ decodeWorkspaceSlug：--D-apps-dsh-tarven~914D~7F6E~533A-- 解码后含「配置区」（~XXXX 十六进制转义 → 字符）', () => {
-  const dec = itn.decodeWorkspaceSlug('--D-apps-dsh-tarven~914D~7F6E~533A--')
+await check('★ decodeWorkspaceSlug：--D-apps-demo-ws~914D~7F6E~533A-- 解码后含「配置区」（~XXXX 十六进制转义 → 字符）', () => {
+  const dec = itn.decodeWorkspaceSlug('--D-apps-demo-ws~914D~7F6E~533A--')
   assert.ok(dec.includes('配置区'), '解码结果不含配置区: ' + dec)
   assert.equal(itn.decodeWorkspaceSlug('--abc--'), 'abc')
   assert.equal(itn.decodeWorkspaceSlug('no-delims'), 'no-delims')
@@ -351,22 +351,22 @@ await check('★ groupSessionsByWorkspace：cwd 命中 ⇒ 真名+resolved；全
   const t2 = '2026-09-12T09:00:00Z'
   const t3 = '2026-09-12T08:00:00Z'
   const items = [
-    { id: 's1', workspace: '--D-apps-dsh-tarven~914D~7F6E~533A--', mtime: t2 },
-    { id: 's2', workspace: '--D-apps-dsh-tarven~914D~7F6E~533A--', mtime: t1 },
+    { id: 's1', workspace: '--D-apps-demo-ws~914D~7F6E~533A--', mtime: t2 },
+    { id: 's2', workspace: '--D-apps-demo-ws~914D~7F6E~533A--', mtime: t1 },
     { id: 's3', workspace: '--ws-b--', mtime: t3 },
   ]
-  const cwdOf = new Map([['s1', '/home/dev/projects/dsh-tarven配置区']])
+  const cwdOf = new Map([['s1', '/home/dev/projects/demo-ws配置区']])
   const groups = itn.groupSessionsByWorkspace(items, (id) => (cwdOf.has(id) ? cwdOf.get(id) : null))
   assert.equal(groups.length, 2)
-  assert.equal(groups[0].slug, '--D-apps-dsh-tarven~914D~7F6E~533A--', '组间没按最近 mtime 倒序')
-  assert.equal(groups[0].label, 'dsh-tarven配置区')
+  assert.equal(groups[0].slug, '--D-apps-demo-ws~914D~7F6E~533A--', '组间没按最近 mtime 倒序')
+  assert.equal(groups[0].label, 'demo-ws配置区')
   assert.equal(groups[0].resolved, true)
   assert.deepEqual(groups[0].rows.map((r) => r.row.id), ['s2', 's1'], '组内没按 mtime 倒序')
   assert.equal(groups[1].label, 'ws-b')
   assert.equal(groups[1].resolved, false)
   const g2 = itn.groupSessionsByWorkspace(items, () => null)
   assert.equal(g2[0].resolved, false, 'cwd 全拿不到却标了已解析 —— 会假装真名')
-  assert.ok(g2[0].label.includes('dsh-tarven'), 'slug 解码降级失效: ' + g2[0].label)
+  assert.ok(g2[0].label.includes('demo-ws'), 'slug 解码降级失效: ' + g2[0].label)
 })
 
 await check('★ splitSystemSections：identity 认出、storyAnchor 照原样「归属待确认」、认不出 ⇒ 未能识别归属；§2.6 注释逐字', () => {
@@ -504,7 +504,7 @@ await check('★ 读视图（工作区）：顶栏=当前根人话名+提示词+
   try {
     const tree = fakeReact.createElement(comp, { wide: true })
     const s = JSON.stringify(tree)
-    assert.ok(s.includes('当前根：影子 / 1周目'), '顶栏没有当前根人话名')
+    assert.ok(s.includes('当前根：示例角色 / 1周目'), '顶栏没有当前根人话名')
     for (const t of ['提示词', '⚙ 设置', '⛶', '✕']) assert.ok(s.includes(t), '顶栏缺按钮: ' + t)
     assert.equal(s.includes('根：会话') || s.includes('根：工作区'), false, '顶栏还残留常驻根模式单选')
     // D 单更新：「阅读源」标签已撤掉；源只剩 摘要/原文/状态（搜索类源已移除）——用渲染断言（tab 按钮标签）
@@ -533,14 +533,14 @@ await check('★ 界面可见文本零完整 UUID（读视图·工作区）；�
     const tree = fakeReact.createElement(comp, { wide: true })
     const text = visibleText(tree)
     assert.equal(FULL_UUID_RE.test(text), false, '可见文本泄漏完整 id:\n' + text)
-    assert.ok(text.includes('影子 / 1周目 / archive'), '归档路径没有换成真名: ' + text)
+    assert.ok(text.includes('示例角色 / 1周目 / archive'), '归档路径没有换成真名: ' + text)
     const copies = []
     collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && JSON.stringify(n.props).includes('复制'), copies)
     assert.ok(copies.length >= 1, '没有复制按钮')
   } finally { fakeReact.__setPreset(null) }
 })
 
-await check('★ 读视图（会话）：默认「会话事件」；标题=影子 · 1周目 + 来源徽标「来自周目目录」', () => {
+await check('★ 读视图（会话）：默认「会话事件」；标题=示例角色 · 1周目 + 来源徽标「来自周目目录」', () => {
   const readyHost = {
     healthStatus: 'ready',
     health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
@@ -556,7 +556,7 @@ await check('★ 读视图（会话）：默认「会话事件」；标题=影�
     assert.ok(s.includes('会话事件'), '会话模式缺「会话事件」源')
     assert.equal(s.includes('会话搜索'), false, '「会话搜索」源应已移除（D 单）')
     assert.equal(s.includes('摘要'), false, '会话模式不该出现摘要源')
-    assert.ok(text.includes('会话事件 · 影子 · 1周目'), '事件区标题没有真名: ' + text)
+    assert.ok(text.includes('会话事件 · 示例角色 · 1周目'), '事件区标题没有真名: ' + text)
     assert.ok(text.includes('来自周目目录'), '第 2 级回退没标来源徽标')
     assert.equal(FULL_UUID_RE.test(text), false, '可见文本泄漏完整 id')
   } finally { fakeReact.__setPreset(null) }
@@ -726,7 +726,7 @@ await check('设置视图（工作区）：返回阅读 + 根模式/工作区根
     const text = visibleText(tree)
     assert.ok(s.includes('← 返回阅读'), '缺返回阅读')
     for (const t of ['根模式', '工作区根（自动发现）', 'API 设置', '诊断']) assert.ok(s.includes(t), '缺设置块: ' + t)
-    assert.ok(text.includes('影子'), '角色下拉没有真名')
+    assert.ok(text.includes('示例角色'), '角色下拉没有真名')
     assert.ok(text.includes('1周目'), '周目下拉没有真名')
     assert.equal(FULL_UUID_RE.test(text), false, '设置视图可见文本泄漏完整 id')
     const pwInputs = []

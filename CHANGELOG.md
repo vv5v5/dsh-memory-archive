@@ -35,7 +35,7 @@
 - **真名解析**：工作区模式下读工作区根的 `catalog.json`
   （`playthroughs[].title` / `.ext.pmpDshTavern.characterName` / `.rootSessionId`），
   以 `<archive>/manifest.json` 兜底；会话名三级回退
-  （`title` → 周目反查（如「影子 · 1周目」）→ 8 位截断 id），每级如实标注来源；
+  （`title` → 周目反查（如「角色名 · 1周目」）→ 8 位截断 id），每级如实标注来源；
   **界面不再显示完整 UUID / 完整 sessionId**。
 - **阅读优先界面**：
   - 面板放大到 `min(1280px,96vw) × min(860px,92vh)`，支持**全屏**与**键盘翻页**；

@@ -46,7 +46,7 @@ async function check(name, fn) {
 const PROBE_PATH = '/pmp-dsh-tavern/api/v2/workspace/files?list='
 const UUID36_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
 // 自造 UUID（非真实会话）：字母递进拼法，且**每一段都只有一种字符** —— 连泄露扫描器的
-// 「占位 id」启发式也能一眼判定（旧值 `1a2b3c4d-…` 虽然同样是假的，但每段多字符 ⇒ 每次扫描都报一条待人工判定）。
+// 「占位 id」启发式也能一眼判定（多字符递进的那种虽然同样是假的，但每次扫描都要人工判一遍）。
 const FAKE_UUID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 const FAKE_TAIL = 'eeeeeeeeeeee'
 

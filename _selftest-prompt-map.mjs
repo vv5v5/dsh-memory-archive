@@ -136,7 +136,7 @@ const pm = win.__def.factory(() => fakeReact).__promptMap
 // ---------- 假数据（可控：把任务规格点名的标记都塞进一份 system 全文） ----------
 const SYS_FULL = [
   'You are an AI agent powered by DeepSeek Harness. 你在 DSH 里，检出目录在……',
-  '@deepseek-ai/dsh-persona 你是「影子」的扮演者，说话克制……',
+  '@deepseek-ai/dsh-persona 你是「示例角色」的扮演者，说话克制……',
   'dsh-tavern preset 段：ST 预设归一化后的内容（身份与文风来自这里）……',
   'rp:policy RP 模式策略：高风险操作被锁……',
   'state:card 【当前状态】HP=80/80 · 位置：废墟……',
