@@ -10,8 +10,43 @@
 # 的包**，否则宿主启动时会直接抛错：
 #   `dsh: profile bundle "…" declares no dsh.bundle in its package.json`
 #   （packages/boot/app-boot/src/profile.ts:834）—— 我第一次登记就踩了这个。
-#
-# 宿主半侧 v1 是空的（功能全在 lib/client.js），所以这里没有任何 config。
 - insert:
     - id: dsh-memory-archive
       name: 'dsh-memory-archive'
+
+    # ── 并入的 state-bridge（原独立包 `dsh-state-bridge`，自研 MIT；2026-09-15 收编）──
+    # 代码在包内 `state-bridge/`（子路径导出 = `dsh-memory-archive/state-bridge`；
+    # 逐字节副本 + 原位测试 70/0 全绿）。许可：该子目录 MIT、仓库其余 CC-BY-NC-4.0，
+    # 见 `state-bridge/NOTICE.md`。
+    #
+    # ★ 挂载口径（这三处必须一致，改一处就三处一起改）：
+    #   · **本行**负责宿主平面的挂载 ⇒ 编程/标准会话因此有 `state_*` 工具；
+    #   · **RP 会话另需一行**：`~/.dsh/.agent-presets/roleplay/agent.cordis.yml` 里
+    #     那行绝对路径（指向本包 `state-bridge/lib/index.js`）—— 因为 preset 的
+    #     `tools.restrict` 会挡掉继承来的全局工具，RP 必须自己挂一次；
+    #   · profile（`~/.dsh/profiles/web/package.json`）里**不再**需要 `dsh-state-bridge`
+    #     依赖与 bundles 条目（2026-09-15 已撤）—— 同名的旧 bundle 会与本行撞重复 id。
+    #
+    # `storageDir` 省略 = 插件默认 `<DSH_HOME>/l1-state`，与原来的
+    # `!!js dshHomePath('l1-state')` 同值（省掉一个 `!!js` 求值依赖）。
+    - id: state-bridge
+      name: 'dsh-memory-archive/state-bridge'
+      config:
+        api:
+          url: 'https://api.siliconflow.cn/v1/chat/completions'
+          model: 'deepseek-ai/DeepSeek-V3.2'
+          temperature: 0.4
+          max_tokens: 4096
+          timeout_ms: 120000
+          key: ''            # ⚠️ 用环境变量 STATE_BRIDGE_API_KEY，别把 key 写进仓库
+        mode: 'patch-tool'   # 主模型每轮用 state_patch 一次决定
+        sideApi:
+          enabled: false     # 副 API 降级为默认关闭的兜底
+        requirePatchPerTurn: true
+        attempts: 2
+        maxNewMechanicsPerTurn: 2
+        gateTimeoutMs: 8000
+        injectionOrder: 50
+        deltaMaxChars: 6000
+        injectSummary: true
+        sessionAllowlist: []

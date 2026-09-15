@@ -422,6 +422,59 @@ await t('handleSectionsTextGet: 楼在日志里找不到（无 turn/start）⇒ 
   assert.equal(sends[0].payload.text, null)
 })
 
+// ---------------------------------------------------------------------------
+// 新式 system 落点（20260915 实测补）：本版宿主 `request/header` 里**没有 system**
+// （`agent-loop/src/agent.ts:562` canonicalHeader 只带 config/adapterDefaults/tools），
+// system 正文走 `system/message` 这条 surface 事件 ⇒ 只认 header 的旧路径会永远
+// turn-not-found、编辑器"原文"整块死掉。以下四条钉住新路径与它的反证。
+// ---------------------------------------------------------------------------
+const newStyleEvents = (body) => [
+  { seq: 1, type: 'session/start', data: {} },
+  { seq: 2, type: 'turn/start', data: { turn: 1 } },
+  { seq: 3, type: 'request/header', data: { reason: 'initial', header: { config: { provider: 'p', model: 'm' }, tools: [] } } },
+  { seq: 4, type: 'system/message', data: { turn: 1, step: 1, message: { role: 'system', content: body } } },
+  { seq: 5, type: 'turn/end', data: { reason: { kind: 'complete' } } },
+]
+const ctxWith = (events) => ({ get: (n) => (n === 'sessionQuery' ? { readSession: async () => ({ events }) } : undefined) })
+const callText = async (events, name = 'harness:identity', sid = SID) => {
+  const sends = []
+  await handleSectionsTextGet(ctxWith(events), new URL(`http://dsh.local/sections/text?sessionId=${sid}&turn=1&name=${encodeURIComponent(name)}`), (s, p) => sends.push({ s, p }), (s) => s, { warn() {} }, { dir })
+  return sends[0]
+}
+
+await t('新式 system 落点: header 无 system、只有 system/message ⇒ 端点仍切出该段（逐字相等）', async () => {
+  // 正文故意拆成两个文本块：块内拼接必须还原成与捕获同口径的整串
+  const half = Math.floor(SYS.length / 2)
+  const got = await callText(newStyleEvents([{ type: 'text', text: SYS.slice(0, half) }, { type: 'text', text: SYS.slice(half) }]))
+  assert.equal(got.p.ok, true)
+  assert.equal(got.p.unavailable, null)
+  assert.equal(got.p.text, 'identity-static') // ⛔ 只回被点开那一段
+  assert.ok(!JSON.stringify(got.p).includes('tail-正文'))
+})
+
+await t('反证（同长度改一字）: system/message 正文被换掉 ⇒ slice-mismatch（⛔ 不靠长度、靠 hash 抓）', async () => {
+  const swapped = SYS.slice(0, 3) + (SYS[3] === 'x' ? 'y' : 'x') + SYS.slice(4)
+  assert.equal(swapped.length, SYS.length)
+  assert.notEqual(swapped, SYS)
+  const got = await callText(newStyleEvents([{ type: 'text', text: swapped }]))
+  assert.equal(got.p.unavailable, 'slice-mismatch')
+  assert.equal(got.p.text, null)
+})
+
+await t('反证: 既没有 header.system 也没有 system/message ⇒ turn-not-found（⛔ 不猜正文）', async () => {
+  const got = await callText([{ seq: 1, type: 'turn/start', data: { turn: 1 } }, { seq: 2, type: 'turn/end', data: { reason: { kind: 'complete' } } }])
+  assert.equal(got.p.unavailable, 'turn-not-found')
+  assert.equal(got.p.text, null)
+})
+
+await t('分次提交: 同一楼两条 system/message（先前已过时的那条）⇒ 仍切对（候选从后往前试，不硬拼）', async () => {
+  const two = newStyleEvents([{ type: 'text', text: '过时的 system（hash 对不上）' }])
+  two.splice(4, 0, { seq: 4.5, type: 'system/message', data: { turn: 1, step: 2, message: { role: 'system', content: [{ type: 'text', text: SYS }] } } })
+  const got = await callText(two)
+  assert.equal(got.p.unavailable, null)
+  assert.equal(got.p.text, 'identity-static')
+})
+
 await t('行为级: 假 scope 走完 registerSectionsCapture → assemble 瀑布 → 落盘带 offset', async () => {
   const listeners = {}
   const fakeScope = {

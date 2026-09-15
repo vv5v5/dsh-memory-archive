@@ -877,19 +877,25 @@ await check('★ 提示词数据面在位：PROMPT_API_BASE=/dsh-memory-archive/
   assert.equal(src.includes("'/prompt-viewer'"), false, '不许再依赖已退役插件的路径 /prompt-viewer')
 })
 
-await check('★ P0 内存收紧：空闲补标题有硬上限 TITLE_FILL_CAP=20，resolve 调用处按上限截断（不再整表轮询）', () => {
-  const m = src.match(/const TITLE_FILL_CAP = (\d+)/)
-  assert.ok(m, '缺 TITLE_FILL_CAP 常量（每次进子页/刷新列表的补标题硬上限）')
-  assert.equal(Number(m[1]), 20, '补标题上限应为 20（OOM 修复口径），实为 ' + (m ? m[1] : '(none)'))
-  // resolve 调用处必须带上截断后的 batch，不许直接吃全量 pending（老写法会把 73 个会话全部解析）
-  const call = src.match(/\/api\/sessions\/resolve\?ids=' \+ encodeURIComponent\(([A-Za-z_$][\w$]*)/)
-  assert.ok(call, '未找到 resolve 调用处')
-  assert.notEqual(call[1], 'pending', 'resolve 仍直接吃全量 pending —— 没有按上限截断')
-  const decl = new RegExp('const ' + call[1] + ' = pending\\.slice\\(0, Math\\.min\\(')
-  assert.ok(decl.test(src), call[1] + ' 不是「pending 按上限截断」得来的')
-  assert.ok(/TITLE_FILL_CAP - \w+\.\w+/.test(src), '缺预算扣减（TITLE_FILL_CAP − 已发送数），做不到每轮硬上限')
-  assert.ok(src.includes('resolveSentRef'), '缺预算计数 ref（预算须跨批累计、刷新列表才重置）')
-  assert.equal(src.includes('pending.slice(0, 10)'), false, '老的全量轮询写法还在')
+await check('★ 20260915 查看器提速：**不再有空闲批量补标题**（源码里零 /api/sessions/resolve 调用点）+ 列表默认走 /api/resident（零解析）', () => {
+  // 旧契约（P0 内存收紧）是「补标题有硬上限 20」；新契约更强：**整个自动补标题都没了**。
+  // 为什么不删这条而改写：删掉等于把"防回归"一起删了；改写后它盯的是**新的**反回归面。
+  const forbidden = /apiGet\([^)]*\/api\/sessions\/resolve/
+  // ★ 灵敏度自证（这条断言能变红吗）：拿老写法原文喂给它，必须命中。
+  assert.equal(
+    forbidden.test("apiGet(PROMPT_API_BASE + '/api/sessions/resolve?ids=' + encodeURIComponent(batch.join(',')), controller.signal)"),
+    true,
+    '反证失败：这个正则该能抓住老写法（否则断言是橡皮章）',
+  )
+  assert.equal(forbidden.test(src), false, 'client.js 里又出现了自动 resolve 调用点（打开即批量解析 = 卡的主因）')
+  assert.equal(src.includes('resolveSentRef.current +='), false, '又出现了自动补标题的预算扣减（说明 effect 被搬回来了）')
+  // 新路径必须在：列表默认读常驻投影
+  assert.ok(src.includes("PROMPT_API_BASE + '/api/resident'"), '缺 /api/resident 读取点（列表默认应读常驻投影）')
+  assert.ok(/const \[listMode, setListMode\] = React\.useState\('resident'\)/.test(src), '缺 listMode 状态（默认应为 resident）')
+  assert.ok(src.includes('onToggleResident'), '缺「＋/－ 常驻」的接线')
+  // 旧的常量/注释可以留（它们仍是"别一次解析一堆"的口径说明），但**不许**再被当成执行路径
+  const cap = src.match(/const TITLE_FILL_CAP = (\d+)/)
+  assert.ok(cap && Number(cap[1]) === 20, 'TITLE_FILL_CAP 常量应保留为口径说明（实为 ' + (cap ? cap[1] : '(none)') + '）')
 })
 
 await check('★ §2 解释关键句全部进源码；仍然只 require(\'react\')', () => {
@@ -1388,6 +1394,32 @@ await check('★ C 单三级导航渲染：选中会话（hook5）+ L2 开（hoo
     assert.equal(s.includes('dma-turn'), false, '渲染树里出现 dma-turn')
     assert.equal(s.includes('回地图'), false, '渲染树里出现「回地图」按钮')
   } finally { fakeReact.__setPreset(null) }
+})
+
+// ── 20260915 用户口径：选常驻 = 勾选数个 → 点确认；⛔ 勾选不许直接改集/跳转 ────────────
+await check('★ 常驻批量确认：勾选框只勾选（stopPropagation、不发请求），落盘只发生在确认条那几个按钮上', () => {
+  // 1) 勾选框必须在：只 toggle 勾选，⛔ 不许出现"行内直接 onToggleResident"
+  assert.ok(src.includes("'data-pending-row'"), '缺行内勾选框（data-pending-row）')
+  const rowBlock = src.slice(src.indexOf("'data-pending-row'"), src.indexOf("'data-pending-row'") + 900)
+  assert.ok(/onChange: \(\) => togglePending\(s\.id\)/.test(rowBlock), '勾选框没有走 togglePending（勾选即改集？）')
+  assert.equal(/onToggleResident/.test(rowBlock), false, '行内（勾选框那一块）仍在直接调 onToggleResident —— 又变回"点一个就生效"')
+  assert.ok(/onClick: \(ev\) => ev\.stopPropagation\(\)/.test(rowBlock), '勾选框没挡住冒泡（点勾选会顺带选中会话 ⇒ 触发解析/跳转）')
+  // 2) 确认条必须在：两个动作都出现在条里
+  assert.ok(src.includes("'data-pending-bar'"), '缺批量确认条（data-pending-bar）')
+  assert.ok(src.includes("'data-pending-add'"), '确认条缺「＋ 设为常驻」')
+  assert.ok(src.includes("'data-pending-remove'"), '确认条缺「－ 取消常驻」')
+  const barAt = src.indexOf("'data-pending-bar'")
+  const barBlock = src.slice(barAt, barAt + 2600)
+  assert.ok(/onToggleResident\(ids\.concat\(toAdd\)\)/.test(barBlock), '确认条的"设为常驻"没有把勾选的整批交出去')
+  assert.ok(/onToggleResident\(ids\.filter/.test(barBlock), '确认条的"取消常驻"没有把勾选的整批交出去')
+  assert.ok(/clearPending\(\)/.test(barBlock), '确认后没有清空勾选')
+  // 3) 改集要能 await（确认后清空勾选靠它）
+  assert.ok(/return apiPost\(PROMPT_API_BASE \+ '\/api\/resident'/.test(src), 'saveResident 没有返回 promise（确认条无法据此收尾）')
+  // 4) 文案要说清"勾选还不生效"
+  assert.ok(src.includes('还没生效'), '确认条没有写明"勾选还没生效"')
+  // ★ 灵敏度自证：把"老写法"（行内直接 onToggleResident）喂给第 1 条那个判据，必须命中
+  const oldRow = "onClick: (ev) => { ev.stopPropagation(); onToggleResident(pinned ? ids.filter((x) => x !== s.id) : ids.concat([s.id])) }"
+  assert.equal(/onToggleResident/.test(oldRow), true, '反证失败：这条判据抓不住"点一个就生效"的老写法（橡皮章）')
 })
 
 console.log('== 总结：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
