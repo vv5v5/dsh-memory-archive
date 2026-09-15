@@ -4,6 +4,47 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-09-15
+
+> 一轮大版本：**服务端能力补齐 + 三处「读不到」的真机 bug 修复**。
+> ⚠️ 诚实边界：收纳（A1/A2）与导入（B1）目前**只有服务端端点，面板还没有入口**（见 Added 末条与 Notes）。
+
+### Added
+
+- **收纳执行器（A1/A2）**：`lib/collect.js`（周目归档写入器）+ `lib/collect-scan.js`（压缩联动自动收纳）。
+  端点：`/collect/targets`、`/collect/plan`、`/collect/apply`、`/collect/scan`、`/collect/auto`。
+  扫会话里 `surface==='shadowed'` 的区间 → 映射成楼层 → 写进 Tavern 周目归档（台账幂等；⛔ 不碰 DSH 会话文件）。
+- **聊天导入适配器（B1）**：`lib/import-formats.js` + `/import/formats`、`/import/plan`（零落库零写入）。
+- **本地记忆回响（D2）**：`lib/echo-index.js`（node:sqlite FTS5 trigram 引擎）+ `lib/echo-inject.js`，
+  以 `dma:echo`（order 54）注入；语料 = 周目归档楼层原文（摘要只保留原文实体串的 1.6%，故不入库）。
+- **D4 标签归一**：`lib/ami-tags.js`（纯函数，被收纳链路引用）。
+- **保留第一轮**：`lib/keep-first-round.js`（唯一事实源）+ `preset-modules/keep-first-round.js`（逐字节副本，写进用户预设目录）+ `lib/preset-modules.js`（幂等写面与挂载行）。
+- **`state-bridge` 子包**：原独立包 `dsh-state-bridge` 收编为 `dsh-memory-archive/state-bridge`
+  （子路径导出 + `cordis.patch.yml` 挂载行；该子目录 MIT、仓库其余 CC-BY-NC-4.0，见 `state-bridge/NOTICE.md`），含原样测试 70 项。
+- **查看器**：常驻会话集（用户自己选、后台串行预热轻投影）、会话真标题与预览分离、
+  `PROJECTION_VERSION=3`（旧投影自动重热）、批量勾选式选常驻。
+
+### Fixed
+
+- **只带 `session.v3.jsonl.zstd` 的会话整个读不到**（真机实测 6/6）**、带旧文件的会话只读到迁移前的冻结快照**：
+  查看器原先按 `<DSH_HOME>/runtime` 里的包名 require 一份 persistence（那份是 0.1.2，只认 `session.jsonl.zstd`）。
+  现在统一走**宿主自己的**读取链：活注册表 → 宿主持久化读句柄（`open(id,'read')`）→ `sessionQuery`。
+  量化对照（真机同一条会话）：`not found` → 10635 事件 / 99 楼；69 楼（冻结）→ **103 楼**。
+- **最新一楼看得到字段、看不到上下文**：v3 起 `request/header` 不再带 `system`，正文改走 `system/message` 事件。
+  现在按楼归堆取正文，并**如实标注来源**（`header` | `system/message` | `system/message(prev-turn)` | null）。
+- **同一事实两套算路**：`requests` 摘要改为从 `conversation.headers` 派生（此前列表页那列 `systemChars` 恒为 0）。
+- **自检不再碰真机数据**：一律使用临时 `storageDir`（此前会用真机插件存储，实测会覆写用户的常驻集）。
+
+### Changed
+
+- 真夹具**改由环境变量提供**（`DSH_ST_CHAT` / `DMA_L1_STATE_DIR` / `DMA_PRESET_SRC` / `DMA_CORPUS_FLOORS`），
+  没设就跳过 —— 本包不绑定某一台机器，也避免把本机路径写进仓库。
+
+### Notes
+
+- ⛔ **收纳与导入还没有面板入口**：`lib/client.js` 里 `/collect/*`、`/import/*` 出现 0 次，目前只能用端点调；
+  面板接入（含替换 `lib/client.js` 里那句「本插件尚未实现收纳执行器」的过期文案）排在下一版。
+
 ## [0.3.0] - 2026-09-14
 
 > 首次面向公开仓库/插件市场的版本：包名改回 `dsh-memory-archive`，与 GitHub 仓库同名。
