@@ -637,7 +637,7 @@ await check('★ v4.1 入口拆分：记忆库面板只剩 阅读 / 提示词模
   } finally { fakeReact.__setPreset(null) }
 })
 
-await check('★ 压缩指令子页：解释逐字在、textarea(≥12行,初值=current)、按钮行齐、参考默认折叠、诚实提示在；展开见官方原文+出处', () => {
+await check('★ 压缩指令子页：说明逐字在、textarea(≥12行,初值=current)、按钮行齐、参考默认折叠；展开见官方原文+出处', () => {
   fakeReact.__setPreset(templatesPreset('compaction', {
     0: { status: 'ready', data: FAKE_TPL, error: '' }, 1: FAKE_TPL.templates.compaction.current,
     2: { busy: false, error: '', ok: '' }, 3: false, 4: 0,
@@ -646,8 +646,13 @@ await check('★ 压缩指令子页：解释逐字在、textarea(≥12行,初值
     const tree = fakeReact.createElement(comp, { wide: true })
     const s = JSON.stringify(tree)
     const text = visibleText(tree)
-    for (const t of ['【这段提示词是干什么的】', 'Override this sole hook for a template or remote summarizer',
-      'isolate realm', 'KV cache', '【怎么让它生效】', 'customInstruction', '【为什么不会污染编程模式】']) {
+    // ★ 2026-09-16：解释文案 = 用户新给的说明原文（逐字，见 client.js 里的同款注释）。
+    for (const t of ['这里收录了提示词模板，并提供了编辑功能。',
+      '原理：插件更改了dsh原生的【压缩】机制，将原本的编程总结提示词换成了rp向提示词。',
+      '重要：',
+      '①压缩提示词存进内存，更改必须重启才能生效，也不能对已经总结过的内容追溯生效。建议在决定重开后再大修提示词。',
+      '②提示词来自st anima记忆系统，向量检索插件依赖此提示词。不建议不清楚检索功能原理的用户更改。',
+      '官方原文参考']) {
       assert.ok(text.includes(t), '解释文案缺句: ' + t)
     }
     const areas = []
@@ -655,9 +660,14 @@ await check('★ 压缩指令子页：解释逐字在、textarea(≥12行,初值
     assert.equal(areas.length, 1, '文本框应当恰好 1 个')
     assert.ok(areas[0].props.rows >= 12, 'textarea 行数不足 12')
     assert.equal(areas[0].props.value, '压缩草稿甲', '文本框初值不是 current')
-    for (const t of ['保存', '恢复内置默认', '复制', '载入内置默认', '官方原文参考']) assert.ok(s.includes(t), '缺按钮/折叠: ' + t)
+    // ★ 2026-09-16：主按钮从「保存」改成「应用（写进预设）」（用户口径：直接写进 preset 才有效）。
+    //   ⛔ 别再用「保存」当断言 —— 文本框 placeholder 里也有"保存"字样，会假通过。
+    for (const t of ['应用（写进预设）', '恢复内置默认', '复制', '载入内置默认', '官方原文参考',
+      '压缩指令模板文本（点「应用（写进预设）」才会写进 preset）']) assert.ok(s.includes(t), '缺按钮/折叠: ' + t)
     assert.ok(text.includes('当前：内置默认'), '缺状态行（当前：内置默认）')
-    assert.ok(text.includes('⚠️ 保存只是把这段文本存进本插件配置'), '缺诚实提示')
+    // ★ 2026-09-16：提示块**整块撤掉**（用户口径）—— 反向断言：不许再出现指路的 ⚠️。
+    assert.equal(text.includes('⚠️ 改完要点「⑤ 应用（真写入）」'), false, '指向别处入口的提示还在（用户看不到那个按钮）')
+    assert.equal(text.includes('真正生效的是'), false, '旧口径提示还在')
     assert.equal(text.includes('OFFICIAL-COMPACTION-REF-己'), false, '参考默认应折叠（却已可见）')
     assert.equal(text.includes('来源：DSH 官方 compaction-basic'), false, '出处说明应随折叠隐藏')
   } finally { fakeReact.__setPreset(null) }
@@ -674,7 +684,7 @@ await check('★ 压缩指令子页：解释逐字在、textarea(≥12行,初值
   } finally { fakeReact.__setPreset(null) }
 })
 
-await check('★ 收纳占位子页：custom 徽标「自定义」+ 逐字解释 + 两条诚实提示 + 变量说明', () => {
+await check('★ 收纳占位子页（**只读**）：说明原文一句 + 变量说明 + 无编辑入口（2026-09-16 用户口径）', () => {
   fakeReact.__setPreset(templatesPreset('placeholder', {
     0: { status: 'ready', data: FAKE_TPL, error: '' }, 1: FAKE_TPL.templates.placeholder.current,
     2: { busy: false, error: '', ok: '' }, 3: false, 4: 0,
@@ -682,16 +692,35 @@ await check('★ 收纳占位子页：custom 徽标「自定义」+ 逐字解释
   try {
     const tree = fakeReact.createElement(comp, { wide: true })
     const text = visibleText(tree)
-    for (const t of ['【这段提示词是干什么的】', '<compacted-summary>', 'frameSummary',
-      '【为什么占位行里要带关键词】', '可用变量：{from}',
-      '⚠️ 本插件目前还没有实现收纳执行器', '⚠️ 官方 compaction 那条路上的前言写死在官方代码里']) {
+    for (const t of [
+      // ★ 2026-09-16：说明缩到用户给的**一句原文**（其余整段撤掉）—— 逐字钉。
+      '内容被「收纳」（移出上下文）之后，那一处不是空白 —— 模型在原位看到的是一段固定前言 + 归档正文。这里展示的是更改后的占位文本。如无必要请勿更改。',
+      '可用变量：{from}']) {
       assert.ok(text.includes(t), '缺句: ' + t)
+    }
+    // ★ 2026-09-16：那两条 ⚠️ 提示用户判为"多余" ⇒ 整块删掉（反向断言，防止回流）。
+    for (const gone of ['⚠️ 这段是「收纳占位」模板', '⚠️ 官方 compaction 那条路上的前言写死在官方代码里',
+      '【为什么占位行里要带关键词】', '这段前言负责告诉模型三件事']) {
+      assert.equal(text.includes(gone), false, '应当已删掉的文案还在: ' + gone)
     }
     assert.ok(text.includes('自定义'), 'custom=true 却没有「自定义」徽标')
     const areas = []
     collectNodes(tree, (n) => n.$$element === 'textarea', areas)
     assert.equal(areas.length, 1, '文本框应当恰好 1 个')
     assert.equal(areas[0].props.value, '占位草稿丁', '文本框初值不是 current')
+    // ★ 2026-09-16 用户口径：这张卡**只读**（没有可写目的地）⇒ 结构化断言 + 反向断言双保险。
+    assert.equal(areas[0].props.readOnly, true, '占位卡的文本框不是只读')
+    assert.equal(areas[0].props['aria-label'], '收纳占位模板（只读）', 'aria-label 没标只读')
+    assert.equal(typeof areas[0].props.onChange, 'undefined', '只读的文本框不该带 onChange')
+    assert.ok(text.includes('（只读展示：面板不提供编辑入口。）'), '缺只读说明行')
+    // 按钮面：只许「复制」（不许出现应用/保存/恢复内置默认/载入内置默认）
+    const btns = []
+    collectNodes(tree, (n) => n.$$element === 'button', btns)
+    const labels = btns.map((b) => (typeof b.props.children === 'string' ? b.props.children : ''))
+    for (const gone of ['应用（写进预设）', '保存', '恢复内置默认', '载入内置默认']) {
+      assert.equal(labels.some((l) => l === gone), false, '只读卡上不该有按钮: ' + gone)
+    }
+    assert.ok(labels.includes('复制'), '只读卡少了「复制」按钮')
     assert.equal(text.includes('OFFICIAL-PREAMBLE-REF-庚'), false, '参考默认应折叠')
   } finally { fakeReact.__setPreset(null) }
 })
@@ -806,6 +835,15 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     ['GET', '/editor/diagnostics'],   // M9
     ['GET', '/templates'],
     ['PUT', '/templates'],
+    // 归档写入面（2026-09-15 U1/B2）：面板的「⇩ 导入 / 收纳」视图用到这五条 ——
+    // 以前一个都没用到（导入只有服务端内核、面板上没有入口，用户"看不见导入"就是这个原因）。
+    ['GET', '/collect/targets'],
+    ['POST', '/collect/scan'],
+    ['POST', '/collect/auto'],
+    ['POST', '/import/plan'],
+    ['POST', '/import/apply'],
+    // 自动收纳的状态出口（2026-09-15：压缩后自动收，失败要播报 ⇒ 顶栏红标读它）
+    ['GET', '/auto-collect'],
   ]
   const found = [...src.matchAll(/HOST_API_BASE \+ '([^']+)'/g)].map((m) => m[1].split('?')[0])
   assert.ok(found.length > 0, '源码里没有任何 HOST_API_BASE + rest 调用')
@@ -898,13 +936,16 @@ await check('★ 20260915 查看器提速：**不再有空闲批量补标题**�
   assert.ok(cap && Number(cap[1]) === 20, 'TITLE_FILL_CAP 常量应保留为口径说明（实为 ' + (cap ? cap[1] : '(none)') + '）')
 })
 
-await check('★ §2 解释关键句全部进源码；仍然只 require(\'react\')', () => {
+await check('★ 解释文案（2026-09-16 起 = 用户给的说明原文）+ 占位卡的官方锚点仍在；仍然只 require(\'react\')', () => {
+  // 沿革：规格 §2 长解释 →（09-15）用户说明原文一版 →（09-16）用户说明原文二版（当前）。
+  // 这里钉的是**当前**那版逐字进源码；占位卡那两句技术锚点仍在源码别处（自检台不当橡皮章）。
   for (const t of [
-    'Override this sole hook for a template or remote summarizer',
+    '这里收录了提示词模板，并提供了编辑功能。',
+    '原理：插件更改了dsh原生的【压缩】机制，将原本的编程总结提示词换成了rp向提示词。',
+    '①压缩提示词存进内存，更改必须重启才能生效，也不能对已经总结过的内容追溯生效。建议在决定重开后再大修提示词。',
+    '②提示词来自st anima记忆系统，向量检索插件依赖此提示词。不建议不清楚检索功能原理的用户更改。',
     '<compacted-summary>',
     'frameSummary',
-    'isolate realm',
-    'KV cache',
   ]) assert.ok(src.includes(t), '缺关键句: ' + t)
   const reqs = [...src.matchAll(/require\(([^)]*)\)/g)].map((x) => x[1].trim())
   assert.ok(reqs.length >= 1, '没有任何 require')
@@ -1154,6 +1195,92 @@ await check('★ D 单：搜索类阅读源删干净（组件/字面量/注入�
     const text = visibleText(tree)
     assert.equal(text.includes('阅读源'), false, '「阅读源」标签还在（渲染断言）')
     for (const t of ['摘要', '原文', '状态']) assert.ok(text.includes(t), '缺阅读源: ' + t)
+  } finally { fakeReact.__setPreset(null) }
+})
+
+await check('★ 导入/收纳视图（2026-09-15 U1/B2）：三张卡齐 + 控件 id 齐 + 顶部有入口按钮', () => {
+  const readyHost = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    // ★ root 必须给：WriteView 的角色-周目取自 config.root（没给就只剩"选角色"空下拉）
+    config: {
+      ok: true, rootMode: 'workspace',
+      root: { sessionId: null, characterId: CHAR_ID, playthroughId: PLAY_ID },
+      api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null,
+    },
+    configError: '',
+  }
+  const targetsReady = {
+    status: 'ready', error: '',
+    list: [{ characterId: CHAR_ID, playthroughId: PLAY_ID, title: '自检周目', archiveRel: CHAR_ID + '/' + PLAY_ID + '/archive', hasArchive: false, floorCount: null, summaryCount: null, manifestWriter: null }],
+  }
+  fakeReact.__setPreset(Object.assign(
+    basePreset('write', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }),
+    { WriteView: { 0: targetsReady } },
+  ))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const text = visibleText(tree)
+    for (const t of ['写到哪个「角色-周目」', '导入外部聊天记录', '收纳：把本机会话的楼段收进归档',
+      '① 扫描 Tavern 留下的待导入文件', '看一看能收什么',
+      // 自动收纳（压缩后自动收）：默认开 + 只收绑定周目
+      '压缩后自动收（默认开）', '只收**绑定周目**的会话']) {
+      assert.ok(text.includes(t), '缺: ' + t)
+    }
+    // 「② 收进归档」按钮与「该周目下没有待导入文件」提示都是**动作之后**才出现的
+    // （前者要预览、后者要扫描过）⇒ 不在常显清单里，由下面的反向断言兜住。
+    // 顶栏入口必须存在（否则用户"看不见导入"——这正是这次要修的）
+    assert.ok(text.includes('⇩ 导入 / 收纳'), '顶栏缺导入/收纳入口按钮')
+    const withId = []
+    collectNodes(tree, (n) => n && typeof n.props === 'object' && typeof n.props.id === 'string', withId)
+    const have = withId.map((n) => n.props.id)
+    for (const want of ['dma-write-char', 'dma-write-play', 'dma-import-file', 'dma-import-text',
+      'dma-import-keep-greeting', 'dma-import-keep-hidden', 'dma-collect-session', 'dma-auto-collect-enabled']) {
+      assert.ok(have.includes(want) || text.includes(want), '缺控件: ' + want)
+    }
+    // ⛔ 计划没跑之前不许出现"收进归档"可点按钮组里的预览块（预览块只在 plan 之后渲染）
+    assert.ok(text.includes('预览（还没写任何东西）') === false, '没预览却出现了预览块')
+  } finally { fakeReact.__setPreset(null) }
+})
+
+await check('★ 自动收纳**失败播报**（用户口径：失败不许静默）：顶栏红标 + 卡里给 code 与原因', () => {
+  const readyHost = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: {
+      ok: true, rootMode: 'workspace',
+      root: { sessionId: null, characterId: CHAR_ID, playthroughId: PLAY_ID },
+      api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null,
+    },
+    configError: '',
+  }
+  const failed = {
+    status: 'ready', enabled: true, error: '',
+    last: { at: '2026-09-15T13:00:00.000Z', ok: false, code: 'IMPORT_TAVERN_UNREACHABLE', message: '连不上 Tavern 工作区面', ms: 12 },
+  }
+  const targetsReady = {
+    status: 'ready', error: '',
+    list: [{ characterId: CHAR_ID, playthroughId: PLAY_ID, title: '自检周目', archiveRel: CHAR_ID + '/' + PLAY_ID + '/archive', hasArchive: false, floorCount: null, summaryCount: null, manifestWriter: null }],
+  }
+  fakeReact.__setPreset(Object.assign(
+    // ★ hook 序号算术（别数错）：0 view · 1 fullscreen · 2 host · 3 modeSave · 4 disc · 5 catalog
+    //   · 6 tick · 7 pickedSessionId · 8 actionCtl(useRef) · 9 既有的清理 useEffect
+    //   · **10 = 自动收纳状态**（新增 hook 一律追加在最后，见 client.js 里的同款注释）
+    basePreset('write', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '', 10: failed }),
+    { WriteView: { 0: targetsReady } },
+  ))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const text = visibleText(tree)
+    assert.ok(text.includes('⚠ 自动收纳失败'), '顶栏没有失败红标（失败被静默了）')
+    assert.ok(text.includes('IMPORT_TAVERN_UNREACHABLE'), '卡里没给错误 code')
+    assert.ok(text.includes('连不上 Tavern 工作区面'), '卡里没给失败原因')
+    const marked = []
+    collectNodes(tree, (n) => n && typeof n.props === 'object' && n.props['data-auto-collect-failed'] === '1', marked)
+    assert.ok(marked.length === 1, '失败红标的 data 标记应恰好 1 处，实际 ' + marked.length)
+    assert.ok(typeof marked[0].props.onClick === 'function', '失败红标应当可点（切到导入/收纳视图看细节）')
   } finally { fakeReact.__setPreset(null) }
 })
 

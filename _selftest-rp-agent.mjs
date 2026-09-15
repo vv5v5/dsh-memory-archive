@@ -628,6 +628,55 @@ let afterWrite = null
     readFileSync(targetFile, 'utf8') === beforeText && readdirSync(backupDir).length === beforeBackups)
 }
 
+// ---- 注释保全校验：块标量正文里的 `#` 行**不是**注释（2026-09-16 真机 bug 回归） ----
+// 为什么单列一节：真机预设 117 条 `#` 行里有 6 条是 customInstruction 块**内容**（`## 时间跨度`…`## 标签`）。
+// 旧实现把它们当注释数 ⇒ 换掉整块就"丢 6 条" ⇒ VERIFY_FAILED 自动回滚 ⇒ **应用只能成功一次**。
+// 原自检台的 COMPOSITION 夹具正文里没有 `#` 行，所以这个 bug 从它手里漏过去了（覆盖缺口）。
+{
+  const ORIG = [
+    '# 顶部注释（块外，必须保）',
+    'plugins:',
+    '  - id: compaction',
+    '    config:',
+    '      - id: compaction-rp',
+    '        config:',
+    '          customInstruction: |-',
+    '            ## 时间跨度',
+    '            （故事内时间）',
+    '            ## 标签',
+    '            tags: {"vibe":"Suspense"}',
+    '          faithful: true',
+    '  # 中间注释（块外，必须保）',
+    '  - id: tail',
+  ].join('\n')
+  const REPLACED = [
+    '# 顶部注释（块外，必须保）',
+    'plugins:',
+    '  - id: compaction',
+    '    config:',
+    '      - id: compaction-rp',
+    '        config:',
+    '          customInstruction: |-',
+    '            只输出一行：OK',
+    '          faithful: true',
+    '  # 中间注释（块外，必须保）',
+    '  - id: tail',
+  ].join('\n')
+  check('⑮-1 ★ 块标量正文里的 `#` 行不算注释 ⇒ 换掉整块仍判"注释保全"（旧实现这里必红）',
+    rp.commentsPreserved(ORIG, REPLACED) === true)
+  check('⑮-2 反证：**块外**真注释被删掉 ⇒ 必须判 false（放宽的是块内容，不是整个校验）',
+    rp.commentsPreserved(ORIG, REPLACED.replace('# 中间注释（块外，必须保）\n', '')) === false)
+  check('⑮-3 反证：块外注释被删但块内容原样 ⇒ 仍判 false',
+    rp.commentsPreserved(ORIG, ORIG.replace('# 顶部注释（块外，必须保）\n', '')) === false)
+  // 头行的其它合法形态也要能识别（`|-  # 尾注释` / `>` 折叠 / 显式缩进 `|2`）
+  for (const [label, header] of [['尾注释', '          customInstruction: |-  # 尾注释'], ['折叠 >', '          customInstruction: >'],
+    ['显式缩进 |2', '          customInstruction: |2']]) {
+    const o = ['          # 块外真注释', header, '            ## 伪注释行'].join('\n')
+    const n = ['          # 块外真注释', header, '            新正文'].join('\n')
+    check(`⑮-4 头行形态「${label}」也被正确跳过块内容`, rp.commentsPreserved(o, n) === true)
+  }
+}
+
 // ---- 清理 ----
 rmSync(baseTmp, { recursive: true, force: true })
 check('临时根已删除', !existsSync(baseTmp))

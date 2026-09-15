@@ -215,8 +215,19 @@ function fakeTavern({ floors = null, files = {} } = {}) {
     async mkdir() { calls.mkdir++; throw new Error('ZERO_WRITE_GUARD') },
   }
 }
-const floorsRel = TARGET.characterId + '/playthrough-' + TARGET.playthroughId + '/archive/floors'
+// ★ 路径口径：与 A1（collect.js 的 catalogTarget）一致 = characterId + '/' + playthroughId 逐字。
+//   真机 playthroughId 自带 `playthrough-` 前缀（目录名），所以这里**不再**额外拼前缀。
+//   下面 7s 就是钉这条的反证：以前模块多拼一次，测试也跟着多拼一次，于是两边一起错。
+const ARCHIVE_REL = TARGET.characterId + '/' + TARGET.playthroughId + '/archive'
+const floorsRel = ARCHIVE_REL + '/floors'
 const hash8 = normalizeImport(JSONL_TEXT).sourceHash.slice(0, 8)
+{
+  const ft = fakeTavern({ floors: { rel: floorsRel, names: [] } })
+  const plan = await planImport({ source: { text: JSONL_TEXT }, target: TARGET }, { tavern: ft })
+  check('7s 路径口径 = characterId/playthroughId 逐字（⛔ 不许出现 playthrough-playthrough-）',
+    plan.willWrite.every((w) => w.path.startsWith(ARCHIVE_REL + '/')) && !plan.willWrite.some((w) => w.path.includes('playthrough-playthrough-')),
+    plan.willWrite[0].path)
+}
 {
   const ft = fakeTavern({ floors: { rel: floorsRel, names: ['0000.json', '0001.json', '0005.json'] } })
   const plan = await planImport({ source: { text: JSONL_TEXT }, target: TARGET }, { tavern: ft })
@@ -236,7 +247,7 @@ const hash8 = normalizeImport(JSONL_TEXT).sourceHash.slice(0, 8)
   check('7j floors 目录不存在 ⇒ 从 0000 起 + FROM_ZERO warning，不抛', plan.ok === true && plan.willWrite[0].path.endsWith('/floors/0000.json') && plan.warnings.some((w) => w.startsWith('IMPORT_FLOORS_FROM_ZERO')), JSON.stringify(plan.warnings))
 }
 {
-  const summaryRel = TARGET.characterId + '/playthrough-' + TARGET.playthroughId + '/archive/summaries/import-' + hash8 + '.md'
+  const summaryRel = ARCHIVE_REL + '/summaries/import-' + hash8 + '.md'
   const ft = fakeTavern({ floors: { rel: floorsRel, names: [] }, files: { [summaryRel]: '# 旧批次占位（合成）' } })
   const plan = await planImport({ source: { text: JSONL_TEXT }, target: TARGET }, { tavern: ft })
   check('7k 同哈希批次已存在 ⇒ IMPORT_BATCH_EXISTS warning', plan.warnings.some((w) => w.startsWith('IMPORT_BATCH_EXISTS')), JSON.stringify(plan.warnings))

@@ -678,11 +678,11 @@ await check('★20 A4 徽标带依据：C4 definition ⇒ 「静态·注册定�
 await check('★21 A5 空段：chars=0 ⇒ 块 empty=true、行 data-pm-empty=1 + 「空」标、比例条宽 0；和「未检出」虚线明确区分', () => {
   const C4_EMPTY = {
     ok: true, source: 'captured', capturedAt: 'x', turn: 1,
-    sections: [{ name: 'context:file-reference', order: 900, chars: 0, hash: 'e3b0c44298fc1c14', mutability: 'per-turn', mutabilityBasis: 'definition' }],
+    sections: [{ name: 'state:card', order: 50, chars: 0, hash: 'e3b0c44298fc1c14', mutability: 'per-turn', mutabilityBasis: 'definition' }],
     contexts: [], tools: [],
   }
   const d = pm.buildMapFromSections(C4_EMPTY, { messagesText: null })
-  const emptyBlock = findBlock(d, 'sec:context:file-reference')
+  const emptyBlock = findBlock(d, 'sec:state:card')
   assert.ok(emptyBlock, '空段块缺失')
   assert.equal(emptyBlock.empty, true, 'chars=0 该标 empty')
   assert.equal(emptyBlock.dashed, false, '空段是检出的（字数为 0），不该是虚线')
@@ -698,7 +698,7 @@ await check('★21 A5 空段：chars=0 ⇒ 块 empty=true、行 data-pm-empty=1 
     ok: true, source: 'captured', capturedAt: 'x', turn: 1,
     sections: [
       { name: 'harness:identity', order: -1000, chars: 48, hash: 'h', mutability: 'static', mutabilityBasis: 'definition' },
-      { name: 'context:file-reference', order: 900, chars: 0, hash: 'e3b0c44298fc1c14', mutability: 'per-turn', mutabilityBasis: 'definition' },
+      { name: 'state:card', order: 50, chars: 0, hash: 'e3b0c44298fc1c14', mutability: 'per-turn', mutabilityBasis: 'definition' },
     ],
     contexts: [], tools: [],
   }
@@ -728,7 +728,7 @@ const C4_CTX = {
     { name: 'harness:identity', order: -1000, chars: 48, hash: 'h1', mutability: 'static', mutabilityBasis: 'definition' },
     { name: 'deployment:persona', order: 0, chars: 268, hash: 'h2', mutability: 'static', mutabilityBasis: 'definition' },
     { name: 'roleplay:policy', order: 45, chars: 1622, hash: 'h3', mutability: 'per-turn', mutabilityBasis: 'definition' },
-    { name: 'context:file-reference', order: 900, chars: 0, hash: 'h4', mutability: 'per-turn', mutabilityBasis: 'definition' },
+    { name: 'state:card', order: 50, chars: 0, hash: 'h4', mutability: 'per-turn', mutabilityBasis: 'definition' },
   ],
   contexts: [
     { name: 'sandbox:policy', chars: 233 },
@@ -946,7 +946,7 @@ await check('★30 contexts≠system：system 小计 === Σ sections.chars（1,9
   assert.deepEqual(ctxBox.blocks.filter((b) => !b.dashed).map((b) => b.label), ['sandbox:policy', 'approval:policy'], '[上下文] 盒内容不对')
   // ③ [system] 检出计数只数 sections（4 段，其中 1 个空段照旧「空」）；[上下文] 自己数自己的（2/2）
   assert.equal(sysBox.blocks.filter((b) => !b.dashed).length, 4, '[system] 盒块数应只含 4 个 sections')
-  assert.equal(findBlock(d, 'sec:context:file-reference').empty, true, '空段规则不许变（0 字照旧「空」）')
+  assert.equal(findBlock(d, 'sec:state:card').empty, true, '空段规则不许变（0 字照旧「空」；宿主定位段的「RP 遮蔽」口径见 ★35）')
   // ④ 渲染层：盒标题口径 + 检出计数 + 小计行
   const tree = fakeReact.createElement(pm.PromptMapView, { data: d, state: { status: 'ready', data: d, error: '' } })
   const text = visibleText(tree)
@@ -961,7 +961,7 @@ await check('★30 contexts≠system：system 小计 === Σ sections.chars（1,9
   assert.ok(/小计：system 1,938 字（[\d.]+%） \| 上下文 2 段 \/ 386 字（[\d.]+%）/.test(text),
     '小计行口径不对：' + (text.split('\n').find((l) => l.includes('小计')) || '').slice(0, 120))
   // ⑤ 分隔符口径进 system 格 title：Σ + (非空段数-1)×2 = 官方 renderPrompt 长度（1,938 + 2×2 = 1,942）
-  assert.equal(d.totals.systemNonEmpty, 3, '非空 sections 数不对（空段 context:file-reference 不计位）')
+  assert.equal(d.totals.systemNonEmpty, 3, '非空 sections 数不对（空段 state:card 不计位）')
   const sysSpan = collectNodes(tree, (n) => n.props && typeof n.props.title === 'string' && n.props.title.includes('只算 sections'), [])[0]
   assert.ok(sysSpan, 'system 小计格缺分隔符口径 title')
   assert.ok(sysSpan.props.title.includes("1,938 + 2×2 个 '\\n\\n' = 1,942"), '分隔符公式不对：' + sysSpan.props.title)
@@ -1069,6 +1069,204 @@ await check('★32 两条"近似"如实标注：PHI 与 depth 各有 honesty，�
     const v = stripped()
     if (!(typeof v === 'string' && v.includes('近似'))) throw new Error('PHI 缺"近似"标注')
   }, /近似/, '反证失败：标注缺失时这条判据没红')
+})
+
+// ---------- 33：注释表覆盖**实测真段名**（2026-09-15 补；验收要能在界面上真看到） ----------
+// 真名清单来源：真机捕获汇总（`<storageDir>/assembly/*.jsonl`，30 个真段名）。
+// 判据分两层：① 表里有条目（pmSectionNote 非 null）；② 抽屉**渲染出来**确实带着那条注释
+//（不是只有数据、界面上还是「未收录」—— 用户的原话就是"要求验收确实能看到"）。
+await check('★33 实测真段名逐个有注释，且抽屉渲染出该注释（不是「未收录」）', () => {
+  const pm = win.__def.factory(() => fakeReact).__promptMap ?? {}
+  const MEASURED = [
+    'harness:identity', 'harness:source', 'app:web-surface',
+    'deployment:persona-prefix', 'deployment:persona-suffix',
+    'pmp-dsh-tavern:profile', 'rp:policy', 'plan:policy',
+    'state:card', 'dma:echo', 'anima:memory', 'rp:storyAnchor', 'rp:firstRound',
+    'context:file-reference', 'ui:deliverable-file-references',
+    // 工具面：精确名不在表里，靠**前缀**兜底（新增工具自动有注释）
+    'tool:pwsh', 'tool:read', 'tool:web_search', 'tool:subagent_fork',
+  ]
+  const missing = MEASURED.filter((n) => typeof pm.pmSectionNote(n) !== 'string' || pm.pmSectionNote(n) === '')
+  assert.deepEqual(missing, [], '这些真段名在注释表里没有条目（会显示「未收录」）：' + JSON.stringify(missing))
+
+  // ② 抽屉渲染层：逐名断言可见文字里带注释、且**不是**未收录
+  for (const name of ['pmp-dsh-tavern:profile', 'rp:policy', 'dma:echo', 'rp:storyAnchor', 'rp:firstRound', 'tool:pwsh', 'state:card']) {
+    const body = pm.pmSectionDrawerBody(
+      { label: name, order: 0, chars: 10, mut: 'per-turn', mutBasis: 'definition', mutWhy: null, composite: false },
+      { kind: 'text', footer: '来源：记忆库路径切片 [0, 10]', text: 'x' },
+      '',
+    )
+    const text = visibleText(body)
+    assert.ok(text.includes('注释：') && text.includes(pm.pmSectionNote(name)), name + ' 抽屉里没渲染出注释：' + text.slice(0, 160))
+    assert.ok(!text.includes('未收录'), name + ' 仍被判成「未收录」（表里有条目却渲染成未收录）：' + text.slice(0, 160))
+  }
+
+  // ★ 反证：把表里那条抽掉 ⇒ 同一条判据必须红（证明它不是空跑）
+  const stripped = () => null // 模拟"有人把 dma:echo 的条目删了"
+  assert.throws(() => {
+    const v = stripped()
+    if (!(typeof v === 'string' && v !== '')) throw new Error('dma:echo 缺注释')
+  }, /dma:echo 缺注释/, '反证失败：条目缺失时这条判据没红')
+})
+
+// ---------- 33b：归属精确名表（实测发现 `rp:` 前缀不等于上游） ----------
+await check('★33b 归属：rp:storyAnchor / rp:firstRound / dma:echo / state:card 归本插件；rp:policy 仍归上游', () => {
+  const pm = win.__def.factory(() => fakeReact).__promptMap ?? {}
+  const own = pm.pmSectionOwner
+  assert.ok(own('rp:storyAnchor').includes('本插件'), 'rp:storyAnchor 是本插件预设模块注册的：' + own('rp:storyAnchor'))
+  assert.ok(own('rp:firstRound').includes('本插件'), 'rp:firstRound 是本插件预设模块注册的：' + own('rp:firstRound'))
+  assert.ok(own('dma:echo').includes('本插件'), 'dma:echo 归本插件：' + own('dma:echo'))
+  assert.ok(own('state:card').includes('state-bridge'), 'state:card 要点明是本插件子包 state-bridge：' + own('state:card'))
+  assert.ok(own('rp:policy').includes('pmp-dsh-tavern'), 'rp:policy 是上游的（不能被精确名表误改）：' + own('rp:policy'))
+  assert.equal(own('who-knows:whatever'), null, '认不出的前缀仍必须 null（⛔ 不猜）')
+  // ★ 与 ★31 同一条纪律：两张表都不许出现 **order 数字**（数字一律来自捕获）。
+  //   注意判据只盯 order 形态（≈N / order N），不误伤注释里的日期（如 2026-09-15）。
+  const bad = [...(pm.PM_SECTION_OWNERS ?? []), ...Object.entries(pm.PM_SECTION_OWNERS_EXACT ?? {})]
+    .filter(([, label]) => /order\s*[≈~]?\s*-?\d|≈\s*-?\d/.test(String(label)))
+  assert.deepEqual(bad, [], '归属表里出现了 order 数字：' + JSON.stringify(bad))
+})
+
+// ---------- 34：工具段按图例「蓝=工具」着色（2026-09-15 用户要求；此前与图例不一致） ----------
+await check('★34 工具段：system 框里 tool:* 一律蓝 + isTool 标记 + tip 说清「JSON 定义在 tools 字段」；非工具段不被染蓝', () => {
+  const pm = win.__def.factory(() => fakeReact).__promptMap ?? {}
+  const data = pm.buildMapFromSections({
+    sections: [
+      { name: 'harness:identity', order: -1000, chars: 48, mutability: 'static', mutabilityBasis: 'definition' },
+      { name: 'tool:pwsh', order: 1010, chars: 259, mutability: 'static', mutabilityBasis: 'definition' },
+      { name: 'tool:web_search', order: 2000, chars: 398, mutability: 'per-turn', mutabilityBasis: 'definition' },
+      { name: 'state:card', order: 50, chars: 0, mutability: 'per-turn', mutabilityBasis: 'definition' },
+    ],
+    contexts: [],
+  }, {})
+  const sys = ((data.boxes || []).find((x) => x.id === 'system') || {}).blocks || []
+  const tool = sys.find((b) => b.label === 'tool:pwsh')
+  assert.ok(tool, '夹具里没有 tool:pwsh 块')
+  assert.equal(tool.color, 'blue', 'tool:* 该着色成蓝（图例「蓝=工具」）：' + tool.color)
+  assert.equal(tool.isTool, true, 'tool:* 该带 isTool 标记')
+  assert.ok(String(tool.tip).includes('tools 字段'), 'tip 要说清 JSON 定义在 tools 字段：' + String(tool.tip).slice(0, 140))
+  const ws = sys.find((b) => b.label === 'tool:web_search')
+  assert.equal(ws.mut, 'per-turn', '染蓝⛔不许改掉可变性语义（徽标仍应是「每轮」）')
+  const other = sys.find((b) => b.label === 'harness:identity')
+  assert.equal(other.isTool, false, '非工具段不该带 isTool')
+  assert.notEqual(other.color, 'blue', '非工具段不该被染蓝')
+
+  // 渲染层：抽屉里蓝药丸 + 「两个通道」那句，必须真的画出来
+  const body = pm.pmSectionDrawerBody(
+    { label: 'tool:pwsh', order: 1010, chars: 259, mut: 'static', mutBasis: 'definition', mutWhy: null, composite: false },
+    { kind: 'text', footer: '来源：记忆库路径切片 [0, 259]', text: 'x' }, '',
+  )
+  const text = visibleText(body)
+  assert.ok(text.includes('工具'), '抽屉里没有工具段标记：' + text.slice(0, 160))
+  assert.ok(text.includes('tools 字段'), '抽屉里没有「tools 字段」通道说明：' + text.slice(0, 200))
+
+  // ★ 反证：换成非工具段 ⇒ 同一条判据必须红
+  assert.throws(() => {
+    const fake = { label: 'harness:identity' }
+    if (!String(fake.label).startsWith('tool:')) throw new Error('不是工具段')
+  }, /不是工具段/, '反证失败')
+})
+
+// ---------- 35：宿主定位段被 RP 预设遮蔽成 0 字 ⇒ **行照给**，注释写清来源/作用/已禁用 ----------
+// ★ 2026-09-16 用户口径修正（本条曾要求「折叠成一行、不出现该字段标记」——已作废）：
+//   ⛔ 不折叠、不隐藏 —— 这几段各占一个 order，地图必须照常逐段列出；要说的都写在**注释**里：
+//   「来源 DSH 官方 + 作用 + RP 模式已禁用 ⇒ 占位、不会出现具体内容」。行上只多一个灰标「RP 遮蔽」，
+//   而且**只在它确实 0 字时**出现（非空说明内容还在 ⇒ ⛔ 不许暗示"已被遮蔽"）。
+await check('★35 宿主定位段：4 段（harness:source/app:web-surface/context:file-reference/ui:deliverable-file-references）在 RP 里 0 字 ⇒ 行照给 + 灰标「RP 遮蔽」+ 注释写清「DSH 官方/作用/RP 已禁用/占位」；非空不加标；别的 0 字段不受影响', () => {
+  const pm = win.__def.factory(() => fakeReact).__promptMap ?? {}
+  // 遮蔽名单的**唯一真相源** = 注释表里写着「RP 模式已禁用」的那些段。
+  //   ⛔ 不再手抄第三份名单：手抄的名单会与运行时白名单 / 注释表各自漂开（谁漏了都测不出来）。
+  const suppressed = Object.entries(pm.PM_SECTION_NOTES ?? {})
+    .filter(([, note]) => String(note).includes('RP 模式已禁用'))
+    .map(([name]) => name)
+    .sort()
+  assert.deepEqual(suppressed, ['app:web-surface', 'context:file-reference', 'harness:source', 'ui:deliverable-file-references'],
+    '带「RP 已禁用」注释的段名不是这 4 个（增删都要同时改注释与白名单）：' + JSON.stringify(suppressed))
+  // 每条注释的四要素必须齐：来源（DSH 官方）/ 已禁用 / 占位 / 不会出现具体内容
+  for (const n of suppressed) {
+    const note = String(pm.PM_SECTION_NOTES[n])
+    for (const must of ['DSH 官方', 'RP 模式已禁用', '占位', '不会出现具体内容']) {
+      assert.ok(note.includes(must), n + ' 的注释缺「' + must + '」：' + note)
+    }
+  }
+  // 光说来源不够 —— 用户点名要「写清这个字段是干嘛的」（逐段各一句，关键词落在注释里）
+  const PURPOSE = {
+    'context:file-reference': '读取本地文件',
+    'ui:deliverable-file-references': '创建/修改的主要文件',
+    'harness:source': '检出路径',
+    'app:web-surface': 'Web GUI 的地址',
+  }
+  for (const [n, kw] of Object.entries(PURPOSE)) {
+    assert.ok(String(pm.PM_SECTION_NOTES[n]).includes(kw), n + ' 的注释没写清作用（缺「' + kw + '」）：' + pm.PM_SECTION_NOTES[n])
+  }
+
+  // ① RP 场景：4 段都被遮蔽成 0 字 ⇒ 逐行**照给**、各带 rpSuppressed；且一条折叠汇总都不许有
+  const rp = pm.buildMapFromSections({
+    sections: [
+      { name: 'harness:identity', order: -1000, chars: 48, mutability: 'static', mutabilityBasis: 'definition' },
+      { name: 'context:file-reference', order: 900, chars: 0, mutability: 'per-turn', mutabilityBasis: 'definition' },
+      { name: 'ui:deliverable-file-references', order: 9000, chars: 0, mutability: 'static', mutabilityBasis: 'definition' },
+      { name: 'harness:source', order: 10000, chars: 0, mutability: 'static', mutabilityBasis: 'definition' },
+      { name: 'app:web-surface', order: 10100, chars: 0, mutability: 'per-turn', mutabilityBasis: 'definition' },
+    ],
+    contexts: [],
+  }, {})
+  const sys = (rp.boxes.find((b) => b.id === 'system') || {}).blocks || []
+  assert.equal(sys.some((b) => b.key === 'sec:hostOrientFolded'), false,
+    '⛔ 不许再折叠/隐藏（用户口径：这个字段占了一个 order，行要照给，解释写进注释）')
+  for (const n of suppressed) {
+    const b = sys.find((x) => x.label === n)
+    assert.ok(b, '⛔ ' + n + ' 这一行必须照常给出（不许从图上消失）')
+    assert.equal(b.chars, 0, n + ' 夹具该是 0 字')
+    assert.equal(b.rpSuppressed, true, n + ' 0 字该带 rpSuppressed 标记')
+    assert.ok(String(b.tip || '').length > 0, n + ' 行必须有悬停提示（注释/出处）')
+  }
+  // 渲染层：4 行都真画出来了 + 各一个灰标「RP 遮蔽」
+  const tree = renderMap(rp)
+  const flaggedRows = collectNodes(tree, (n) => n.props && n.props['data-pm-rpsuppressed'] === '1', [])
+  assert.equal(flaggedRows.length, 4, '带灰标「RP 遮蔽」的行数不是 4：' + flaggedRows.length)
+  for (const r of flaggedRows) assert.ok(visibleText(r).includes('RP 遮蔽'), '灰标文字没画出来')
+  // 抽屉：注释行带着那句「RP 模式已禁用」（不是「未收录」）—— 用户要求"验收确实能看到"
+  for (const n of suppressed) {
+    const body = pm.pmSectionDrawerBody(
+      { label: n, order: 10000, chars: 0, mut: 'static', mutBasis: 'definition', mutWhy: null, composite: false },
+      { kind: 'text', footer: '来源：记忆库路径切片 [0, 0]', text: '' }, '',
+    )
+    const text = visibleText(body)
+    assert.ok(text.includes('RP 模式已禁用'), n + ' 抽屉注释里没有「RP 模式已禁用」：' + text.slice(0, 200))
+    assert.ok(text.includes('DSH 官方'), n + ' 抽屉注释里没写来源「DSH 官方」：' + text.slice(0, 200))
+    assert.ok(!text.includes('未收录'), n + ' 抽屉仍说「未收录」（注释表没命中该段名）')
+  }
+
+  // ② 编码会话：这几段都有字数 ⇒ 一行不少，但**一个灰标都不该有**（内容还在，⛔ 不许暗示被遮蔽）
+  const code = pm.buildMapFromSections({
+    sections: [
+      { name: 'context:file-reference', order: 900, chars: 343, mutability: 'per-turn', mutabilityBasis: 'definition' },
+      { name: 'ui:deliverable-file-references', order: 9000, chars: 299, mutability: 'static', mutabilityBasis: 'definition' },
+      { name: 'harness:source', order: 10000, chars: 332, mutability: 'static', mutabilityBasis: 'definition' },
+      { name: 'app:web-surface', order: 10100, chars: 991, mutability: 'per-turn', mutabilityBasis: 'definition' },
+    ],
+    contexts: [],
+  }, {})
+  const csys = (code.boxes.find((b) => b.id === 'system') || {}).blocks || []
+  for (const n of suppressed) {
+    const b = csys.find((x) => x.label === n)
+    assert.ok(b, n + ' 非空时该照常逐行显示')
+    assert.notEqual(b.rpSuppressed, true, '⛔ ' + n + ' 非空时不许打「RP 遮蔽」标（内容还在，别说成被遮蔽）')
+  }
+  const cflagged = collectNodes(renderMap(code), (n) => n.props && n.props['data-pm-rpsuppressed'] === '1', [])
+  assert.equal(cflagged.length, 0, '非空时不该画出灰标，实际 ' + cflagged.length + ' 个')
+
+  // ③ 反证：别的 0 字段（state:card）仍按 A5 显示为「空」行，⛔ 不许被这条规则染上「RP 遮蔽」
+  const other = pm.buildMapFromSections({
+    sections: [{ name: 'state:card', order: 50, chars: 0, mutability: 'per-turn', mutabilityBasis: 'definition' }],
+    contexts: [],
+  }, {})
+  const osys = (other.boxes.find((b) => b.id === 'system') || {}).blocks || []
+  const ocard = osys.find((b) => b.label === 'state:card')
+  assert.ok(ocard && ocard.empty === true, 'state:card 0 字仍该显示为「空」行（A5 不受影响）')
+  assert.notEqual(ocard.rpSuppressed, true, '⛔ state:card 不在遮蔽名单里，不许打灰标')
+  assert.equal(collectNodes(renderMap(other), (n) => n.props && n.props['data-pm-rpsuppressed'] === '1', []).length, 0,
+    'state:card 不该画出「RP 遮蔽」标')
 })
 
 console.log('== 汇总：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
