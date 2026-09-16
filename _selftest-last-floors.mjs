@@ -5,7 +5,7 @@
 import {
   LAST_FLOORS_VERSION, LAST_FLOORS_SECTION_NAME, LAST_FLOORS_ORDER,
   DEFAULT_LAST_FLOORS_COUNT, DEFAULT_LAST_FLOORS_MAX_CHARS, LAST_FLOORS_PREAMBLE,
-  readSwitch, pickRecentFloors, renderRecentFloors, decideInject, findOrderConflicts,
+  readSwitch, pickRecentFloors, renderRecentFloors, decideInject, findOrderConflicts, isFirstTurn,
 } from './lib/last-floors.js'
 
 let pass = 0
@@ -158,6 +158,21 @@ console.log('\nL7 findOrderConflicts')
   check('L7e', '无 order / 坏条目 ⇒ 跳过不抛',
     findOrderConflicts([{ name: 'a' }, null, { name: 'b', order: 'x' }], 10202, OURS).length === 0)
   check('L7f', 'ourOrder 非数 ⇒ 不放炮', findOrderConflicts([{ name: 'a', order: 99999 }], NaN, OURS).length === 0)
+}
+
+// ───────────────────────────── L7b 首轮判据（真机踩过的那个坑） ─────────────────────────────
+console.log('\nL7b isFirstTurn（轮号 → 是不是首轮）')
+{
+  check('L7b-1', '轮号 1 ⇒ 首轮（真机实测：turnBoundary.lastTurn 首轮就是 1）', isFirstTurn(1) === true)
+  check('L7b-2', '轮号 0 ⇒ 首轮（另一种语义：已完成轮 0 起）', isFirstTurn(0) === true)
+  check('L7b-3', '轮号 2 ⇒ 不是首轮', isFirstTurn(2) === false)
+  check('L7b-4', '轮号 5 ⇒ 不是首轮', isFirstTurn(5) === false)
+  check('L7b-5', '负数/NaN/undefined/null/字符串 ⇒ 一律不是首轮（判不出就不注）', (() => {
+    for (const v of [-1, NaN, Infinity, undefined, null, '1', {}, []]) if (isFirstTurn(v) !== false) return false
+    return true
+  })())
+  check('L7b-6', '★ 反证：旧写法 `=== 0` 会把首轮（轮号 1）判成 false —— 这正是真机 chars=0 的原因',
+    (1 === 0) === false && isFirstTurn(1) === true)
 }
 
 // ───────────────────────────── L8 端到端拼装 ─────────────────────────────
