@@ -4,6 +4,34 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+> v3 消费端（Tavern 外部组合 API）：**代码到位、默认关**。开着才接管装配；关着与今天完全一样。
+
+### Added
+
+- **v3 组合器**（`lib/v3-composer.js`）：经 Cordis 服务 `pmpDshTavernPrompt` 注册一个**同步**组合器
+  （owner 默认 `dsh-memory-archive`）。会话被显式切成 `external` 后由我们产出命名段：
+  卡字段（system-prompt / description / personality / scenario / message-example）、**本轮命中**的世界书条目
+  （命中判定读 `runtime.worldBookAudit…decisions`，读不到就退回候选集并在来源标记里**如实写明**）、
+  后置指令、**仅首轮**的开场（`runtime.greetingReferenceApplies`）、一行 `[external-composition owner=… v=…]` 来源标记。
+  ⛔ 不做（诚实边界）：ST 完整 marker/宏策略、`prompt_order` 重排、深度注入精确插入位、token 预算裁剪。
+- **`GET /v3`**：capabilities + 本会话 mode + sources **摘要**（卡 id/名、开场序号与语义、各字段字数、世界书计数、
+  suggestedCallConfig、revision）+ 我方组合器状态（含 `needsHostRestart`）。⛔ 只回投影，不回卡片正文。
+- **`POST /v3/mode`**：显式切 builtin/external（先读 revision 做 CAS；**必须 `confirm:true`**；409 的两种原因如实提示）。
+- **维护抽屉里的「v3 外部组合」面板**：上面这份投影 + 三个显式动作（启用我方组合器 / 切到 external / 切回 builtin）。
+- 两个自检台：`_selftest-v3-composer.mjs`（12 项，含"退回候选集必须标注""改判据必须红"两条反证）、
+  `_selftest-v3-panel.mjs`（8 项，含"卡片正文不进面板""没注册不许显示成已生效"两条反证）。
+
+### Notes
+
+- **默认关**（`config.v3.composer.enabled=false`）：今天卡字段/世界书明细靠 `pmp-dsh-tavern:profile`
+  + `/api/v1/traces` 已经够用，v3 是"换活法"不是修 bug。改这个开关要**重启宿主**（注册发生在插件加载时），
+  `/v3` 投影里的 `needsHostRestart` 会如实说。
+- 组合器走**软注入**（`ctx.inject([...], cb)`）：硬 `inject: ['pmpDshTavernPrompt']` 的插件在 Tavern 被卸载后
+  会让整个 Host 起不来（沙箱实测：`1 entry did not activate`）。
+- `callConfig` 默认**不回传**（上游"推荐回传还是省略"那一问未定前的保守选择，可开 `echoSuggestedCallConfig`）。
+
 ## [0.5.0] - 2026-09-16
 
 > 面板侧收口：**提示词装配地图把每个字段的来路说清**，RP 预设遮蔽掉「给编码 agent 用的定位文字」，

@@ -844,6 +844,10 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     ['POST', '/import/apply'],
     // 自动收纳的状态出口（2026-09-15：压缩后自动收，失败要播报 ⇒ 顶栏红标读它）
     ['GET', '/auto-collect'],
+    // v3 消费端（2026-09-16）：维护抽屉的「v3 外部组合」面板读投影 + 两个显式动作
+    // （面板那条 PUT /config 走的是表里已有的 ['PUT','/config']，这里两条是新端点）
+    ['GET', '/v3'],
+    ['POST', '/v3/mode'],
   ]
   const found = [...src.matchAll(/HOST_API_BASE \+ '([^']+)'/g)].map((m) => m[1].split('?')[0])
   assert.ok(found.length > 0, '源码里没有任何 HOST_API_BASE + rest 调用')
