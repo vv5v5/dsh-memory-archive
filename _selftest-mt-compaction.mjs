@@ -92,12 +92,16 @@ check('resolveInstruction 非空 + en ⇒ 追加英文提示', ri('MY RULE', 'en
 const builtinZh = ri('', 'auto', true)
 const builtinZhFaithless = ri('', 'auto', false)
 const builtinEn = ri('', 'en', true)
-check('resolveInstruction 空 + auto ⇒ 内置中文 RP 模板（含时间跨度/未回收伏笔节）',
-  builtinZh.includes('## 时间跨度') && builtinZh.includes('## 未回收的伏笔') && builtinZh.includes('## 关键事件'),
+// 2026-09-16 起内置模板 = anima 总结提示词原文（逐字），它自带 `Language: Summary in Chinese`
+// 与输出骨架，因此 zh/en/faithful 都不再分叉 —— 这不是「开关失效」，是只有一份原文。
+const ANIMA_MARKERS = ['# Summarization Guidelines', 'RAW JSON Array', 'Language: Summary in Chinese']
+check('resolveInstruction 空 + auto ⇒ anima 总结提示词原文（逐字）',
+  ANIMA_MARKERS.every((m) => builtinZh.includes(m)),
   builtinZh.slice(0, 60))
-check('resolveInstruction 空 + en ⇒ 内置英文模板（Time span/Open threads）',
-  builtinEn.includes('## Time span') && builtinEn.includes('## Open threads'), builtinEn.slice(0, 60))
-check('faithful 开关真实生效（逐字照抄 vs 轻度转写是两份不同模板）', builtinZh !== builtinZhFaithless)
+check('resolveInstruction 空 + en ⇒ 同一份 anima 原文（anima 自带语言声明，不另出英文版）',
+  builtinEn === builtinZh && ANIMA_MARKERS.every((m) => builtinEn.includes(m)), builtinEn.slice(0, 60))
+check('faithful 不再分叉（anima 原文自带逐字/语言要求，没有第二份变体）—— 显式记录该语义变更',
+  builtinZh === builtinZhFaithless && !builtinZh.includes('## 时间跨度'))
 
 // ---- 2)+3) 官方包真解析：子进程 cwd=DSH 检出，让生成物自己的「宿主锚点」策略真命中 ----
 const dshRoot = process.env.MT_DSH_ROOT || join(repo, '..', 'deepseek-harness')
@@ -216,7 +220,7 @@ try {
   out.instanceErr = instanceErr
   out.resolveInstructionStillWorks = (() => {
     try {
-      return mod.resolveInstruction('', 'auto', true).includes('## 时间跨度')
+      return mod.resolveInstruction('', 'auto', true).includes('# Summarization Guidelines')
     } catch {
       return false
     }

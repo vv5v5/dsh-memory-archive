@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 
 import {
   SKILLS, KNOWLEDGE, NEG_BOOL, FREE_MAPS, ROOT_KEYS, IP_THRESHOLDS,
-  buildToolSchema, allowedChangeKeys, keyStructureText, TIMED_MAPS,
+  changeSchema, allowedChangeKeys, keyStructureText, TIMED_MAPS,
 } from '../lib/schema.js'
 import {
   emptyStatus, normalizeStatus, mergeMap, mergeStatus, countNewMechanics,
@@ -33,12 +33,11 @@ test('工具 schema 的 change 键是根键的子集，且覆盖全部可写根�
 })
 
 test('schema 是合法 JSON（可序列化、无循环）', () => {
-  const s = buildToolSchema()
+  const s = changeSchema()
   assert.deepEqual(JSON.parse(JSON.stringify(s)), s)
-  assert.deepEqual(s.function.parameters.required, ['summary', 'change'])
   // change 的 required 必须为空 —— 允许"本轮无事发生"是刻意的合法出口
-  assert.equal(s.function.parameters.properties.change.required, undefined)
-  assert.equal(s.function.parameters.properties.change.additionalProperties, false)
+  assert.equal(s.required, undefined)
+  assert.equal(s.additionalProperties, false)
 })
 
 test('20 技能 / 12 知识 / 4 布尔位 / 7 自由容器 / 2 计时容器', () => {

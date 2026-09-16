@@ -431,6 +431,56 @@ async function runAssertions(C, fake) {
       assert.equal(g.origin, null, 'GET 不该带 Origin（读写面行为最小化）：' + g.url)
     }
   })
+
+  // ---------------------------------------------------------------------------
+  // A11/A12：2026-09-16 事故回归 —— 「覆盖重导同一个源」被乐观锁误拦
+  //   （真因：expectedRevisions[摘要] 被写死 null，而摘要文件本来就存在）
+  // ---------------------------------------------------------------------------
+
+  await check('A11', '覆盖重导：摘要文件已存在 ⇒ 期望值=真身 sha（不再误报乐观锁）；未覆盖 ⇒ 明确拒', async () => {
+    const mdPath = A + '/archive/summaries/' + mdIdOf(0, 5) + '.md'
+    const body = floorsBody(A, 'a2', 0, 5, { overwrite: true })
+    const sp = C.summaryPathOf(body.target, body.summary, body.range)
+    assert.equal(sp.path, mdPath, 'summaryPathOf 口径应等于 seed 造的摘要路径（实际 ' + sp.path + '）')
+
+    const obs = await C.observeArchive(tavern, body.target, { overwrite: true, floors: body.floors, summaryPaths: [sp.path] })
+    assert.equal(obs.summaryShas.get(sp.path), sha(fake.files.get(mdPath)), 'summaryShas 应取到真身 sha')
+
+    const plan = C.planCollect(body, { observed: obs, now: () => Date.now() })
+    assert.equal(plan.expectedRevisions[sp.path], sha(fake.files.get(mdPath)), 'expectedRevisions[摘要] 必须是真身 sha（⛔ 不是 null）')
+    assert.ok(plan.warnings.some((w) => w.includes('将被覆盖')), '应有「摘要将被覆盖」warning：' + JSON.stringify(plan.warnings))
+    const r = await C.applyCollect(plan, { tavern, now: () => Date.now() })
+    assert.equal(r.ok, true, '覆盖重导 apply 应成功（⛔ 不许再抛 COLLECT_REVISION_CHANGED）')
+    assert.equal(r.readBack.find((x) => x.path === mdPath).sha256, plan.willWrite.find((w) => w.path === mdPath).sha256, '覆盖后的摘要 sha 应与 plan 一致')
+
+    // 反证：盘上有个**不在索引里**的摘要文件 + 未开覆盖 ⇒ 必须在 plan 阶段就明确拒（而不是 apply 时误报"被改过"）
+    const stray = mdIdOf(7, 7)
+    fake.files.set(A + '/archive/summaries/' + stray + '.md', synSum('stray', 7, 7))
+    const noOv = floorsBody(A, 'a3', 100, 101)
+    noOv.summary.id = stray
+    const obs2 = await C.observeArchive(tavern, noOv.target, { overwrite: false, floors: noOv.floors, summaryPaths: [C.summaryPathOf(noOv.target, noOv.summary, noOv.range).path] })
+    let threw = null
+    try { C.planCollect(noOv, { observed: obs2, now: () => Date.now() }) } catch (e) { threw = e }
+    assert.ok(threw, '摘要文件已存在且未覆盖 ⇒ 应拒')
+    assert.equal(threw.code, 'COLLECT_SUMMARY_EXISTS', '实际抛的是 ' + (threw && threw.code))
+    fake.files.delete(A + '/archive/summaries/' + stray + '.md')
+  })
+
+  await check('A12', '写前重核分级：目标文件「本来就存在」⇒ 文案说"已存在"（附 reason），不说"被改过"', async () => {
+    const body = floorsBody(B, 'b9', 9, 10)
+    const plan = C.planCollect(body, { observed: observe(fake, B, []), now: () => Date.now() })
+    const p9 = floorPathOf(B, 9)
+    fake.files.set(p9, JSON.stringify({ _floor: 9, is_user: true, is_system: false, mes: synMes('zz', 9), name: synName('u') }))
+    let threw = null
+    try { await C.applyCollect(plan, { tavern, now: () => Date.now() }) } catch (e) { threw = e }
+    assert.ok(threw, '应被写前重核拒绝')
+    assert.equal(threw.code, 'COLLECT_REVISION_CHANGED', '实际 ' + threw.code)
+    const c = (threw.conflicts || []).find((x) => x.path === p9)
+    assert.ok(c && c.reason === 'EXISTS', 'conflicts 应带 reason=EXISTS（实际 ' + JSON.stringify(threw.conflicts) + '）')
+    assert.ok(/已存在/.test(threw.message), '文案应说"已存在"（实际：' + threw.message + '）')
+    assert.ok(!/被改过/.test(threw.message), '⛔ 不该说"被改过"（实际：' + threw.message + '）')
+    fake.files.delete(p9)
+  })
 }
 
 // ---------------------------------------------------------------------------

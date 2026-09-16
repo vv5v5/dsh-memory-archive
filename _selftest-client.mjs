@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 /**
  * dsh-memory-archive · lib/client.js 自检（任务书 §5，v4.1 A 单版）
  * 用法：node _selftest-client.mjs
@@ -614,6 +614,8 @@ const FAKE_TPL = {
   templates: {
     compaction: { current: '压缩草稿甲', custom: false, builtin: '压缩内置乙', builtinEn: 'EN builtin 丙' },
     placeholder: { current: '占位草稿丁', custom: true, builtin: '占位内置戊' },
+    // ★ 破限头（2026-09-16）：默认空 —— 我们**不内置**任何破限文本，由玩家自填。
+    compactionJailbreak: { current: '', custom: false },
   },
   reference: { officialCompaction: 'OFFICIAL-COMPACTION-REF-己', officialPreamble: 'OFFICIAL-PREAMBLE-REF-庚' },
 }
@@ -657,9 +659,24 @@ await check('★ 压缩指令子页：说明逐字在、textarea(≥12行,初值
     }
     const areas = []
     collectNodes(tree, (n) => n.$$element === 'textarea', areas)
-    assert.equal(areas.length, 1, '文本框应当恰好 1 个')
+    // ★ 2026-09-16：压缩指令卡现在有**两个**文本框 —— ①压缩指令 ②破限头（默认留空、玩家自填）。
+    assert.equal(areas.length, 2, '压缩指令卡应当有 2 个文本框（指令 + 破限头）')
     assert.ok(areas[0].props.rows >= 12, 'textarea 行数不足 12')
     assert.equal(areas[0].props.value, '压缩草稿甲', '文本框初值不是 current')
+    // 破限头按 **id 定位**（不靠顺序，免得别的卡片也冒出 textarea 时假红/假绿）
+    const jbArea = areas.find((a) => a.props.id === 'dma-template-jailbreak') || null
+    assert.ok(jbArea, '找不到破限头文本框（id=dma-template-jailbreak）')
+    assert.equal(jbArea.props.value, '', '★ 破限头默认必须是空（我们**不内置**任何破限文本）；实际 = ' + JSON.stringify(jbArea.props.value))
+    assert.equal(jbArea.props.readOnly, undefined, '破限头应当可编辑（玩家自填）')
+    for (const t of ['破限头（默认留空 · 由玩家自填）', '保存破限头', '清空', '当前：留空']) {
+      assert.ok(text.includes(t), '缺破限头文案: ' + t)
+    }
+    // ★ 2026-09-16 用户口径：那条解释文案（"本插件不内置任何破限文本…"）**没必要**，已删。
+    //   反证式断言：它**不该**再出现在界面上（免得以后又被人加回来）。
+    assert.ok(!text.includes('本插件不内置任何破限文本'), '那条解释文案应当已删除')
+    assert.ok(!text.includes('拼在压缩指令前面'), '那条解释文案应当已删除（后半句）')
+    // placeholder 只在 props 里（visibleText 收不到）⇒ 用序列化树断言
+    assert.ok(s.includes('留空 = 应用时不拼接任何破限文本（本插件不内置）'), '缺破限头 placeholder')
     // ★ 2026-09-16：主按钮从「保存」改成「应用（写进预设）」（用户口径：直接写进 preset 才有效）。
     //   ⛔ 别再用「保存」当断言 —— 文本框 placeholder 里也有"保存"字样，会假通过。
     for (const t of ['应用（写进预设）', '恢复内置默认', '复制', '载入内置默认', '官方原文参考',
@@ -848,6 +865,12 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     // （面板那条 PUT /config 走的是表里已有的 ['PUT','/config']，这里两条是新端点）
     ['GET', '/v3'],
     ['POST', '/v3/mode'],
+    // 手动「扫归档原文 → 总结」（2026-09-16）：用户实测「导入之后摘要只有批次清单」⇒ 补的这一步。
+    // 与导入同一套纪律：POST /summarize/plan 只规划（零 LLM），POST /summarize/apply 才调模型。
+    ['POST', '/summarize/plan'],
+    ['POST', '/summarize/apply'],
+    // 清空总结（补救：预设没调好就重来）
+    ['POST', '/summarize/reset'],
   ]
   const found = [...src.matchAll(/HOST_API_BASE \+ '([^']+)'/g)].map((m) => m[1].split('?')[0])
   assert.ok(found.length > 0, '源码里没有任何 HOST_API_BASE + rest 调用')
@@ -1228,10 +1251,18 @@ await check('★ 导入/收纳视图（2026-09-15 U1/B2）：三张卡齐 + 控�
     const text = visibleText(tree)
     for (const t of ['写到哪个「角色-周目」', '导入外部聊天记录', '收纳：把本机会话的楼段收进归档',
       '① 扫描 Tavern 留下的待导入文件', '看一看能收什么',
+      // 归档总结（2026-09-16）：用户实测「导入之后摘要只有批次清单」⇒ 补的这一步（手动、两步走）
+      '归档总结：把原文按区间总结成摘要', '① 扫描归档（预览区间）',
+      // 清空总结（补救）+ 重新导入（覆盖同号楼层）
+      '清空总结（先看计划）', '覆盖同号楼层（重新导入）',
+      // 用户 2026-09-16 指定：那个按钮的文案改成「导入①」
+      '导入①',
       // 自动收纳（压缩后自动收）：默认开 + 只收绑定周目
       '压缩后自动收（默认开）', '只收**绑定周目**的会话']) {
       assert.ok(text.includes(t), '缺: ' + t)
     }
+    // 「② 开始总结」是**扫描之后**才出现的动作（与「② 收进归档」同一套纪律）⇒ 这里做反向断言
+    assert.ok(!text.includes('② 开始总结'), '「② 开始总结」不该在没扫描时就出现')
     // 「② 收进归档」按钮与「该周目下没有待导入文件」提示都是**动作之后**才出现的
     // （前者要预览、后者要扫描过）⇒ 不在常显清单里，由下面的反向断言兜住。
     // 顶栏入口必须存在（否则用户"看不见导入"——这正是这次要修的）
@@ -1240,7 +1271,7 @@ await check('★ 导入/收纳视图（2026-09-15 U1/B2）：三张卡齐 + 控�
     collectNodes(tree, (n) => n && typeof n.props === 'object' && typeof n.props.id === 'string', withId)
     const have = withId.map((n) => n.props.id)
     for (const want of ['dma-write-char', 'dma-write-play', 'dma-import-file', 'dma-import-text',
-      'dma-import-keep-greeting', 'dma-import-keep-hidden', 'dma-collect-session', 'dma-auto-collect-enabled']) {
+      'dma-import-keep-greeting', 'dma-import-keep-hidden', 'dma-import-overwrite', 'dma-collect-session', 'dma-auto-collect-enabled']) {
       assert.ok(have.includes(want) || text.includes(want), '缺控件: ' + want)
     }
     // ⛔ 计划没跑之前不许出现"收进归档"可点按钮组里的预览块（预览块只在 plan 之后渲染）
@@ -1551,6 +1582,20 @@ await check('★ 常驻批量确认：勾选框只勾选（stopPropagation、不
   // ★ 灵敏度自证：把"老写法"（行内直接 onToggleResident）喂给第 1 条那个判据，必须命中
   const oldRow = "onClick: (ev) => { ev.stopPropagation(); onToggleResident(pinned ? ids.filter((x) => x !== s.id) : ids.concat([s.id])) }"
   assert.equal(/onToggleResident/.test(oldRow), true, '反证失败：这条判据抓不住"点一个就生效"的老写法（橡皮章）')
+})
+
+await check('★ 最近几楼卡（2026-09-17 新段 mt:lastFloors）：卡在、控件 id 齐、位置口径写明，且带反证', () => {
+  assert.ok(src.includes('data-last-floors-card'), '缺卡容器')
+  assert.ok(src.includes('function LastFloorsCard'), '缺组件')
+  assert.ok(src.includes('e(LastFloorsCard, { config: cfg, reload: reload })'), '卡没挂进设置视图')
+  for (const id of ['dma-last-floors-enabled', 'dma-last-floors-count', 'dma-last-floors-maxchars']) {
+    assert.ok(src.includes(id), '缺控件 id: ' + id)
+  }
+  assert.ok(src.includes('倒数第二'), '没写明「倒数第二」这个位置口径（这是用户点名的要求）')
+  assert.ok(src.includes("'/config'") || src.includes('/config'), '没走既有 /config 投影')
+  // ★ 灵敏度自证：把"卡没挂进设置视图"的写法喂给同一条判据，必须命中（否则是橡皮章）
+  const notMounted = "e(EchoCard, { config: cfg, reload: reload }),"
+  assert.equal(/e\(LastFloorsCard, \{ config: cfg, reload: reload \}\)/.test(notMounted), false, '反证失败：这条判据抓不住"卡没挂上"')
 })
 
 console.log('== 总结：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')

@@ -210,44 +210,14 @@ function propertySchemas() {
 }
 
 /**
- * 生成 `submit_state_patch` 工具的 JSON Schema。
- *
- * 关键设计：
- * - `summary` **required** —— 强制模型交出本轮变更依据（治"无中生有"：新增机制条目必须指到哪一句/哪次掷骰）
- * - `change` 里 `additionalProperties:false` —— 白名单之外一律拒收
- * - `change` 的 required 为空 —— **允许"本轮无事发生"**，给模型合法出口，防止硬凑（F2 的结论）
- */
-/**
- * change 对象的 schema —— **副 API 的 submit_state_patch 与主模型的 state_patch 共用这一份**。
- * `additionalProperties:false` + 白名单键 = 白名单之外一律不进合并层；两处绝不各写一份，防漂移。
+ * change 对象的 schema —— `state_patch` 工具的 patch 入参就用这一份。
+ * `additionalProperties:false` + 白名单键 = 白名单之外一律不进合并层。
  */
 export function changeSchema() {
   return { type: 'object', additionalProperties: false, properties: propertySchemas() }
 }
 
-export function buildToolSchema({ maxSummary = 400 } = {}) {
-  return {
-    type: 'function',
-    function: {
-      name: 'submit_state_patch',
-      description:
-        '提交本轮对话引起的**状态增量补丁**。只放确实发生变化的键；没变的键一律不要出现。'
-        + '本轮确实无事发生时，change 传空对象 {} —— 这是合法答案，不要为了凑数而编造条目。'
-        + 'summary 必须说明本轮变了什么以及依据（对话中的哪一句 / 哪次掷骰）。',
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['summary', 'change'],
-        properties: {
-          summary: { type: 'string', maxLength: maxSummary, description: '本轮状态变更的一句话依据说明' },
-          change: changeSchema(),
-        },
-      },
-    },
-  }
-}
-
 /** 供测试与自检：把 schema 里 change 允许的键摊平出来。 */
 export function allowedChangeKeys() {
-  return Object.keys(buildToolSchema().function.parameters.properties.change.properties)
+  return Object.keys(changeSchema().properties)
 }

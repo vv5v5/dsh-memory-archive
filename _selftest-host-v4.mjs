@@ -159,9 +159,20 @@ if (routes.length !== 2) {
     r = await request('GET', '/dsh-memory-archive/api/templates')
     check('GET /api/templates → 200 ok:true', r.status === 200 && r.json?.ok === true, `${r.status}`)
     check(
-      'compaction.builtin 含 「## 未回收的伏笔」',
+      'compaction.builtin 含 anima 原文标记「# Summarization Guidelines」',
       typeof r.json?.templates?.compaction?.builtin === 'string' &&
-        r.json.templates.compaction.builtin.includes('## 未回收的伏笔'),
+        r.json.templates.compaction.builtin.includes('# Summarization Guidelines'),
+    )
+    check(
+      'compaction.builtin 是一份「留空破限头」的模板（不含 anima 破限原文）',
+      typeof r.json?.templates?.compaction?.builtin === 'string' &&
+        !r.json.templates.compaction.builtin.includes('It is now 2055'),
+    )
+    check(
+      'templates.compactionJailbreak 默认空、custom:false（玩家自己填，我们不内置）',
+      r.json?.templates?.compactionJailbreak?.current === '' &&
+        r.json.templates.compactionJailbreak.custom === false,
+      JSON.stringify(r.json?.templates?.compactionJailbreak),
     )
     check(
       'placeholder.builtin 含 {from}',

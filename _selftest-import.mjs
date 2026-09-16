@@ -253,6 +253,34 @@ const hash8 = normalizeImport(JSONL_TEXT).sourceHash.slice(0, 8)
   check('7k 同哈希批次已存在 ⇒ IMPORT_BATCH_EXISTS warning', plan.warnings.some((w) => w.startsWith('IMPORT_BATCH_EXISTS')), JSON.stringify(plan.warnings))
 }
 {
+  // ★ 2026-09-16 事故回归：勾了「覆盖同号楼层（重新导入）」却仍从 max+1 起 ⇒ 楼号必须回到 0000
+  const names = ['0000.json', '0001.json', '0002.json', '0003.json', '0004.json']
+  const ft = fakeTavern({ floors: { rel: floorsRel, names } })
+  const plan = await planImport({ source: { text: JSONL_TEXT }, target: TARGET, overwrite: true }, { tavern: ft })
+  check('7A1 ★ 覆盖重导：楼号从 0000 起（⛔ 不是 max+1）+ OVERWRITE_FROM_ZERO warning',
+    plan.willWrite[0].path === floorsRel + '/0000.json'
+    && plan.warnings.some((w) => w.startsWith('IMPORT_OVERWRITE_FROM_ZERO')),
+    JSON.stringify({ first: plan.willWrite[0].path, warnings: plan.warnings }))
+  const ftNo = fakeTavern({ floors: { rel: floorsRel, names } })
+  const planNo = await planImport({ source: { text: JSONL_TEXT }, target: TARGET }, { tavern: ftNo })
+  check('7A2 不勾覆盖时行为不变：楼号仍从 max+1（0005）起、无 FROM_ZERO warning',
+    planNo.willWrite[0].path === floorsRel + '/0005.json'
+    && !planNo.warnings.some((w) => w.startsWith('IMPORT_OVERWRITE_FROM_ZERO')),
+    JSON.stringify(planNo.willWrite[0].path))
+  const { summaryPathOf } = await import('./lib/collect.js')
+  const { internal } = await imp.buildImportPlan({ source: { text: JSONL_TEXT }, target: TARGET, overwrite: true }, { tavern: ft })
+  check('7A3 ★ 导入侧 internal.summaryRel 与 collect 侧 summaryPathOf 逐字相同（写前重核才不会拿错期望值）',
+    internal.summaryRel === summaryPathOf(TARGET, { id: plan.planId }, { fromFloor: internal.start, toFloor: internal.endFloor }).path,
+    internal.summaryRel + ' vs ' + summaryPathOf(TARGET, { id: plan.planId }, { fromFloor: internal.start, toFloor: internal.endFloor }).path)
+}
+{
+  // 源比归档短：高号楼层覆盖不到，而文件面删不掉 ⇒ 必须如实 warning（别让人以为归档被清干净了）
+  const ft = fakeTavern({ floors: { rel: floorsRel, names: ['0000.json', '0001.json', '0002.json', '0003.json', '0004.json', '0005.json'] } })
+  const plan = await planImport({ source: { text: TAVERN_TEXT }, target: TARGET, overwrite: true }, { tavern: ft })
+  check('7A4 覆盖重导：源比归档短 ⇒ IMPORT_OVERWRITE_TAIL warning',
+    plan.warnings.some((w) => w.startsWith('IMPORT_OVERWRITE_TAIL')), JSON.stringify(plan.warnings))
+}
+{
   const ft = fakeTavern({ floors: { rel: floorsRel, names: ['0009.json'] } })
   const plan = await planImport({ source: { text: JSONL_TEXT }, target: TARGET, keepHidden: false }, { tavern: ft })
   check('7l keepHidden=false ⇒ 弃 2 隐藏楼、3 楼照排（00010 起于 0009+1）', plan.willWrite.length === 4 && plan.willWrite[0].path.endsWith('/floors/0010.json'), JSON.stringify(plan.willWrite.map((w) => w.path)))

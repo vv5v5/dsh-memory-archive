@@ -5,7 +5,7 @@
  * 躯体 55/60｜密氛 15/12 一致），只把"ST 第 N 楼"换成"DSH 第 N 轮"，并新增三节：
  *   · 【⏱ 到期与解除】   —— 代码解除了什么 / 什么在等条件（治"惊厥不会自动解除"的可见化）
  *   · 【✎ 本轮状态变更】 —— 新增/移除了哪些机制条目（治"乱记"的可见化）
- *   · 【📋 本轮依据】     —— 副模型自报的 summary（让"无中生有"可审计）
+ *   · 【📋 本轮依据】     —— 主模型自报的 summary（让"无中生有"可审计）
  *
  * ⚠️ 这个函数必须是**纯同步**的：它会被 `systemPrompt.section()` 的 provider 每轮调用，
  * 而 provider 是同步的（`system-prompt/src/index.ts:590-599`）—— 内部不能 await。
@@ -59,7 +59,7 @@ const listOf = (o, container) => {
  * @param opts.pending     sweepExpired().pending
  * @param opts.unparseable sweepExpired().unparseable
  * @param opts.diff        diffMechanics() 的结果
- * @param opts.summary     副模型自报的本轮依据
+ * @param opts.summary     主模型自报的本轮依据
  * @param opts.warnings    其它告警（失败、护栏拒收等），逐行追加到 ⚠ 区
  * @param opts.includeSkills true 时附上 20 项技能的能力档位文案（默认 false，阶段 1 卡片也没带）
  * @param opts.usageHint   记账方式提示（可选）。patch-tool 模式由注入层传主模型的调用契约；
@@ -171,7 +171,7 @@ export function renderStateCard(status, opts = {}) {
     L.push('【✎ 本轮状态变更】')
     if (diff.added?.length) L.push(`- 新增：${diff.added.join('、')}`)
     if (diff.removed?.length) L.push(`- 移除：${diff.removed.join('、')}`)
-    if (opts.summary) L.push(`- 副模型自述依据：${opts.summary}`)
+    if (opts.summary) L.push(`- 主模型自述依据：${opts.summary}`)
   }
 
   // ── 🛠 记账方式（仅 patch-tool 模式传入；提醒主模型每轮在思维链里提交 state_patch）

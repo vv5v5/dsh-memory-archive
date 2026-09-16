@@ -180,8 +180,8 @@ export function diffMechanics(cur, next) {
  * 白名单 schema 校验合并。
  *
  * @param cur     当前状态（会被深拷贝，不改原对象）
- * @param parsed  副模型产出的**增量补丁**（未提及的键保留现值）
- * @param opts.allowIpDrop            允许知识 IP 下降（仅手动编辑器用；副 API 链路强制只增不减）
+ * @param parsed  主模型产出的**增量补丁**（未提及的键保留现值）
+ * @param opts.allowIpDrop            允许知识 IP 下降（仅手动编辑器用；state_patch 链路强制只增不减）
  * @param opts.maxNewMechanicsPerTurn 单轮新增机制条目上限；>0 时超限整轮拒收
  * @returns {{ status, errs, guard, rejected }}
  *   - `status`   合并后的状态（被拒时 = cur 原样）
@@ -202,7 +202,7 @@ export function mergeStatus(cur, parsed, opts = {}) {
 
   if (!isPlainObject(parsed)) return { status: out, errs, guard, rejected: false }
 
-  // 元身份（开放版：副 API 可从剧情回填姓名/种族；空值视为"剧情未给出"不覆盖）
+  // 元身份（开放版：state_patch 可从剧情回填姓名/种族；空值视为"剧情未给出"不覆盖）
   if (isPlainObject(parsed.元)) {
     out.元 = out.元 || {}
     if (typeof parsed.元.姓名 === 'string' && parsed.元.姓名.trim()) out.元.姓名 = parsed.元.姓名.trim()
@@ -251,7 +251,7 @@ export function mergeStatus(cur, parsed, opts = {}) {
   // 自由键值对象（键级合并）
   for (const k of FREE_MAPS) out[k] = mergeMap(out[k], parsed[k])
 
-  // 知识（12 门白名单，级 0-5，IP≥0；副 API 链路强制 IP 只增不减）
+  // 知识（12 门白名单，级 0-5，IP≥0；state_patch 链路强制 IP 只增不减）
   if (isPlainObject(parsed.知识)) {
     for (const k of KNOWLEDGE) {
       const v = parsed.知识[k]

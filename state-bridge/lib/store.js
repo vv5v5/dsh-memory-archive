@@ -20,7 +20,7 @@
  * <DSH_HOME>/l1-state/sessions/<sessionId>/
  *   state.json      当前状态 + 锚点（注入读它）
  *   history.jsonl   每轮一份 {turn, seq, at, state} —— 分支重推导的数据源
- *   audit.jsonl     副 API 每次请求/回复/用量/解析结果（**绝不进 prompt**）
+ *   audit.jsonl     seed / 到期解除 / state_patch 的审计流水（**绝不进 prompt**）
  *   failures.jsonl  失败与护栏拒收记录（"失败可见化"）
  *   baseline.json   起跑线（seed，只读）
  * ```

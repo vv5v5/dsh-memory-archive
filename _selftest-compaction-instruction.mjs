@@ -11,7 +11,7 @@
  *   注释掉（或删掉「逐字照抄」四字）⇒ 断言 1a 必须变红；还原后复绿。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { buildRpCompactionBackend, RP_COMPACTION_FILE_NAME } from './lib/mt-compaction.js'
@@ -46,34 +46,61 @@ const zh = resolveInstruction('', 'auto', true) // auto ⇒ 中文内置模板
 const zhFaithless = resolveInstruction('', 'auto', false)
 const en = resolveInstruction('', 'en', true)
 
-// ═══ 1. 条款与结构 ═══════════════════════════════════════════════════════
-// 反证锚点：「逐字照抄，不要"整理"」只出现在 faithful 规则行里 —— 注释掉该行本条必红。
-check('1a', 'zh 指令含逐字照抄条款（faithful 规则行）',
-  zh.includes('逐字照抄，不要"整理"'), zh.slice(0, 60))
-check('1b', 'zh 指令保留既有结构（时间跨度/地点/涉及角色/关键事件/未回收的伏笔）',
-  ['## 时间跨度', '## 地点', '## 涉及角色', '## 关键事件', '## 未回收的伏笔'].every((h) => zh.includes(h)),
-  '缺节：' + ['时间跨度', '地点', '涉及角色', '关键事件', '未回收的伏笔'].filter((n) => !zh.includes('## ' + n)).join('/'))
-check('1c', 'zh 指令含 anima 准则条款（时间前缀 / Show-Don\'t-Tell / 防过度切分 / important 判据）',
-  zh.includes('前缀') && zh.includes('谁做了什么') && zh.includes('一个连续片段') && zh.includes('不可逆'),
-  JSON.stringify({ 前缀: zh.includes('前缀'), 只写事实: zh.includes('谁做了什么'), 防切分: zh.includes('一个连续片段'), 不可逆: zh.includes('不可逆') }))
-check('1d', 'zh 指令结尾要求 tags 结构（{vibe, special, important}）+ 10 个 vibe 枚举',
-  zh.includes('tags: {"vibe"') && zh.includes('"special"') && zh.includes('"important":false')
-    && zh.includes('Daily') && zh.includes('Suspense') && zh.includes('Serious'),
-  'tags 结构缺失：' + String(!zh.includes('tags: {"vibe"')))
-check('1e', 'en 指令同构（verbatim 条款 + Time span/Open threads + tags 结构）',
-  en.includes('verbatim; do not rewrite them') && en.includes('## Time span') && en.includes('## Open threads')
-    && en.includes('tags: {"vibe"') && en.includes('IRREVERSIBLE'),
-  'en tags/verbatim 缺失')
-check('1f', '⛔ 整份生成物不含 anima 的三个外部标签占位（自包含，不依赖它家包装层）',
-  (() => { const t = buildRpCompactionBackend(); return !t.includes('<basic_info>') && !t.includes('<previous_summary>') && !t.includes('<text_to_summarize>') })(),
-  '生成物里出现了外部标签名')
-check('1g', 'faithful 开关仍真实生效（两份模板不同；faithless 版保留轻度转写条款）',
-  zh !== zhFaithless && zhFaithless.includes('可轻度转写') && zhFaithless.includes('tags: {"vibe"'),
-  'faithful 两份相同或 faithless 缺 tags')
+// ═══ 1. 与 anima「总结提示词」**逐字对齐**（2026-09-16 用户口径）═══════════════
+// 沿革：旧版是我们自己写的「历史归档条目」+ 中文五节结构（zh/en 两版、faithful 两档）。
+// 现在**只有一份**：anima 原文（人的文件/anima_summary_prompts_*.json 第 11 条「总结提示词」，4068 字）。
+check('1a', '指令开头 = anima 原文首行（逐字）',
+  zh.startsWith('# Summarization Guidelines'), JSON.stringify(zh.slice(0, 40)))
+check('1b', 'anima 的顶级小节都在（逐字）',
+  ['Target: Create a high-density NARRATIVE CHRONICLE', '## MACRO Plot Progression', '## Segmentation Strategy',
+    '## Writing Logic', '## Style', '# Tagging Rules (PER Segment)', '# Format', '# Critical Review'].every((h) => zh.includes(h)),
+  '缺节：' + ['Target: Create a high-density NARRATIVE CHRONICLE', '## MACRO Plot Progression', '## Segmentation Strategy',
+    '## Writing Logic', '## Style', '# Tagging Rules (PER Segment)', '# Format', '# Critical Review'].filter((h) => !zh.includes(h)).join(' / '))
+check('1c', 'anima 的关键准则句逐字在内（合并优先 / 最小密度 / 只在大触发时切 / Show-Don\'t-Tell / 时间前缀）',
+  zh.includes('Aggressive Merging') && zh.includes('Minimum Density') && zh.includes('Sustained Vibe Shift')
+    && zh.includes("Show, Don't Tell") && zh.includes('2025/12/11 深夜'),
+  JSON.stringify({ merge: zh.includes('Aggressive Merging'), density: zh.includes('Minimum Density'), split: zh.includes('Sustained Vibe Shift') }))
+check('1d', 'anima 的标签口径逐字在内（10 个 vibe + special 事件/健康 + important 布尔 + RAW JSON Array）',
+  zh.includes('[Daily]') && zh.includes('[Wholesome]') && zh.includes('[Comedy]') && zh.includes('[Conflict]')
+    && zh.includes('[Action]') && zh.includes('[Angst]') && zh.includes('[Suspense]') && zh.includes('[Romantic]')
+    && zh.includes('[Sexual]') && zh.includes('[Serious]')
+    && zh.includes('[Halloween]') && zh.includes('[Period]') && zh.includes('[Sick]')
+    && zh.includes('"vibe"') && zh.includes('"special"') && zh.includes('"important"')
+    && zh.includes('RAW JSON Array'),
+  'anima 标签口径缺失')
+check('1e', '★ 只有一份指令：auto/zh/en × faithful 四组合**返回同一份文本**（旧版那种 zh/en + faithful 两档已退役）',
+  zh === resolveInstruction('', 'en', true) && zh === resolveInstruction('', 'auto', false) && zh === resolveInstruction('', 'zh', true),
+  JSON.stringify({ zhLen: zh.length, enLen: en.length, zhFaithlessLen: zhFaithless.length }))
+check('1f', '⛔ 生成物**不含 anima 的「破限」那条**（用户口径：破限头不由我们内置，界面留空由玩家自填）',
+  (() => { const t = buildRpCompactionBackend(); return !t.includes('It is now 2055') && !t.includes('ethical review standards of the past are outdated') })(),
+  '生成物里出现了 anima 破限文本')
+check('1g', '⛔ 三个外部标签名**只出现在 anima 原文里**（我们的代码/引擎不依赖任何外部包装层）',
+  (() => {
+    const t = buildRpCompactionBackend()
+    const constStart = t.indexOf('const ANIMA_SUMMARY_INSTRUCTION')
+    const fnStart = t.indexOf('function rpArchiveInstruction')
+    if (constStart < 0 || fnStart < 0) return false
+    const outside = t.slice(0, constStart) + t.slice(fnStart) // 常量之外 = 我们的代码
+    return ['<basic_info>', '<previous_summary>', '<text_to_summarize>'].every((tag) => !outside.includes(tag))
+  })(),
+  '我们的代码里出现了外部标签名（或常量/函数定位失败）')
+check('1h', '语言口径由 anima 原文自带（Language: Summary in Chinese），⛔ 不再靠我们追加语言提示',
+  zh.includes('Language: Summary in Chinese'), '缺语言口径行')
+// ★ 用户口径（2026-09-16）：anima 的「破限」**不由我们内置**（界面留空、玩家自填，规避法律风险）
+//   ⇒ 整仓源码里都不许出现那条破限文本；破限头字段的默认值必须是空。
+check('1i', '⛔ 仓库源码里**没有** anima 的破限文本（我们只留空字段，不内置）',
+  (() => {
+    const files = ['lib/mt-compaction.js', 'lib/index.js', 'lib/client.js']
+    const bad = files.filter((f) => {
+      try { return readFileSync(join(here, f), 'utf8').includes('It is now 2055') } catch { return false }
+    })
+    return bad.length === 0
+  })(),
+  '有文件包含破限文本')
 
-// ═══ 2. 两条语言路径非空且长度合理（anima 原准则约 600–800 token 的量级）═══
-check('2a', 'zh 指令非空且长度合理（600–6000 字符）', zh.length >= 600 && zh.length <= 6000, String(zh.length))
-check('2b', 'en 指令非空且长度合理（600–6000 字符）', en.length >= 600 && en.length <= 6000, String(en.length))
+// ═══ 2. 长度合理（anima 原文 4068 字；给区间而不是硬编码，anima 更新时不必改这里）═══
+check('2a', 'zh 指令长度落在 anima 量级（3500–5000 字符）', zh.length >= 3500 && zh.length <= 5000, String(zh.length))
+check('2b', 'en 指令与 zh 逐字相同（同一份）', en === zh, `en=${en.length}`)
 
 // ═══ 3. resolveInstruction 既有语义未破坏（与 _selftest-mt-compaction 同口径）══
 check('3a', '非空 customInstruction 仍整段替换 / zh/en 追加提示不变',

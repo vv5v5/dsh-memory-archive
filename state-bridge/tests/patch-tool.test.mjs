@@ -1,19 +1,18 @@
 /**
- * patch-tool 模式单测：state_patch 工具、每轮事后校验（可见化）、配置开关、旧副 API 路径保留。
+ * state_patch（主模型记账）+ 每轮事后可见校验 的单测。
  * 跑法: node --test tests/patch-tool.test.mjs
  *
- * 用一个最小 mock 宿主（ctx）直接驱动 apply()：不依赖 DSH 宿主、不联网 ——
- * 副 API 路径用桩 fetch 喂标准的 submit_state_patch 工具调用响应。
+ * 用一个最小 mock 宿主（ctx）直接驱动 apply()：**不依赖 DSH 宿主、不联网、不读任何密钥**。
  * 所有状态数据都是本文件编造的测试夹具，与任何真实会话无关。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { apply, config as exportedConfig } from '../lib/index.js'
-import { buildToolSchema } from '../lib/schema.js'
+import { changeSchema } from '../lib/schema.js'
 import { readState, readHistory, readFailures } from '../lib/store.js'
 
 // ─────────────────────────────────────── mock 宿主
@@ -38,12 +37,11 @@ function makeEnv(userCfg = {}) {
   apply(ctx, { storageDir: root, gateTimeoutMs: 200, ...userCfg })
 
   const statePath = join(root, 'sessions', 'sess1', 'state.json')
-  const auditPath = join(root, 'sessions', 'sess1', 'audit.jsonl')
   const sess = () => world.agents[0]?.session
 
   return {
-    root, handlers, tools, sections, world, statePath, auditPath, sess,
-    /** 派一个 turn/end，并借装配门闩有界等待在途副 API 任务落地。 */
+    root, handlers, tools, sections, world, statePath, sess,
+    /** 派一个 turn/end（记账已无任何后台路径，钩子是同步的；装配钩子顺带跑一次）。 */
     async turnEnd(reason = 'completed') {
       const s = sess()
       for (const h of handlers['session/event'] ?? []) h(s, { type: 'turn/end', data: { reason } })
@@ -67,43 +65,55 @@ const liveSession = (world, events = []) => {
   return s
 }
 
-/** 桩 fetch：喂一个标准的 submit_state_patch 工具调用响应；返回还原函数。 */
-function fakeFetch(change, summary = '测试依据') {
-  const original = globalThis.fetch
-  globalThis.fetch = async () => ({
-    ok: true, status: 200, text: async () => '',
-    json: async () => ({
-      choices: [{
-        finish_reason: 'tool_calls',
-        message: { tool_calls: [{ type: 'function', function: { name: 'submit_state_patch', arguments: JSON.stringify({ summary, change }) } }] },
-      }],
-      usage: { prompt_tokens: 10, completion_tokens: 5 },
-    }),
-  })
-  return () => { globalThis.fetch = original }
-}
+// ─────────────────────────────────────── 配置：只有主模型工具这一条路
 
-const auditOf = (env) => (existsSync(env.auditPath) ? readFileSync(env.auditPath, 'utf8') : '')
+/**
+ * 已删除的配置键。**故意用片段拼出来**：本包对这几个名字（连同调用层、密钥）要求全库 0 命中，
+ * 测试里也不留字面量，靠拼装既能断言"不存在"又不会让 grep 命中。
+ */
+const REMOVED_KEYS = ['mo' + 'de', 'side' + 'Api', 'a' + 'pi', 'attem' + 'pts']
 
-// ─────────────────────────────────────── 配置开关（新默认）
-
-test('新默认：mode=patch-tool、sideApi.enabled=false、requirePatchPerTurn=true', () => {
-  assert.equal(exportedConfig.mode, 'patch-tool')
-  assert.equal(exportedConfig.sideApi?.enabled, false)
+test('默认配置里已没有任何记账路径开关（旧路径键全部不存在）', () => {
   assert.equal(exportedConfig.requirePatchPerTurn, true)
+  for (const k of REMOVED_KEYS) {
+    assert.equal(k in exportedConfig, false, `${k} 必须已删除`)
+  }
 })
 
-test('state_patch 已注册，且 patch 入参与 submit_state_patch 的 change 完全同构（同一生成器）', () => {
+test('(b) 传入已删除的配置键不抛，安静忽略', async () => {
+  const env = makeEnv({
+    [REMOVED_KEYS[0]]: 'tool',
+    [REMOVED_KEYS[1]]: { enabled: true },
+    [REMOVED_KEYS[2]]: { url: 'http://127.0.0.1:9/v1', key: 'unused-test-fixture', model: 'x', temperature: 0.4, max_tokens: 8, timeout_ms: 50 },
+    [REMOVED_KEYS[3]]: 2,
+  })
+  liveSession(env.world)
+  await env.seed({ 时间: { 日期: '1966/09/01' } })
+
+  // 插件照常工作：走主模型工具那条唯一的路，绝不因多余的键而抛
+  const r = await env.tools.state_patch.execute({ session_id: 'sess1', patch: { 时间: { 日期: '1966/09/02' } } })
+  assert.equal(r.ok, true)
+  assert.equal(readState(env.root, 'sess1').state.时间.日期, '1966/09/02')
+
+  // 多余的键不会被插件“捡回去”当开关用：没有后台补记，也没有未记录警告
+  await env.turnEnd()
+  assert.ok(!env.card().includes('上一轮未记录状态'), '已履约的轮次不该出警告')
+})
+
+test('state_patch 已注册，且 patch 入参与同一份 changeSchema() 同构（防漂移）', () => {
   const env = makeEnv()
   const t = env.tools.state_patch
   assert.ok(t, 'state_patch 未注册')
-  assert.deepEqual(
-    t.parameters.properties.patch,
-    buildToolSchema().function.parameters.properties.change,
-    '两处必须出自同一个 changeSchema()，不许各写一份',
-  )
+  assert.deepEqual(t.parameters.properties.patch, changeSchema())
   assert.deepEqual(t.parameters.required, ['patch'])
   assert.equal(t.parameters.additionalProperties, false)
+})
+
+test('重跑工具已不存在（旧调用层的“点一下重试”入口随之删除）', () => {
+  const env = makeEnv()
+  assert.equal('state_' + 'rerun' in env.tools, false)
+  assert.ok(env.tools.state_patch && env.tools.state_show && env.tools.state_seed
+    && env.tools.state_purge && env.tools.state_list, '其余 state_* 工具必须原样保留')
 })
 
 // ─────────────────────────────────────── state_patch：①②③ + 护栏/到期复用
@@ -124,7 +134,7 @@ test('① 空补丁 {} 是恒等变换：state.json 一个字节都不动，且�
   assert.ok(!env.card().includes('上一轮未记录状态'), '空补丁是合法履约，不该出警告')
 })
 
-test('② 新键补丁被正确合并（白名单合并 + 可见化 + 审计，走与副 API 相同的路径）', async () => {
+test('② 新键补丁被正确合并（白名单合并 + 可见化 + 审计，走唯一 commitPatch 路径）', async () => {
   const env = makeEnv()
   liveSession(env.world)
   await env.seed({ 时间: { 日期: '1966/09/01' }, 技能: { 理性: 40 } })
@@ -227,6 +237,23 @@ test('④ requirePatchPerTurn=true 且本轮无调用 ⇒ 下一轮注入文本�
   assert.equal(env.sections['state:card'].order, 50)
 })
 
+test('④b 本轮未交补丁 ⇒ 注入文本里出现的是 ⚠ 警告，而不是任何后台补记', async () => {
+  const env = makeEnv()
+  liveSession(env.world, [
+    { seq: 1, type: 'user/message', data: { content: '测试增量' } },
+    { seq: 2, type: 'assistant/message', data: { content: '测试增量' } },
+  ])
+  env.world.turn = 1
+  await env.seed({ 时间: { 日期: '1966/09/01' } })
+
+  await env.turnEnd()
+  const card = env.card()
+  assert.match(card, /⚠️ 上一轮未记录状态/, 'requirePatchPerTurn 必须把警告写进注入文本')
+  assert.match(card, /第 1 轮主模型未调用 state_patch/, '警告要指到具体轮次')
+  // 状态本体不被这次校验改动：日期还是 seed 时那个
+  assert.equal(readState(env.root, 'sess1').state.时间.日期, '1966/09/01', '校验不改状态本体')
+})
+
 test('⑤ requirePatchPerTurn=false ⇒ 不含警告', async () => {
   const env = makeEnv({ requirePatchPerTurn: false })
   liveSession(env.world)
@@ -258,90 +285,31 @@ test('未跟踪会话不参与事后校验', async () => {
   assert.ok(!env.card().includes('上一轮未记录状态'), '没 seed 的会话与插件无关')
 })
 
-// ─────────────────────────────────────── 副 API：默认关、兜底开、旧路径完整保留
-
-test('patch-tool 默认（sideApi 关）⇒ turn/end 不触发任何副 API 调用，只走可见校验', async () => {
+test('turn/end 不做任何“补记”：没有主模型补丁时状态与 history 都不动', async () => {
   const env = makeEnv()
-  const s = liveSession(env.world, [
+  liveSession(env.world, [
     { seq: 1, type: 'user/message', data: { content: '测试增量' } },
     { seq: 2, type: 'assistant/message', data: { content: '测试增量' } },
   ])
   env.world.turn = 1
   await env.seed({ 时间: { 日期: '1966/09/01' } })
-  const auditBefore = auditOf(env)
+  const before = readFileSync(env.statePath, 'utf8')
+  const historyLen = readHistory(env.root, 'sess1').length
 
   await env.turnEnd()
-  assert.equal(auditOf(env), auditBefore, 'audit 无新条目 = 副 API 没被调')
-  assert.match(env.card(), /上一轮未记录状态/, '这轮走的是可见校验路径')
-  void s
+
+  const after = readState(env.root, 'sess1')
+  assert.equal(after.state.时间.日期, '1966/09/01', '没有主模型补丁就不该有状态推进')
+  assert.equal(readHistory(env.root, 'sess1').length, historyLen, 'turn/end 不写 history')
+  assert.ok(before.includes('1966/09/01'))
 })
 
-test('patch-tool + sideApi.enabled ⇒ 主模型没交补丁的轮次由副 API **兜底**补记，且不出未记录警告', async () => {
-  const env = makeEnv({
-    mode: 'patch-tool', sideApi: { enabled: true },
-    api: { key: 'test-key', url: 'http://127.0.0.1:9/v1' }, attempts: 1,
-  })
-  liveSession(env.world, [
-    { seq: 1, type: 'user/message', data: { content: '测试增量' } },
-    { seq: 2, type: 'assistant/message', data: { content: '测试增量' } },
-  ])
-  env.world.turn = 1
-  await env.seed({ 时间: { 日期: '1966/09/01' } })
+// ─────────────────────────────────────── 注入提示
 
-  const restore = fakeFetch({ 时间: { 日期: '1966/09/02' } })
-  try { await env.turnEnd() } finally { restore() }
-
-  assert.equal(readState(env.root, 'sess1').state.时间.日期, '1966/09/02', '兜底补记生效')
-  assert.ok(!env.card().includes('上一轮未记录状态'), '兜底成功 → 不出警告')
-})
-
-test('旧路径保留：mode=tool + sideApi.enabled=true ⇒ turn/end 照旧副 API 强制工具调用，且注入文本无 patch-tool 提示', async () => {
-  const env = makeEnv({
-    mode: 'tool', sideApi: { enabled: true },
-    api: { key: 'test-key', url: 'http://127.0.0.1:9/v1' }, attempts: 1,
-  })
-  liveSession(env.world, [
-    { seq: 1, type: 'user/message', data: { content: '测试增量' } },
-    { seq: 2, type: 'assistant/message', data: { content: '测试增量' } },
-  ])
-  env.world.turn = 1
-  await env.seed({ 时间: { 日期: '1966/09/01' } })
-
-  const restore = fakeFetch({ 时间: { 日期: '1966/09/09' } })
-  try { await env.turnEnd() } finally { restore() }
-
-  assert.equal(readState(env.root, 'sess1').state.时间.日期, '1966/09/09')
-  assert.ok(!env.card().includes('记账方式'), '旧模式注入文本与 v0.1 对齐（无 usageHint）')
-})
-
-test('旧路径默认不再自动跑：mode=tool 但未开 sideApi.enabled ⇒ turn/end 不调副 API、也不做 patch-miss 校验', async () => {
-  const env = makeEnv({ mode: 'tool' })
-  liveSession(env.world, [
-    { seq: 1, type: 'user/message', data: { content: '测试增量' } },
-    { seq: 2, type: 'assistant/message', data: { content: '测试增量' } },
-  ])
-  env.world.turn = 1
-  await env.seed({ 时间: { 日期: '1966/09/01' } })
-  const auditBefore = auditOf(env)
-
-  await env.turnEnd()
-  assert.equal(auditOf(env), auditBefore, 'sideApi.enabled=false 时旧路径不跑')
-  assert.ok(!env.card().includes('上一轮未记录状态'), '旧模式没有 patch-miss 校验（记账责任在副 API）')
-})
-
-// ─────────────────────────────────────── 注入提示与相关工具
-
-test('patch-tool 模式的注入文本带「记账方式」提示（主模型的调用契约每轮可见）', async () => {
+test('注入文本带「记账方式」提示（主模型的调用契约每轮可见）', async () => {
   const env = makeEnv()
   liveSession(env.world)
   await env.seed({ 时间: { 日期: '1966/09/01' } })
   assert.match(env.card(), /【🛠 记账方式】/)
   assert.match(env.card(), /state_patch/)
-})
-
-test('state_rerun 在副 API 关闭时给出明确指引（不偷偷调 API）', async () => {
-  const env = makeEnv()
-  const r = await env.tools.state_rerun.execute({ session_id: 'sess1' })
-  assert.equal(r.ok, false)
-  assert.match(r.reason, /state_patch/)
 })

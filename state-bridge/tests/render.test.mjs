@@ -74,7 +74,7 @@ test('renderStateCard：到期/待确认/变更三节按需出现', () => {
   assert.match(t2, /【✎ 本轮状态变更】/)
   assert.match(t2, /新增：状态栏\.受惊/)
   assert.match(t2, /移除：状态栏\.旧伤/)
-  assert.match(t2, /副模型自述依据：墓园遇尸，恐惧 \+3/)
+  assert.match(t2, /主模型自述依据：墓园遇尸，恐惧 \+3/)
 })
 
 test('renderStateCard：warnings 会进 ⚠ 区', () => {

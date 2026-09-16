@@ -1,12 +1,9 @@
 /**
  * dsh-state-bridge —— 角色状态记账 + 注入。
  *
- * v0.2 起主路径 = **主模型在思维链里一次决定**：每轮由主模型直接调用 `state_patch` 工具提交增量补丁，
- * 白名单合并 / 配额护栏 / 公式重算 / 到期解除仍全部由代码独占（副 API 与工具共用同一条 `commitPatch` 路径）。
- * 每 turn/end 只做**事后可见校验**（`requirePatchPerTurn`，不阻塞）。
- * 副 API（turn/end 事后重算）降级为**默认关闭的兜底**（`sideApi.enabled`）：
- *  · patch-tool 模式下某轮主模型没交补丁 → 开了兜底就用副 API 补记那一轮；
- *  · 'tool' / 'json' 两条旧路径完整保留，要回到 v0.1 行为：`mode:'tool'` + `sideApi.enabled:true`。
+ * 记账只有**一条**路：每轮由主模型在思维链里直接调用 `state_patch` 工具提交增量补丁。
+ * 白名单合并 / 配额护栏 / 公式重算 / 到期解除全部由代码独占（`commitPatch` 是唯一的合并落盘路径）。
+ * 每 turn/end 只做**事后可见校验**（`requirePatchPerTurn`，不阻塞），不改状态、不调任何模型。
  *
  * ## 它补的是哪一块
  *
@@ -27,15 +24,12 @@
  *
  * ⚠️ **不新增 session 事件类型**（见 `store.js` 顶部说明）。
  */
-import { buildToolSchema, changeSchema, allowedChangeKeys, KNOWLEDGE, NEG_BOOL } from './schema.js'
-import { normalizeStatus, mergeStatus, diffMechanics, enforceDerivedValues, clone, isPlainObject } from './state.js'
+import { changeSchema, allowedChangeKeys, KNOWLEDGE, NEG_BOOL } from './schema.js'
+import { normalizeStatus, mergeStatus, diffMechanics, enforceDerivedValues, clone } from './state.js'
 import { sweepExpired } from './expiry.js'
 import { renderStateCard, estimateTokens } from './render.js'
-import { accountingPrompt, accountingUserMessage } from './prompt.js'
-import { callAccountingWithRetry } from './api.js'
-import { resolveBase, detectRewind, extractTurnText } from './branch.js'
 import {
-  stateRoot, readState, writeState, readBaseline, writeBaseline, appendHistory, readHistory,
+  stateRoot, readState, writeState, readBaseline, writeBaseline, appendHistory,
   appendAudit, appendFailure, listSessions, purgeSession, ensureDir,
 } from './store.js'
 
@@ -49,44 +43,19 @@ const DEFAULTS = {
   /** 总开关。关掉后钩子仍注册但不做任何事。 */
   enabled: true,
   /**
-   * 记账路径。
-   *  · 'patch-tool'（默认）—— 主模型在思维链里直接调用 `state_patch` 工具提交增量补丁，
-   *    一次决定、无二次调用；每轮 turn/end 只做事后可见校验（requirePatchPerTurn）。
-   *  · 'tool' —— 旧路径：turn/end 后副 API 强制工具调用 submit_state_patch。
-   *  · 'json' —— 旧路径：turn/end 后副 API 自由 JSON（ST 路线）。
-   * 旧两条要走通，还必须 sideApi.enabled = true。
-   */
-  mode: 'patch-tool',
-  /**
-   * 副 API（turn/end 事后重算）开关。默认**关闭** —— 主路径是 state_patch 工具，副 API 降级为兜底：
-   * patch-tool 模式下某轮主模型没交补丁时，若这里为 true 就用副 API 补记那一轮。
-   * 要完整回到 v0.1 行为：`mode:'tool'` + `sideApi.enabled:true`。
-   */
-  sideApi: { enabled: false },
-  /**
-   * patch-tool 模式的每轮事后校验：turn/end 检查该轮**有没有** state_patch 调用，
+   * 每轮事后校验：turn/end 检查该轮**有没有** state_patch 调用，
    * 没有则把「⚠️ 上一轮未记录状态」写进下一轮注入文本的 ⚠ 区（可见化，不阻塞、不改状态本体）。默认 true。
    */
   requirePatchPerTurn: true,
-  /** OpenAI 兼容端点。默认值对齐 ST 现役配置（`状态系统配置.api`）。 */
-  api: {
-    url: 'https://api.siliconflow.cn/v1/chat/completions',
-    key: '',
-    model: 'deepseek-ai/DeepSeek-V3.2',
-    temperature: 0.4,
-    max_tokens: 4096,
-    timeout_ms: 120000,
-  },
-  /** 格式层重试次数（调用层失败不重试，见 api.js）。 */
-  attempts: 2,
   /**
    * 单轮新增机制条目配额。超过则**整轮拒收**并留痕。
    * 治用户痛点「角色吓了一跳，他记了临时恐惧」—— 阈值触发人工复核，不是判定对错。0 = 关闭。
    */
   maxNewMechanicsPerTurn: 2,
   /**
-   * 装配期门闩：有在途记账时，有界等待多久再注入（毫秒）。**0 = 不等**（零延迟，状态恒滞后一轮）。
-   * 无论等多久，超时都会放行生成 —— 绝不阻塞主对话。
+   * 装配期门闩的等待预算（毫秒）。记账现在完全由主模型在生成过程中同步调用 `state_patch` 完成 ——
+   * 生成结束前状态已落盘，装配期**没有**任何在途后台记账可等，所以本项当前恒为直通；
+   * 保留它是为了配置接口稳定（`gateTimeoutMs: 8000` 与 0 行为一致，都绝不阻塞主对话）。
    */
   gateTimeoutMs: 8000,
   /** 注入文本在 system prompt 里的排序位（DSH Tavern 用 10 和 45，我们排在它们之后）。 */
@@ -97,7 +66,7 @@ const DEFAULTS = {
   sessionAllowlist: [],
   /** 存储根目录；留空 = <DSH_HOME>/l1-state。 */
   storageDir: '',
-  /** 是否把 `summary`（副模型自述依据）也注入（可见化，治"无中生有"）。 */
+  /** 是否把 `summary`（主模型的变更依据自述）也注入（可见化，治"无中生有"）。 */
   injectSummary: true,
 }
 
@@ -106,38 +75,23 @@ const warn = (ctx, ...a) => ctx?.logger?.warn?.(`[state-bridge]`, ...a)
 
 export function apply(ctx, rawConfig) {
   const cfg = { ...DEFAULTS, ...(rawConfig ?? ctx?.config ?? {}) }
-  cfg.api = { ...DEFAULTS.api, ...(cfg.api ?? {}) }
-  cfg.sideApi = { ...DEFAULTS.sideApi, ...(cfg.sideApi ?? {}) }
-  // 密钥优先级：配置 > 环境变量。**不要把 key 写进 cordis.patch.yml 并入库** ——
-  // 那把 SiliconFlow key 已经是三份拷贝了（ST 提示词配置 / 状态系统v1.js:18 / 它的导入 json），
-  // 不要再加第四份进 git。用环境变量 STATE_BRIDGE_API_KEY 更干净。
-  if (!cfg.api.key && process.env.STATE_BRIDGE_API_KEY) cfg.api.key = process.env.STATE_BRIDGE_API_KEY
   const root = stateRoot({ dir: cfg.storageDir })
   ensureDir(root)
 
   /** sessionId → 最近一次渲染好的文本（provider 必须同步返回，所以只读内存/文件） */
   const cache = new Map()
-  /** sessionId → { token, promise } 在途记账 */
+  /** sessionId → 在途后台记账任务。**恒空** —— 记账已无任何后台路径（见下方装配期门闩）。 */
   const inflight = new Map()
   /** sessionId → 自上次 turn/end 起主模型有没有调用过 state_patch（事后校验用） */
   const patchSeen = new Map()
-  /** sessionId → 递增序号（抢占式放弃用） */
-  let seqCounter = 0
-
-  /** 旧副 API 模式判定：'tool' / 'json' 走 turn/end 事后重算；其余（'patch-tool'）走主模型工具。 */
-  const legacySideApi = cfg.mode === 'tool' || cfg.mode === 'json'
 
   /**
-   * patch-tool 模式下随状态卡注入的「记账方式」提示 —— 主模型每轮都能看到自己的调用契约。
-   * 旧模式不注入（注入文本与 v0.1 逐字节对齐）。
+   * 随状态卡注入的「记账方式」提示 —— 主模型每轮都能看到自己的调用契约。
    */
   const PATCH_TOOL_HINT =
     '每轮回复结束前调用 state_patch 提交本轮状态增量：patch 只写有变化的键；本轮确实无变化就传 {}'
     + '（合法答案，不要硬凑）。新增 状态栏/技能修正/临时恐惧 条目必须在 summary 里给出依据（哪一句/哪次掷骰）；'
     + '带时限的条目写成 { 效果, 到期: "YYYY/MM/DD", 依据 }，到期由代码自动解除，不要自己删。'
-
-  const toolSchema = buildToolSchema()
-  const systemPromptText = accountingPrompt()
 
   // ─────────────────────────────────────── 缓存与渲染
 
@@ -172,7 +126,7 @@ export function apply(ctx, rawConfig) {
       diff: doc.lastDiff ?? null,
       summary: cfg.injectSummary ? (doc.lastSummary ?? '') : '',
       warnings: doc.lastWarnings ?? [],
-      usageHint: legacySideApi ? '' : PATCH_TOOL_HINT,
+      usageHint: PATCH_TOOL_HINT,
     })
   }
 
@@ -189,77 +143,7 @@ export function apply(ctx, rawConfig) {
     return Array.isArray(e) ? e : []
   }
 
-  // ─────────────────────────────────────── 记账（核心）
-
-  async function account(session, { reason = 'turn-end', force = false } = {}) {
-    const sessionId = session?.id
-    if (!sessionId || !cfg.enabled) return { ok: false, reason: 'disabled-or-no-session' }
-    if (!isTracked(sessionId)) return { ok: false, reason: 'not-tracked' }
-
-    const token = ++seqCounter
-    const prev = inflight.get(sessionId)
-    if (prev) prev.abort?.()                       // 抢占：旧任务作废
-
-    const ctl = new AbortController()
-    const task = { token, ctl, abort: () => ctl.abort(new Error('superseded')) }
-    inflight.set(sessionId, task)
-
-    try {
-      const doc = readState(root, sessionId)
-      const baseline = readBaseline(root, sessionId)
-      const history = readHistory(root, sessionId)
-      const events = eventsOf(session)
-      const observedTurn = observedTurnFor(session)
-
-      const rewind = detectRewind(doc?.anchor, observedTurn, events.length)
-      const { status: base, source } = resolveBase({ history, baseline, currentTurn: observedTurn })
-
-      // 增量：回退时从"当前 turn 的历史锚点"重取，否则从上次锚点 seq 之后取
-      const anchorSeq = rewind.rewind
-        ? (history.filter(h => h.turn <= (observedTurn ?? 0)).at(-1)?.seq ?? -1)
-        : (doc?.anchor?.seq ?? -1)
-      const delta = extractTurnText(events, anchorSeq, cfg.deltaMaxChars)
-      if (!delta.trim()) return { ok: false, reason: 'no-delta' }
-
-      log(ctx, `记账 ${sessionId} turn=${observedTurn ?? '?'} 基座=${source}${rewind.rewind ? `（回退：${rewind.reason}）` : ''} 增量=${delta.length}字`)
-
-      // 'patch-tool' 只是主路径的名字；真落到副 API（兜底）时沿用 tool 强制调用，'json' 保持 ST 路线
-      const apiMode = cfg.mode === 'json' ? 'json' : 'tool'
-      const r = await callAccountingWithRetry({
-        api: cfg.api, mode: apiMode, system: systemPromptText,
-        user: accountingUserMessage(base, delta),
-        signal: ctl.signal, attempts: cfg.attempts, toolSchema,
-      })
-      if (task.token !== token) return { ok: false, reason: 'superseded' }   // 落库前守卫
-
-      appendAudit(root, sessionId, {
-        reason, turn: observedTurn, base: source, mode: apiMode, rewind: rewind.rewind,
-        ok: r.ok, error: r.error ?? null, seconds: r.seconds, usage: r.usage,
-        attempts: r.attempts, patch: r.patch ? JSON.stringify(r.patch).slice(0, 4000) : null,
-        summary: r.summary ?? '', deltaChars: delta.length,
-      })
-
-      if (!r.ok) {
-        appendFailure(root, sessionId, { kind: 'api', turn: observedTurn, error: r.error })
-        return writeFailure(sessionId, doc, observedTurn, `副 API 失败：${r.error}`)
-      }
-
-      // 合并/护栏/公式重算/到期解除/落盘 —— 与 state_patch 工具共用**唯一**的合并路径（commitPatch）
-      const done = commitPatch(sessionId, {
-        doc, from: base, prev: doc?.state ?? base, patch: r.patch, summary: r.summary ?? '',
-        turn: observedTurn, seq: events.length ? events[events.length - 1].seq : null, source,
-      })
-      if (!done.ok) return { ok: false, reason: 'kept-old-state', message: done.message }
-      log(ctx, `记账完成 ${sessionId}：变更 +${done.diff.added.length}/-${done.diff.removed.length}，解除 ${done.expired}，${done.chars}字`)
-      return { ok: true, turn: done.turn, expired: done.expired, added: done.diff.added.length }
-    } catch (e) {
-      appendFailure(root, sessionId, { kind: 'exception', error: e?.message ?? String(e) })
-      const doc = readState(root, sessionId)
-      return writeFailure(sessionId, doc, observedTurnFor(session), `记账异常：${e?.message ?? e}`)
-    } finally {
-      if (inflight.get(sessionId)?.token === token) inflight.delete(sessionId)
-    }
-  }
+  // ─────────────────────────────────────── 合并与落盘（核心）
 
   /** 失败：保留旧状态，但把"失败"写进注入文本（失败可见化）。 */
   function writeFailure(sessionId, doc, turn, message) {
@@ -282,16 +166,16 @@ export function apply(ctx, rawConfig) {
   }
 
   /**
-   * ★ 唯一的合并/落盘路径：副 API（account）与主模型工具（state_patch）都从这里过。
+   * ★ 唯一的合并/落盘路径：主模型的 `state_patch` 工具只从这里过。
    * 白名单校验合并（mergeStatus）、配额护栏、公式重算（enforceDerivedValues）、
    * 到期解除（sweepExpired）、变更可见化（diffMechanics）全部只此一份 —— 任何入口都不许绕过、不许另写。
    *
    * @param opts.doc    落盘的当前状态记录（readState 的结果）
-   * @param opts.from   合并基座。副 API 传 resolveBase 的结果（回退时是 history 重推导值）；工具传 doc.state
-   * @param opts.prev   diff 基线（可见化用）。副 API 传 doc.state；工具传 doc.state
-   * @param opts.patch  增量补丁（只描述有变化的键，语义与 submit_state_patch 的 change 完全一致）
+   * @param opts.from   合并基座（工具传 doc.state）
+   * @param opts.prev   diff 基线（可见化用，工具传 doc.state）
+   * @param opts.patch  增量补丁（只描述有变化的键）
    * @param opts.summary 变更依据自述（注入 ✎ 节 + 审计）
-   * @param opts.turn/seq  锚点（工具在活会话缺失时会传已落盘锚点兜底）
+   * @param opts.turn/seq  锚点（活会话缺失时会传已落盘锚点兜底）
    * @returns ok=true 带 { turn, expired, diff, warnings, chars }；ok=false 带 { rejected?, reason, message }
    */
   function commitPatch(sessionId, { doc, from, prev, patch, summary = '', turn = null, seq = null, source = 'unknown' }) {
@@ -382,46 +266,24 @@ export function apply(ctx, rawConfig) {
     ].join('｜')
   }
 
-  // ─────────────────────────────────────── 钩子 ①：turn/end → 事后校验 /（兜底）记账
+  // ─────────────────────────────────────── 钩子 ①：turn/end → 每轮事后可见校验
 
   /**
-   * turn/end 的 fire-and-forget 副 API 记账（旧模式主路径 + patch-tool 兜底共用）。
-   * ⚠️ 这里**不能** await（fire-and-forget），也**不能**同步 session.append（会重入 throw）。
-   * 我们只写文件，所以安全；异步部分 detached 执行，失败由 account 内部兜住。
+   * ⚠️ 这里**不能** await，也**不能**同步 session.append（会重入 throw）。
+   * 本监听器只读事件、只写状态文件，所以安全。
    */
-  function fireAccount(session, reason) {
-    const p = account(session, { reason })
-    // account 的同步前缀已经把 task 放进 inflight 了，这里补上 promise，
-    // 否则装配期门闩 await 到的永远是 null（等于没门闩）。
-    const t = inflight.get(session?.id)
-    if (t) t.promise = p
-    p?.catch?.((e) => warn(ctx, '账后台任务异常', e?.message ?? String(e)))
-  }
-
   ctx.on('session/event', (session, event) => {
     try {
       if (!cfg.enabled) return
       if (event?.type !== 'turn/end') return
       const sessionId = session?.id
+      if (!sessionId || !isTracked(sessionId)) return
 
-      // ── patch-tool 模式（默认）：主模型负责记账，这里只做**事后可见校验**（不阻塞、不改状态）
-      if (!legacySideApi) {
-        if (!sessionId || !isTracked(sessionId)) return
-        const hadPatch = patchSeen.get(sessionId) === true
-        patchSeen.set(sessionId, false)
-        if (hadPatch) return
-        if (cfg.sideApi.enabled) {
-          // 兜底：这轮主模型没交补丁 → 副 API 补记（复用旧路径；成功/失败都会自己留痕并可见化）
-          fireAccount(session, `fallback:${event.data?.reason ?? '?'}`)
-        } else if (cfg.requirePatchPerTurn) {
-          markPatchMiss(sessionId, observedTurnFor(session))
-        }
-        return
-      }
-
-      // ── 旧模式（'tool' / 'json'）：行为与 v0.1 一致，只是多了一道 sideApi.enabled 把守
-      if (!cfg.sideApi.enabled) return
-      fireAccount(session, `turn/end:${event.data?.reason ?? '?'}`)
+      // 主模型负责记账，这里只做**事后可见校验**：不阻塞、不改状态本体、不调任何模型
+      const hadPatch = patchSeen.get(sessionId) === true
+      patchSeen.set(sessionId, false)
+      if (hadPatch) return
+      if (cfg.requirePatchPerTurn) markPatchMiss(sessionId, observedTurnFor(session))
     } catch (e) {
       warn(ctx, 'session/event 监听异常', e?.message ?? String(e))
     }
@@ -446,27 +308,30 @@ export function apply(ctx, rawConfig) {
   })
   ctx.effect?.(() => sectionDispose)
 
-  // ─────────────────────────────────────── 钩子 ③：装配期有界门闩
+  // ─────────────────────────────────────── 钩子 ③：装配期（直通，绝不阻塞）
 
   /**
    * ⚠️ 关键顺序事实（源码验证）：`system-prompt/src/index.ts:590-599` 先求值 section provider，
    * `:601-604` 才跑这个 waterfall。所以在这里 await **不会**让 provider 拿到新值 ——
    * 必须**自己改写 `assembly.sections`**。
+   *
+   * 记账由主模型在生成过程中直接 `state_patch` 完成，装配期已无任何在途后台任务可等（`inflight` 恒空），
+   * 因此这里退化为直通：立刻用最新落盘状态重渲染一次注入段，**不留任何等待**。
    */
   ctx.on('system-prompt/assemble', async (assembly, context, next) => {
     const out = await next()
     try {
-      if (!cfg.enabled || cfg.gateTimeoutMs <= 0) return out
+      if (!cfg.enabled) return out
       const sessionId = context?.agent?.id
       if (!sessionId) return out
       const task = inflight.get(sessionId)
-      if (!task) return out
-
-      // 有界等待：超时即放行，绝不阻塞主对话（照搬 ST flushCommit:560-565 的思路）
-      await Promise.race([
-        Promise.resolve(task.promise ?? null).catch(() => {}),
-        new Promise(r => setTimeout(r, cfg.gateTimeoutMs)),
-      ])
+      if (task) {
+        // 兜底路径已不存在；保留这段只为万一将来出现真正在途的任务时有界等待，超时即放行
+        await Promise.race([
+          Promise.resolve(task.promise ?? null).catch(() => {}),
+          new Promise(r => setTimeout(r, cfg.gateTimeoutMs)),
+        ])
+      }
 
       const turn = observedTurnFor(context.agent.session)
       const fresh = renderFor(sessionId, turn)
@@ -475,7 +340,7 @@ export function apply(ctx, rawConfig) {
       if (!sections.some(s => s.name === SECTION_NAME)) sections.push({ name: SECTION_NAME, order: cfg.injectionOrder, text: fresh })
       return { ...out, sections }
     } catch (e) {
-      warn(ctx, 'assemble 门闩异常', e?.message ?? String(e))
+      warn(ctx, 'assemble 注入段刷新异常', e?.message ?? String(e))
       return out
     }
   })
@@ -486,7 +351,7 @@ export function apply(ctx, rawConfig) {
 
   ctx.tools.register({
     name: 'state_list',
-    description: '列出被状态插件接管过的会话（状态插件 = 每轮副 LLM 记账）。含是否已 seed、锚点轮次、状态日期。',
+    description: '列出被状态插件接管过的会话（状态插件 = 主模型每轮调 state_patch 记账）。含是否已 seed、锚点轮次、状态日期。',
     parameters: { type: 'object', additionalProperties: false, properties: {} },
     output: {
       schema: {
@@ -720,7 +585,7 @@ export function apply(ctx, rawConfig) {
           message: '本轮无状态变化（空补丁 {}，恒等确认，未改任何数据）', brief: stateBrief(doc.state) })
       }
 
-      // ★ 复用与副 API 完全相同的合并路径（白名单合并/护栏/公式重算/到期解除），不另写一套
+      // ★ 走唯一的合并路径 commitPatch（白名单合并/护栏/公式重算/到期解除），不另写一套
       const done = commitPatch(sessionId, {
         doc, from: doc.state, prev: doc.state, patch,
         summary: args.summary ?? '', turn, seq, source: 'patch-tool',
@@ -737,45 +602,6 @@ export function apply(ctx, rawConfig) {
         message: `已并入状态（第 ${turn ?? '?'} 轮）：新增 ${done.diff.added.length}、移除 ${done.diff.removed.length}、自动解除 ${done.expired} 条`
           + (done.warnings.length ? `；约束纠正：${done.warnings.join('；')}` : ''),
         brief: stateBrief(readState(root, sessionId)?.state ?? doc.state) })
-    },
-  })
-
-  ctx.tools.register({
-    name: 'state_rerun',
-    description:
-      '手动重跑某个会话最近一轮的记账（"点一下重试"）。用于副 API 失败或护栏拒收后补救。'
-      + '需要该会话当前是活的（有 agent）；否则请用 state_show 查看状态与失败原因。',
-    parameters: {
-      type: 'object', additionalProperties: false, required: ['session_id'],
-      properties: { session_id: { type: 'string' } },
-    },
-    output: {
-      schema: {
-        type: 'object', additionalProperties: false, required: ['sessionId', 'ok', 'reason'],
-        properties: {
-          sessionId: { type: 'string' }, ok: { type: 'boolean' }, reason: { type: 'string' },
-          turn: { oneOf: [{ type: 'integer' }, { type: 'null' }] },
-          expired: { oneOf: [{ type: 'integer' }, { type: 'null' }] },
-          added: { oneOf: [{ type: 'integer' }, { type: 'null' }] },
-        },
-      },
-      render: (_a, v) => [{ type: 'text', text: JSON.stringify(v, null, 2) }],
-    },
-    async execute(args) {
-      const sessionId = String(args.session_id)
-      // state_rerun 重跑的是**副 API**；patch-tool 模式下主路径是主模型自己调 state_patch
-      if (!cfg.sideApi.enabled) {
-        return { sessionId, ok: false, reason: '副 API 未启用（默认兜底关闭）：主模型应直接调用 state_patch；或设 sideApi.enabled=true 后再重跑', turn: null, expired: null, added: null }
-      }
-      // 找活会话
-      let live = null
-      try {
-        const agents = ctx.agents?.list?.() ?? []
-        live = agents.find(a => a?.id === sessionId) ?? null
-      } catch { /* ignore */ }
-      if (!live?.session) return { sessionId, ok: false, reason: '该会话当前不在活动状态；无法重跑（可先 state_show 看失败原因）', turn: null, expired: null, added: null }
-      const r = await account(live.session, { reason: 'manual-rerun', force: true })
-      return { sessionId, ok: r.ok === true, reason: r.reason ?? (r.ok ? 'done' : 'unknown'), turn: r.turn ?? null, expired: r.expired ?? null, added: r.added ?? null }
     },
   })
 
@@ -801,8 +627,7 @@ export function apply(ctx, rawConfig) {
     },
   })
 
-  log(ctx, `${VERSION} ready — root=${root} mode=${cfg.mode} sideApi=${cfg.sideApi.enabled ? 'on' : 'off'} requirePatch=${cfg.requirePatchPerTurn} gate=${cfg.gateTimeoutMs}ms 配额=${cfg.maxNewMechanicsPerTurn}`)
-  if (cfg.sideApi.enabled && !cfg.api.key) warn(ctx, 'sideApi 已启用但 api.key 未配置 —— 兜底记账会失败（状态保持旧值）。把 key 填进 cordis.patch.yml 或环境变量 STATE_BRIDGE_API_KEY')
+  log(ctx, `${VERSION} ready — root=${root} requirePatch=${cfg.requirePatchPerTurn} 配额=${cfg.maxNewMechanicsPerTurn}`)
 }
 
 export const config = { ...DEFAULTS }
