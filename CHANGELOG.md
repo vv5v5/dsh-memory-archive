@@ -4,6 +4,29 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+> 提示词重整（第一批）：**身份句改写模块** + **装配注入口径按用户定稿调整**。纯调试阶段。
+
+### Added
+
+- **`preset-modules/rp-identity.js`**（新）：在 RP 作用域里用**同名段遮蔽**把 DSH 的
+  `harness:identity`（order -1000，原文 `You are an AI agent powered by DeepSeek Harness.`）换成
+  `You are an AI agent made for role-playing games.`。可经 `config.text` / `config.extra` 改词；
+  **拒绝**注册含 `{{名字}}` 的文本（DSH 会拿它当提示词变量、让整轮失败）并告警；认不出安置名退回 -1000；
+  ⛔ 绝不抛（抛 = 预设挂不上）。自检 `_selftest-rp-identity.mjs`（5 项，含"带变量必须拒绝"的反证）。
+
+### Changed
+
+- **v3 组合器的段序按定稿口径改**（`lib/v3-composer.js`）：
+  ① 只注入"控制角色"的内容（主要提示词 / 描述 / 性格 / 场景 / 示例）——作者署名一类不注入；
+  ② **主要提示词紧跟上面的预设段**（= 我们块第一段）→ 描述/性格/场景/示例 → 世界书命中 → 来源标记
+  → **后处理指令放最后**；
+  ③ ⛔ **开场白不再注入**（原先是"仅首轮注入 `greeting-reference`"）：它属于"开场那一刻"的消息。
+  来源标记里改为如实记一句 `greeting=first-turn(本块不注入开场)`。
+  ⚠️ "最后"只能是**我们这一块内的最后**：外部段整体落在 profile 槽位（order 10）——
+  想真排到全文末尾得走宿主槽位（如 `deployment:persona-suffix` @10200），本轮不做。
+
 ## [0.5.2] - 2026-09-16
 
 > v3 消费端（Tavern 外部组合 API）：**代码到位、默认关**。开着才接管装配；关着与 0.5.0 完全一样。

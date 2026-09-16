@@ -93,16 +93,29 @@ const ids = (r) => r.sections.map((s) => s.id)
 const textOf = (r, id) => (r.sections.find((s) => s.id === id) || {}).text || ''
 
 // ---------------------------------------------------------------- 1 正向：段序、标签、字段
-check('① 正向：段序照 SECTION_IDS，卡字段各成一段、标签与内置观感一致', () => {
+check('① 正向：段序照**用户定稿的注入口径**（主要提示词第一、后处理最后、⛔ 不注入开场），卡字段各成一段', () => {
   const r = buildComposition({ sources: makeSources(), runtime: makeRuntime(), config: { owner: 'dsh-memory-archive' } })
   const got = ids(r)
-  assert.deepEqual(got, ['character-system', 'character-description', 'character-personality', 'character-scenario', 'message-example', 'world-info', 'post-history', 'opening', 'provenance'],
+  assert.deepEqual(got, ['character-system', 'character-description', 'character-personality', 'character-scenario', 'message-example', 'world-info', 'provenance', 'post-history'],
     '段序不对：' + JSON.stringify(got))
   assert.match(textOf(r, 'character-system'), /<st-character-field name="system-prompt">\n你是书店的主人。\n<\/st-character-field>/)
   assert.match(textOf(r, 'character-description'), /一句中文描述 🎈。/)
   assert.match(textOf(r, 'post-history'), /每次不超过两句。/)
   assert.ok(got.every((id) => SECTION_IDS.includes(id)), '出现了 SECTION_IDS 之外的段 id')
   assert.ok(r.sections.length <= 64, '段数超过上游上限 64')
+})
+
+check('①b ★ 顺序口径三条硬规矩：主要提示词必须在**第一段**；后处理必须在**最后一段**；⛔ 任何段里都不许出现开场原文', () => {
+  const r = buildComposition({ sources: makeSources(), runtime: makeRuntime(), config: { owner: 'dsh-memory-archive' } })
+  const got = ids(r)
+  assert.equal(got[0], 'character-system', '主要提示词（system-prompt）必须是第一段：' + JSON.stringify(got))
+  assert.equal(got[got.length - 1], 'post-history', '后处理指令必须是最后一段：' + JSON.stringify(got))
+  assert.equal(got.includes('opening'), false, '⛔ 开场白不该出现在这一段里（用户 2026-09-16 明确）')
+  const all = r.sections.map((s) => s.text).join('\n')
+  assert.doesNotMatch(all, /你来晚了/, '⛔ 开场原文漏进装配了')
+  assert.doesNotMatch(all, /greeting-reference/, '⛔ 出现了 greeting-reference 标签')
+  // 来源标记如实记下"本轮是不是首轮"，但不注入开场
+  assert.match(textOf(r, 'provenance'), /greeting=first-turn\(本块不注入开场\)/)
 })
 
 // ---------------------------------------------------------------- 2 世界书：只放**命中**的
@@ -156,13 +169,15 @@ check('③b 反证 B：把 decisions 全标 included ⇒ 未命中那条必须�
   assert.match(textOf(r, 'world-info'), /柜台下有一只猫/, '反证失败：改判据后判据没跟着变')
 })
 
-// ---------------------------------------------------------------- 4 开场只在首轮
-check('④ 开场段只在 greetingReferenceApplies=true 时产出；第二轮必须没有', () => {
+// ---------------------------------------------------------------- 4 开场**永不**注入（口径改版）
+check('④ 开场白**一律不注入**（不论首轮与否）；首轮只在来源标记里如实记一句', () => {
   const first = buildComposition({ sources: makeSources(), runtime: makeRuntime(), config: {} })
-  assert.ok(ids(first).includes('opening'), '首轮该有开场段')
-  assert.match(textOf(first, 'opening'), /你来晚了/)
+  assert.equal(ids(first).includes('opening'), false, '⛔ 首轮也不该有开场段')
+  assert.doesNotMatch(first.sections.map((s) => s.text).join('\n'), /你来晚了/)
+  assert.match(textOf(first, 'provenance'), /greeting=first-turn/, '首轮要在来源标记里如实记下')
   const second = buildComposition({ sources: makeSources(), runtime: makeRuntime({ greetingReferenceApplies: false }), config: {} })
-  assert.equal(ids(second).includes('opening'), false, '⛔ 第二轮还给了开场')
+  assert.equal(ids(second).includes('opening'), false, '⛔ 第二轮更没有')
+  assert.doesNotMatch(textOf(second, 'provenance'), /greeting=first-turn/, '第二轮不该标 first-turn')
   assert.equal(ids(second).includes('provenance'), true, '来源标记仍在')
 })
 
