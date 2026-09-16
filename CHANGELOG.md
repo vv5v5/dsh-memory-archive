@@ -4,9 +4,11 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.5.2] - 2026-09-16
 
-> v3 消费端（Tavern 外部组合 API）：**代码到位、默认关**。开着才接管装配；关着与今天完全一样。
+> v3 消费端（Tavern 外部组合 API）：**代码到位、默认关**。开着才接管装配；关着与 0.5.0 完全一样。
+> ⚠️ v3 目前只活在 Tavern 的候选分支（`codex/prompt-composition-api-v3` @ `92d5924`，未合并未发布）；
+> 正式版 2.2.0 上 `/pmp-dsh-tavern/api/v3/*` 是 404，本插件会**如实降级**（`GET /v3` 回 `TAVERN_V3_UNAVAILABLE`）。
 
 ### Added
 
@@ -31,6 +33,20 @@
 - 组合器走**软注入**（`ctx.inject([...], cb)`）：硬 `inject: ['pmpDshTavernPrompt']` 的插件在 Tavern 被卸载后
   会让整个 Host 起不来（沙箱实测：`1 entry did not activate`）。
 - `callConfig` 默认**不回传**（上游"推荐回传还是省略"那一问未定前的保守选择，可开 `echoSuggestedCallConfig`）。
+- ★ **三个只有真机才暴露的集成陷阱**（已写进代码注释并各有自检钉住，也已回帖上游 issue #3）：
+  1. **段文本里的 `{{名字}}` 会被 DSH 插值**（只认 `provider`/`model`/`cwd`）⇒ 卡片示例里的 `{{user}}`
+     让整轮**直接失败**。Tavern 把卡原文原样交给组合器 ⇒ **宏由我们负责**：`{{char}}`/`{{user}}` 用
+     `runtime.macroContext` 展开（值为空就留空，与内置一致）、解不了的**中和**成不带花括号的词、畸形嵌套兜底拆花括号。
+  2. **段对象只许有 `{id, text}` 两个键**：多一个键就 `422 OUTPUT_INVALID`，而报错文案
+     （"Sections require unique ids and text"）不指向真因（出处：上游 `prompt-composition.js:224-226`）。
+  3. **世界书审计的 `entryId` 是裸 uid**（字符串或数字），而 `loreEntries[].id` 是全名 ——
+     只按一种查会**一条都命中不了且不报错**（静默少注入）。现在两种键都收，命中拿不到正文时如实计数
+     （来源标记里写 `worldInfo-unresolved=`）。
+
+### Known gaps
+
+- `extensions.depth_prompt` **没进**装配（内置会按 depth 插进消息历史；v1 需要 DSH 侧的插入能力，先不做）。
+- ST 完整 marker/宏策略、`prompt_order` 重排、世界书 token 预算裁剪：不做（与上游示例同档的诚实边界）。
 
 ## [0.5.0] - 2026-09-16
 
