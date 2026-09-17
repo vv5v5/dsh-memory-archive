@@ -513,13 +513,14 @@ await t('行为级: 两段式 —— 装配期只记结构（offset 留空），
   assert.equal(rec.turn, 7)
   assert.equal(rec.sections[1].chars, 5, '段自身字数照旧（插值后口径）')
   assert.equal(rec.sections[0].hash, hash16('identity-static'), '段自身 hash 照旧')
-  // ★★ 装配期**不许**发布位置与整段凭据 —— 这个位置原理上拿不到最终正文（anima 是 next() 之后才改写）
+  // ★★ 装配期**不许**发布位置与整段凭据 —— 这里拿到的是"瀑布返回值"，但 DSH 之后还会做
+  //    `complete` 段覆盖 ⇒ 未必等于**最终**系统正文。真位置只能等 `system/message` 来定。
   assert.deepEqual(rec.sections.map((s) => s.offset), [null, null, null, null], '装配期 offset 必须留空')
   assert.deepEqual(rec.sections.map((s) => s.renderedChars), [null, null, null, null])
   assert.deepEqual(rec.sections.map((s) => s.renderedHash), [null, null, null, null])
   assert.equal(rec.finalized, false)
   assert.equal(rec.finalizeReason, 'waiting-final-text')
-  assert.equal(rec.listenerMode, 'upstream-sentinel', '第一楼该由上游哨兵抓（会话事件还没来）')
+  assert.equal(rec.listenerMode, 'outermost-return', '最外层 + 读返回值（2026-09-17 判据实验后定案）')
 
   // 接管（会话事件）—— 与"等最终正文"共用 session/event，两件事都要发生
   emitAll('session/event', { id: 'sess-live' }, { type: 'agent/inbox/spliced' })
@@ -546,12 +547,53 @@ await t('行为级: 两段式 —— 装配期只记结构（offset 留空），
   assert.deepEqual(done.sections.map((s) => s.offset), [0, 17, null, 24])
   assert.deepEqual(done.sections.map((s) => s.renderedChars), [31, 31, 31, 31])
   assert.equal(done.sections[0].renderedHash, hash16(RENDERED), '★ 整段凭据 = 最终正文的（§9 两道验才过得去）')
+  // ★ 反证：那一段在最终正文里**也真的是空的**（空段不占位）⇒ 位置必须如实留空，⛔ 不编 0
+  assert.equal(done.sections[2].offset, null, '⛔ 空段不许编出位置')
   // 切片回读：拿定稿的 offset 从最终正文里切，逐字等于该段
   for (const [i, t] of FINAL_TEXTS.entries()) {
     if (t === '') continue
     const s = done.sections[i]
     assert.equal(RENDERED.slice(s.offset, s.offset + s.chars), t)
   }
+})
+
+await t('行为级: ★★ 装配期抄的是瀑布**返回值** —— 下游 `await next()` 之后加进去的段必须被记到', async () => {
+  const listeners = {}
+  const on = (ev, fn) => {
+    ;(listeners[ev] ??= []).push(fn)
+    return () => {}
+  }
+  const waterfall = async (ev, ...args) => {
+    const l = listeners[ev] ?? []
+    let i = -1
+    const next = async () => { i += 1; if (i >= l.length) return args[0]; return l[i](...args, next) }
+    return next()
+  }
+  const fakeScope = {
+    on,
+    effect: () => {},
+    logger: { info() {}, warn() {} },
+    systemPrompt: { getSectionOrder: () => undefined },
+    sessionProjections: { stateOf: (session, kind) => (kind === 'turnBoundary' ? { lastTurn: 11 } : null) },
+  }
+  const ctx = { plugin: (p) => p, on }
+  registerSectionsCapture(ctx, { dir }).apply(fakeScope) // 捕获挂在最外层
+  // ★ 模拟 anima：注册在**后面**（内层），`await next()` **之后**才改写并返回 ——
+  //   它的产物只沿返回值往上传，所以只有"站在前面 + 看返回值"的人才拿得到。
+  const INJECTED = '【记忆】下游注入的正文，入参里根本没有这一段'
+  on('system-prompt/assemble', async (a, b, next) => {
+    const out = await next()
+    return { ...out, sections: [...(out.sections ?? []), { name: 'anima:memory', text: INJECTED }] }
+  })
+  const file = join(dir, 'sess-outer.jsonl')
+  await waterfall('system-prompt/assemble', ASSEMBLY, { agent: { id: 'a', session: { id: 'sess-outer' } }, scope: fakeScope })
+  await new Promise((r) => setTimeout(r, 150))
+  const rec = readAssemblyFile(file).records[0]
+  assert.ok(rec, '该楼必须有记录')
+  const anima = rec.sections.find((s) => s.name === 'anima:memory')
+  assert.ok(anima, '★ 下游注入的段必须出现在捕获里（靠的是读**返回值**，不是读入参）')
+  assert.equal(anima.chars, INJECTED.length, '★ 且用的是**下游改写后**的正文长度')
+  assert.equal(anima.hash, hash16(INJECTED))
 })
 
 console.log(`PASS ${PASS.length}: ${PASS.join(' | ')}`)
