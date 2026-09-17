@@ -475,31 +475,83 @@ await t('分次提交: 同一楼两条 system/message（先前已过时的那条
   assert.equal(got.p.text, 'identity-static')
 })
 
-await t('行为级: 假 scope 走完 registerSectionsCapture → assemble 瀑布 → 落盘带 offset', async () => {
+await t('行为级: 两段式 —— 装配期只记结构（offset 留空），等 system/message 来了才定位真 offset', async () => {
   const listeners = {}
+  // ⚠️ 每个事件要能挂**多个**监听（`session/event` 上既有"接管触发"又有"等最终正文"），
+  //    所以存数组并按**注册顺序**跑；`system-prompt/assemble` 还要支持 next() 链（瀑布语义）。
+  const on = (ev, fn) => {
+    ;(listeners[ev] ??= []).push(fn)
+    return () => {}
+  }
+  const waterfall = async (ev, ...args) => {
+    const l = listeners[ev] ?? []
+    let i = -1
+    const next = async () => { i += 1; if (i >= l.length) return args[0]; return l[i](...args, next) }
+    return next()
+  }
+  const emitAll = (ev, ...args) => { for (const fn of (listeners[ev] ?? [])) { try { fn(...args) } catch {} } }
+  const proj = { turn: 7 }
   const fakeScope = {
-    on: (ev, fn) => {
-      listeners[ev] = fn
-      return () => {}
-    },
+    on,
     effect: () => {},
     logger: { info() {}, warn() {} },
     systemPrompt: { getSectionOrder: () => undefined },
-    sessionProjections: { stateOf: (session, kind) => (kind === 'turnBoundary' ? { lastTurn: 7 } : null) },
+    sessionProjections: { stateOf: (session, kind) => (kind === 'turnBoundary' ? { lastTurn: proj.turn } : null) },
   }
-  const ctx = { plugin: (p) => p }
+  const ctx = { plugin: (p) => p, on }
   const plugin = registerSectionsCapture(ctx, { dir })
   plugin.apply(fakeScope)
-  const next = () => 'next'
-  await listeners['system-prompt/assemble'](ASSEMBLY, { agent: { id: 'agent-l', session: { id: 'sess-live' } }, scope: fakeScope }, next)
-  await new Promise((r) => setTimeout(r, 120)) // 写队列异步化：给落盘一个事件循环
-  const f = readAssemblyFile(join(dir, 'sess-live.jsonl'))
+  const assembleCtx = { agent: { id: 'agent-l', session: { id: 'sess-live' } }, scope: fakeScope }
+  const file = join(dir, 'sess-live.jsonl')
+  const wait = () => new Promise((r) => setTimeout(r, 120))
+
+  await waterfall('system-prompt/assemble', ASSEMBLY, assembleCtx)
+  await wait()
+  const f = readAssemblyFile(file)
   assert.equal(f.records.length, 1)
   const rec = f.records[0]
   assert.equal(rec.turn, 7)
-  assert.deepEqual(rec.sections.map((s) => s.offset), [0, 17, null, 24])
-  assert.equal(rec.sections[1].chars, 5) // 插值后口径
-  assert.equal(rec.sections[0].renderedHash, hash16(RENDERED))
+  assert.equal(rec.sections[1].chars, 5, '段自身字数照旧（插值后口径）')
+  assert.equal(rec.sections[0].hash, hash16('identity-static'), '段自身 hash 照旧')
+  // ★★ 装配期**不许**发布位置与整段凭据 —— 这个位置原理上拿不到最终正文（anima 是 next() 之后才改写）
+  assert.deepEqual(rec.sections.map((s) => s.offset), [null, null, null, null], '装配期 offset 必须留空')
+  assert.deepEqual(rec.sections.map((s) => s.renderedChars), [null, null, null, null])
+  assert.deepEqual(rec.sections.map((s) => s.renderedHash), [null, null, null, null])
+  assert.equal(rec.finalized, false)
+  assert.equal(rec.finalizeReason, 'waiting-final-text')
+  assert.equal(rec.listenerMode, 'upstream-sentinel', '第一楼该由上游哨兵抓（会话事件还没来）')
+
+  // 接管（会话事件）—— 与"等最终正文"共用 session/event，两件事都要发生
+  emitAll('session/event', { id: 'sess-live' }, { type: 'agent/inbox/spliced' })
+
+  // ★ 反证：楼号对不上的 system/message **不许**用来定位（否则会拿错楼的正文去切）
+  emitAll('session/event', { id: 'sess-live' }, { type: 'system/message', data: { turn: 99, message: { content: [{ type: 'text', text: RENDERED }] } } })
+  await wait()
+  assert.equal(readAssemblyFile(file).records[0].finalized, false, '楼号不符时不许定稿')
+
+  // ★ 反证：正文对不上（这里给一段不是它发出去的正文）⇒ 只记原因，⛔ 不给位置
+  emitAll('session/event', { id: 'sess-live' }, { type: 'system/message', data: { turn: 7, message: { content: [{ type: 'text', text: '完全不相干的正文' }] } } })
+  await wait()
+  const partial = readAssemblyFile(file).records[0]
+  assert.equal(partial.finalized, false)
+  assert.match(String(partial.finalizeReason), /^locate-/)
+  assert.deepEqual(partial.sections.map((s) => s.offset), [null, null, null, null])
+
+  // ★★ 真·定稿：DSH 把**最终**系统正文写进日志 ⇒ 定位出真 offset，并补上整段凭据
+  emitAll('session/event', { id: 'sess-live' }, { type: 'system/message', data: { turn: 7, message: { content: [{ type: 'text', text: RENDERED }] } } })
+  await wait()
+  const done = readAssemblyFile(file).records[0]
+  assert.equal(done.finalized, true, '★ 最终正文一到就该定稿')
+  assert.equal(done.finalizeReason, 'located')
+  assert.deepEqual(done.sections.map((s) => s.offset), [0, 17, null, 24])
+  assert.deepEqual(done.sections.map((s) => s.renderedChars), [31, 31, 31, 31])
+  assert.equal(done.sections[0].renderedHash, hash16(RENDERED), '★ 整段凭据 = 最终正文的（§9 两道验才过得去）')
+  // 切片回读：拿定稿的 offset 从最终正文里切，逐字等于该段
+  for (const [i, t] of FINAL_TEXTS.entries()) {
+    if (t === '') continue
+    const s = done.sections[i]
+    assert.equal(RENDERED.slice(s.offset, s.offset + s.chars), t)
+  }
 })
 
 console.log(`PASS ${PASS.length}: ${PASS.join(' | ')}`)

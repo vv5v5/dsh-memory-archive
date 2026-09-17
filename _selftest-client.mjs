@@ -865,6 +865,9 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     // （面板那条 PUT /config 走的是表里已有的 ['PUT','/config']，这里两条是新端点）
     ['GET', '/v3'],
     ['POST', '/v3/mode'],
+    // trace 合同的「单条装配记录」详情（2026-09-17）：面板的逐轮装配视图按需读一条，
+    // 段正文还要再点一次（带 &section=N）。同一条 rest，不额外开端点。
+    ['GET', '/v3/assembly'],
     // 手动「扫归档原文 → 总结」（2026-09-16）：用户实测「导入之后摘要只有批次清单」⇒ 补的这一步。
     // 与导入同一套纪律：POST /summarize/plan 只规划（零 LLM），POST /summarize/apply 才调模型。
     ['POST', '/summarize/plan'],
