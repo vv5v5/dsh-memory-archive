@@ -351,7 +351,10 @@ export function apply(ctx, rawConfig) {
 
   ctx.tools.register({
     name: 'state_list',
-    description: '列出被状态插件接管过的会话（状态插件 = 主模型每轮调 state_patch 记账）。含是否已 seed、锚点轮次、状态日期。',
+    description: '列出被状态插件接管过的会话（状态插件 = 主模型每轮调 state_patch 记账）。含是否已 seed、锚点轮次、状态日期、'
+      + '以及 `live`（此刻还有没有一个活着的 agent 用着这个会话 id）。'
+      + '⛔ 这是**维护视图**：看到 live=false 的就是**陈旧记录**（例如所属周目已被删除），'
+      + '不要拿它的 sessionId 去填 state_patch —— state_patch 缺省就记本会话。',
     parameters: { type: 'object', additionalProperties: false, properties: {} },
     output: {
       schema: {
@@ -359,13 +362,17 @@ export function apply(ctx, rawConfig) {
         properties: {
           storageRoot: { type: 'string' },
           count: { type: 'integer' },
+          staleCount: { type: 'integer' },
           sessions: {
             type: 'array',
             items: {
               type: 'object', additionalProperties: false,
-              required: ['sessionId', 'seeded', 'hasState'],
+              required: ['sessionId', 'seeded', 'hasState', 'live'],
               properties: {
                 sessionId: { type: 'string' }, seeded: { type: 'boolean' }, hasState: { type: 'boolean' },
+                // ★ 2026-09-17：`live=false` = 此刻没有活 agent 用着这个 id（多半所属周目已被删）。
+                //   真机上模型就是照着一条 live 的陈旧记录把状态写错了地方 ⇒ 必须显式标出来。
+                live: { type: 'boolean' },
                 anchorTurn: { oneOf: [{ type: 'integer' }, { type: 'null' }] },
                 stateDate: { oneOf: [{ type: 'string' }, { type: 'null' }] },
                 updatedAt: { oneOf: [{ type: 'string' }, { type: 'null' }] },
@@ -377,20 +384,33 @@ export function apply(ctx, rawConfig) {
       render: (_a, v) => [{ type: 'text', text: JSON.stringify(v, null, 2) }],
     },
     async execute() {
+      const liveIds = (() => {
+        try { return new Set((ctx.agents?.list?.() ?? []).filter(a => a?.id && a?.session).map(a => a.id)) } catch { return new Set() }
+      })()
       const sessions = listSessions(root).map(s => ({
         sessionId: s.sessionId, seeded: s.seeded, hasState: s.hasState,
+        live: liveIds.has(s.sessionId),
         anchorTurn: s.anchorTurn ?? null, stateDate: s.stateDate ?? null, updatedAt: s.updatedAt ?? null,
       }))
-      return ok({ storageRoot: root, count: sessions.length, sessions })
+      return ok({
+        storageRoot: root,
+        count: sessions.length,
+        staleCount: sessions.filter(s => !s.live).length,
+        sessions,
+      })
     },
   })
 
   ctx.tools.register({
     name: 'state_show',
-    description: '看某个会话的当前状态、状态卡渲染文本、最近失败与审计（**不返回审计里的正文**，只给计数）。',
+    description: '看**本会话**的当前状态、状态卡渲染文本、最近失败与审计（**不返回审计里的正文**，只给计数）。'
+      + '★ 不给 session_id 就是本会话。',
     parameters: {
-      type: 'object', additionalProperties: false, required: ['session_id'],
-      properties: { session_id: { type: 'string' }, include_card: { type: 'boolean' } },
+      type: 'object', additionalProperties: false,
+      properties: {
+        session_id: { type: 'string', description: '**通常不要传** —— 缺省即本会话' },
+        include_card: { type: 'boolean' },
+      },
     },
     output: {
       schema: {
@@ -408,13 +428,16 @@ export function apply(ctx, rawConfig) {
       },
       render: (_a, v) => [{ type: 'text', text: v.card || JSON.stringify(v, null, 2) }],
     },
-    async execute(args) {
-      const sessionId = String(args.session_id)
-      const doc = readState(root, sessionId)
-      const card = args.include_card === false ? '' : (renderFor(sessionId, doc?.anchor?.turn ?? null) || '(无状态)')
+    async execute(args, exec) {
+      const target = resolveTargetSession(args, exec)
+      const sessionId = target.sessionId ?? ''
+      const doc = target.sessionId ? readState(root, target.sessionId) : null
+      const card = args.include_card === false
+        ? ''
+        : (target.sessionId ? (renderFor(target.sessionId, doc?.anchor?.turn ?? null) || '(无状态)') : '(定不出会话)')
       return {
         sessionId,
-        tracked: Boolean(doc?.state) || Boolean(readBaseline(root, sessionId)),
+        tracked: Boolean(doc?.state) || Boolean(target.sessionId && readBaseline(root, target.sessionId)),
         chars: card.length, tokens: estimateTokens(card),
         anchorTurn: doc?.anchor?.turn ?? null,
         stateDate: doc?.state?.时间?.日期 ?? null,
@@ -428,12 +451,13 @@ export function apply(ctx, rawConfig) {
   ctx.tools.register({
     name: 'state_seed',
     description:
-      '给某个会话设起跑线状态（**只有 seed 过的会话才会被状态插件接管**）。'
-      + '可从文件读，也可直接给 JSON 对象。不会覆盖已有状态，除非 overwrite=true。',
+      '【开一局时做一次】给**本会话**设起跑线状态（**只有 seed 过的会话才会被状态插件接管**，'
+      + '之后每轮才用得上 state_patch）。可从文件读，也可直接给 JSON 对象。不会覆盖已有状态，除非 overwrite=true。'
+      + '★ 不给 session_id 就是本会话（工具认得调用它的那一局）。',
     parameters: {
-      type: 'object', additionalProperties: false, required: ['session_id'],
+      type: 'object', additionalProperties: false,
       properties: {
-        session_id: { type: 'string' },
+        session_id: { type: 'string', description: '**通常不要传** —— 缺省即本会话' },
         from_file: { type: 'string', description: 'JSON 文件路径（其 state 字段或整个对象作为状态）' },
         state: { type: 'object', description: '直接给状态对象（与 from_file 二选一）' },
         overwrite: { type: 'boolean' },
@@ -451,8 +475,11 @@ export function apply(ctx, rawConfig) {
       },
       render: (_a, v) => [{ type: 'text', text: JSON.stringify(v, null, 2) }],
     },
-    async execute(args) {
-      const sessionId = String(args.session_id)
+    async execute(args, exec) {
+      const target = resolveTargetSession(args, exec)
+      if (target.conflict) return { sessionId: '', seeded: false, chars: 0, error: sessionConflictMessage(target) }
+      if (!target.sessionId) return { sessionId: '', seeded: false, chars: 0, error: '定不出目标会话：请省略 session_id 重试' }
+      const sessionId = target.sessionId
       const existing = readState(root, sessionId)
       if (existing?.state && args.overwrite !== true) {
         return { sessionId, seeded: false, chars: 0, error: '已有状态，需 overwrite=true 才能覆盖' }
@@ -481,15 +508,57 @@ export function apply(ctx, rawConfig) {
 
   // ─────────────────────────────────────── 主模型写入口：state_patch（patch-tool 模式的主路径）
 
-  /** 从 state_patch 入参里定目标会话：显式 session_id > 唯一活动会话。定不了返回 null。 */
-  function resolvePatchSession(args) {
+  /**
+   * 定「本会话」目标 —— `state_patch` / `state_seed` / `state_show` 共用。
+   *
+   * ★ 2026-09-17 真机实测修正。旧的两种写法都坏，且是**同一个病**「不知道谁在调，就靠猜」：
+   *   ① `state_patch` 靠「**唯一**活动会话」猜 —— 用户开着不止一个会话就不成立 ⇒
+   *      回「无法确定目标会话」⇒ **状态永远记不下来**（RP 预设还在每轮命令模型必须调它）；
+   *      更坏的是它会照着模型给的 id 写：真机上模型从 `state_list` 里挑了一条**已删周目**的
+   *      陈旧会话（`session-1f0a607b-…`，属 `playthrough-0f08d055`）传进来，
+   *      状态被**静默写进那条死记录**。
+   *   ② `state_seed` / `state_show` 把 `session_id` 写成 **required** —— 模型根本不知道本会话 id，
+   *      只能瞎填（真机它填了字面量 `"current"`）⇒「该会话还没被状态插件接管」死循环。
+   *
+   * 会话本来不用猜：`execute(args, exec)` 的 `exec.agent` 就是**调用这个工具的那个 agent**
+   *   （`ToolExecutionInput.agent` 原文：「The agent on whose behalf the call runs」）。
+   *
+   * 口径（fail-closed，⛔ 不静默）：
+   *   ① 调用者会话 = `exec.agent.session.id`，有就用它（最权威）；
+   *   ② 调用者会话拿不到时，才退回入参 session_id；
+   *   ③ 仍拿不到、且 allowUniqueActive ⇒ 退回「唯一活动会话」（保底，尽量少用）；
+   *   ④ 都不行 ⇒ null（调用方回一句可读的拒绝说明）。
+   *   ★ 显式传了一个**与本会话不同**的 id ⇒ 回 `conflict`，由调用方**拒收并说明**，
+   *     绝不照着写 —— 真机上那正是把状态写进「已删周目的陈旧记录」的那条路。
+   *
+   * @returns {{ sessionId: string|null, live: string|null, asked: string, conflict: boolean }}
+   */
+  function resolveTargetSession(args, exec, { allowUniqueActive = false } = {}) {
+    const live = (() => {
+      try {
+        const s = exec?.agent?.session?.id
+        return typeof s === 'string' && s !== '' ? s : null
+      } catch { return null }
+    })()
     const asked = String(args?.session_id ?? '').trim()
-    if (asked) return asked
-    try {
-      const ids = [...new Set((ctx.agents?.list?.() ?? []).filter(a => a?.id && a?.session).map(a => a.id))]
-      if (ids.length === 1) return ids[0]
-    } catch { /* ignore */ }
-    return null
+    if (live !== null) {
+      if (asked !== '' && asked !== live) return { sessionId: null, live, asked, conflict: true }
+      return { sessionId: live, live, asked: '', conflict: false }
+    }
+    if (asked !== '') return { sessionId: asked, live: null, asked, conflict: false }
+    if (allowUniqueActive) {
+      try {
+        const ids = [...new Set((ctx.agents?.list?.() ?? []).filter(a => a?.id && a?.session).map(a => a.id))]
+        if (ids.length === 1) return { sessionId: ids[0], live: null, asked: '', conflict: false }
+      } catch { /* ignore */ }
+    }
+    return { sessionId: null, live: null, asked: '', conflict: false }
+  }
+
+  /** 共用的可读拒绝文案（`session_id` 与本会话对不上时）。 */
+  function sessionConflictMessage(t) {
+    return `session_id 与本会话不一致（你传的是 ${t.asked}，本会话是 ${t.live}）。`
+      + '本工具只作用于**当前这一局**：请**省略 session_id** 重试（⛔ 不要从 state_list 里挑 id）'
   }
 
   /** state_patch 的 turn/seq 取法：优先活会话的投影与事件流，退回已落盘锚点（离线场景可审计可回放）。 */
@@ -520,7 +589,7 @@ export function apply(ctx, rawConfig) {
     parameters: {
       type: 'object', additionalProperties: false, required: ['patch'],
       properties: {
-        session_id: { type: 'string', description: '目标会话；缺省且恰有一个活动会话时自动选定' },
+        session_id: { type: 'string', description: '**通常不要传** —— 缺省即本会话（工具认得调用它的那一局）。传一个不是本会话的 id 会被拒收，⛔ 不要从 state_list 里挑 id 填进来。' },
         patch: changeSchema(),
         summary: { type: 'string', maxLength: 400, description: '本轮状态变更的依据说明（对话中的哪一句 / 哪次掷骰）' },
       },
@@ -547,7 +616,7 @@ export function apply(ctx, rawConfig) {
       },
       render: (_a, v) => [{ type: 'text', text: `${v.message}\n当前状态简摘：${v.brief}` }],
     },
-    async execute(args) {
+    async execute(args, exec) {
       const finish = (sessionId, extra) => ({
         sessionId, ok: false, changed: false, rejected: false, turn: null,
         added: 0, removed: 0, expired: 0, guardTotal: null, guardLimit: null, errs: [], ...extra,
@@ -556,9 +625,13 @@ export function apply(ctx, rawConfig) {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
         return finish('', { rejected: true, message: 'patch 必须是对象（本轮无变化就传 {}）', brief: '' })
       }
-      const sessionId = resolvePatchSession(args)
+      const target = resolveTargetSession(args, exec, { allowUniqueActive: true })
+      if (target.conflict) {
+        return finish('', { rejected: true, brief: '', message: sessionConflictMessage(target) })
+      }
+      const sessionId = target.sessionId
       if (!sessionId) {
-        return finish('', { rejected: true, message: '无法确定目标会话：请显式传 session_id（或确保当前恰有一个活动会话）', brief: '' })
+        return finish('', { rejected: true, message: '无法确定目标会话：请省略 session_id 重试（正常情况下工具能认出调用它的那一局）', brief: '' })
       }
       const doc = readState(root, sessionId)
       if (!isTracked(sessionId) || !doc?.state) {

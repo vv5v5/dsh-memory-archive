@@ -56,28 +56,62 @@ export const inject = ['tools']
 const RESERVED_TRANSPORT = 'run_code'
 
 /**
- * 默认要留下的全局工具 —— **已退役，保持为空**（2026-09-13 迁移）。
+ * 「额外显式点名要留的全局工具」—— 默认空；正常路径走下面那组**模式**。
  *
- * 为什么是空的：anima / state-bridge 已从 profile 层迁进本 preset，
- * `anima_query` / `state_show` / `state_list` **不再是全局工具** ⇒ 写在这里也匹配不到，
- * 留着只会让人误以为白名单还在起作用。
- *
- * 空集合的实际语义 = 「挡掉全部**继承来的**全局工具」。而本 preset 自己挂的工具
- * （那三个）不在全局表里 ⇒ 不在 deny 名单里 ⇒ **照常可见**。这两件事是分开的。
- *
- * 保留 `config.allow` 这个入口只是为了将来真要豁免某个**全局**工具时有地方写。
+ * ⚠️ 2026-09-13 曾把这里当作**唯一**白名单并清空，前提是「anima / state-bridge 已从
+ *   profile 层迁进本 preset」。那个前提**没落实**（`dsh-anima-rag` 至今仍是 profile bundle）
+ *   ⇒ `deny = 全部全局` 把 `anima_query` / `state_patch` 一并挡掉。详见下面那组模式。
+ *   现在这里只作「万一要额外豁免某个全局工具」的入口。
  */
 const DEFAULT_ALLOW = []
 
 /**
+ * ★ 要**留在** RP 工具面里的全局工具 —— 按**名字模式**匹配（2026-09-17 改）。
+ *
+ * 为什么从「空白名单（deny = 全部全局）」改成模式匹配：
+ *   原来那次改动的前提是「anima / state-bridge 已从 profile 层迁进本 preset」——
+ *   前提**没落实**：`dsh-anima-rag` 至今还在 `profiles/web/package.json` 的 bundles 里
+ *   （`dsh-memory-archive` 同理，state-bridge 就活在它内部）⇒ 它们的工具**还是全局工具**
+ *   ⇒ `deny = 全部全局` 把它们一并挡掉。
+ *   真机证据：roleplay 会话的 `request/header.tools` 只有 `skill` / `web_search` 两个，
+ *   `anima_query` / `state_patch` 全不在 ⇒ 模型根本调不到 `state_patch`，
+ *   于是**从来没记过状态**（`state:card` 116 次全 0 字）；模型自己的思维链也写着
+ *   「there's no state_patch tool available in my function list」。
+ *
+ * ★ 为什么用**模式**而不是手写名字：`restrict()` 会校验名单里的名字必须是**已知的全局工具**，
+ *   写错一个 = 抛错 = **整个 preset 挂载失败 = 用户开不了周目**。
+ *   而 deny 名单本来就是从**运行时真实全局表**里筛出来的 ⇒ 用模式筛**不点名任何工具**，
+ *   插件改名字 / 没挂上都不会炸。
+ */
+const DEFAULT_KEEP_PATTERNS = Object.freeze([
+  /^anima_query$/, // 戏内回忆（检索）
+  /^anima_status$/, // 记忆库状态（诊断用）
+  /^state_/, // 状态件：state_patch / state_show / state_list / state_seed
+])
+
+/**
+ * ★ 明确**排除**：维护型工具不进 RP 工具面。
+ * 它们的描述里本来就写着「⛔ 不是角色扮演环节，RP 会话里不要调」——
+ * 放进工具面只会诱使模型误调，还白占 schema 预算。
+ * （它们仍在**数据库/维护会话**里可用：那里不是 RP 预设。）
+ */
+const DEFAULT_DROP_PATTERNS = Object.freeze([
+  /^anima_ingest$/,
+  /^anima_forget$/,
+])
+
+/**
  * 把调用方 scope 继承来的全局工具收成白名单。
  * @param ctx - preset 常驻挂载的（有 scope 的）context。
- * @param config - `{ allow?: string[] }`，要**留下**的全局工具名。
+ * @param config - `{ allow?: string[] }`，**额外**要留下的全局工具名（照旧支持；默认空）。
  */
 export function apply(ctx, config) {
-  const allow = new Set(
-    Array.isArray(config?.allow) && config.allow.length > 0 ? config.allow : DEFAULT_ALLOW,
-  )
+  const explicitAllow = Array.isArray(config?.allow) ? config.allow : DEFAULT_ALLOW
+  const allow = new Set(explicitAllow)
+  /** 该留吗：显式点名 ∪ 命中保留模式，再减去排除模式。 */
+  const shouldKeep = (toolName) =>
+    allow.has(toolName)
+    || (DEFAULT_KEEP_PATTERNS.some((re) => re.test(toolName)) && !DEFAULT_DROP_PATTERNS.some((re) => re.test(toolName)))
   /** 上一次 `restrict()` 返回的撤销函数；重算前必须先撤，否则限制会在层上越堆越多。 */
   let disposePrevious
   /** 重入保护：`restrict()` 自身会 emit `tools/change`。 */
@@ -134,8 +168,8 @@ export function apply(ctx, config) {
       // 不带 scope 的 `schemas()` = **全局视图**（`tools/src/index.ts:1219-1227`），
       // 正好是 restrict 能点名的那个名字集合。
       const globals = ctx.tools.schemas().map((schema) => schema.name)
-      const deny = globals.filter((toolName) => !allow.has(toolName) && toolName !== RESERVED_TRANSPORT)
-      const kept = globals.filter((toolName) => allow.has(toolName))
+      const deny = globals.filter((toolName) => !shouldKeep(toolName) && toolName !== RESERVED_TRANSPORT)
+      const kept = globals.filter((toolName) => shouldKeep(toolName))
       disposePrevious?.()
       disposePrevious = undefined
       if (deny.length > 0) disposePrevious = ctx.tools.restrict({ deny })
@@ -149,7 +183,7 @@ export function apply(ctx, config) {
       //    ⇒ 日志只报「全局挡了多少」，并明说本 preset 自己的工具不受影响。
       console.log(
         `[rp-tool-scope] 全局工具 ${globals.length} 个 → 挡掉 ${deny.length} 个`
-        + (kept.length > 0 ? `（按白名单保留 ${kept.join(', ')}）` : '（无白名单，全部挡掉）')
+        + (kept.length > 0 ? `（保留 ${kept.join(', ')}）` : '（⚠ 一个都没保留 —— 检查上方保留模式是否还匹配得上）')
         + '；本 preset 自己挂的工具不在此列，不受影响',
       )
     } catch (error) {

@@ -313,3 +313,105 @@ test('注入文本带「记账方式」提示（主模型的调用契约每轮�
   assert.match(env.card(), /【🛠 记账方式】/)
   assert.match(env.card(), /state_patch/)
 })
+
+// ─────────────────────────────────────── ★ 定会话：用「调用者」，不猜（2026-09-17 真机修正）
+
+test('★ 定会话①：给了 exec.agent 就不用 session_id —— 直接记本会话', async () => {
+  const env = makeEnv()
+  const s = liveSession(env.world)
+  await env.seed({ 时间: { 日期: '1966/09/01' } })
+  const r = await env.tools.state_patch.execute(
+    { patch: { 时间: { 日期: '1966/09/02' } } },
+    { agent: { id: 'sess1', session: s } },
+  )
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.equal(r.sessionId, 'sess1')
+  assert.equal(readState(env.root, 'sess1').state.时间.日期, '1966/09/02')
+})
+
+test('★ 定会话②（反证）：显式传一个**不是本会话**的 id ⇒ 拒收，且本会话状态一个字不动', async () => {
+  const env = makeEnv()
+  const s = liveSession(env.world)
+  await env.seed({ 时间: { 日期: '1966/09/01' } })
+  const r = await env.tools.state_patch.execute(
+    { session_id: 'session-1f0a607b-stale', patch: { 时间: { 日期: '1966/09/09' } } },
+    { agent: { id: 'sess1', session: s } },
+  )
+  assert.equal(r.ok, false, JSON.stringify(r))
+  assert.equal(r.rejected, true)
+  assert.match(r.message, /不一致/)
+  assert.match(r.message, /session-1f0a607b-stale/)
+  assert.equal(readState(env.root, 'sess1').state.时间.日期, '1966/09/01', '本会话状态必须原样不动')
+})
+
+test('★ 定会话③：显式传的 id **就是**本会话 ⇒ 照常放行（不误伤）', async () => {
+  const env = makeEnv()
+  const s = liveSession(env.world)
+  await env.seed({ 时间: { 日期: '1966/09/01' } })
+  const r = await env.tools.state_patch.execute(
+    { session_id: 'sess1', patch: { 时间: { 日期: '1966/09/03' } } },
+    { agent: { id: 'sess1', session: s } },
+  )
+  assert.equal(r.ok, true, JSON.stringify(r))
+})
+
+test('★ 定会话④：没有 exec、又没有 session_id、又有多个活动会话 ⇒ 可读的拒绝（说明该怎么改）', async () => {
+  const env = makeEnv()
+  liveSession(env.world)
+  await env.seed({ 时间: { 日期: '1966/09/01' } })
+  env.world.agents = [{ id: 'a', session: { id: 'a', events: [] } }, { id: 'b', session: { id: 'b', events: [] } }]
+  const r = await env.tools.state_patch.execute({ patch: {} })
+  assert.equal(r.ok, false)
+  assert.equal(r.rejected, true)
+  assert.match(r.message, /省略 session_id/)
+})
+
+test('★ state_list 标出 live：此刻没有活 agent 用着的记录必须显式标出来（陈旧记录陷阱）', async () => {
+  const env = makeEnv()
+  liveSession(env.world)
+  await env.seed({ 时间: { 日期: '1966/09/01' } })
+  await env.tools.state_seed.execute({ session_id: 'session-stale-0001', state: { 时间: { 日期: '1966/08/01' } } })
+  const v = await env.tools.state_list.execute()
+  const byId = Object.fromEntries(v.sessions.map((x) => [x.sessionId, x]))
+  assert.equal(byId.sess1.live, true, '本会话应标 live')
+  assert.equal(byId['session-stale-0001'].live, false, '陈旧记录应标 !live')
+  assert.equal(v.staleCount, 1)
+})
+
+// ─────────────────────────────────────── ★ state_seed / state_show 同样「用调用者」
+
+test('★ state_seed 不带 session_id ⇒ 给**本会话**设起跑线（旧写法是 required，模型只能瞎填 "current"）', async () => {
+  const env = makeEnv()
+  const s = liveSession(env.world)
+  const r = await env.tools.state_seed.execute(
+    { state: { 时间: { 日期: '1966/09/01' } } },
+    { agent: { id: 'sess1', session: s } },
+  )
+  assert.equal(r.seeded, true, JSON.stringify(r))
+  assert.equal(r.sessionId, 'sess1')
+  assert.equal(readState(env.root, 'sess1').state.时间.日期, '1966/09/01')
+})
+
+test('★ state_seed 反证：传了一个不是本会话的 id ⇒ 报错且**不播种**', async () => {
+  const env = makeEnv()
+  const s = liveSession(env.world)
+  const r = await env.tools.state_seed.execute(
+    { session_id: 'session-1f0a607b-stale', state: { 时间: { 日期: '1966/09/01' } } },
+    { agent: { id: 'sess1', session: s } },
+  )
+  assert.equal(r.seeded, false)
+  assert.match(String(r.error), /不一致/)
+  assert.equal(readState(env.root, 'sess1'), null, '本会话不该被写进任何东西')
+})
+
+test('★ state_show 不带 session_id ⇒ 看**本会话**（不再要求模型自报家门）', async () => {
+  const env = makeEnv()
+  const s = liveSession(env.world)
+  await env.seed({ 时间: { 日期: '1966/09/01' } })
+  const r = await env.tools.state_show.execute(
+    { include_card: false },
+    { agent: { id: 'sess1', session: s } },
+  )
+  assert.equal(r.sessionId, 'sess1')
+  assert.equal(r.tracked, true)
+})
