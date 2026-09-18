@@ -5,8 +5,9 @@
  *
  * 第 1 步（node --check）在命令行单独跑；本脚本覆盖：
  *   第 2 步：假 window.__ModuleLoader__ 接住 factory + 假 react + 假 ctx 真调 apply()
- *            —— ★ 席位恰好 2 个（都是 sidebar.footer.action，id 集合 = {memory-archive,
- *               agent-editor}，v5 P0 契约）、settings.section 为零、exports.__internals 存在、
+ *            —— ★ 席位恰好 3 个（20260918 F 单起：sidebar.footer.action ×2，id 集合 =
+ *               {memory-archive, agent-editor}，原样未动 + conversation.input.right ×1，
+ *               id ooc-quote / order 90）、settings.section 为零、exports.__internals 存在、
  *               真名解析纯函数三级回退、★ 工作区名解析 / 空会话过滤 / 相对时间 / system
  *               分段注释（§2.6 逐字）、面板各视图真渲染、模板卡片真渲染、提示词查看器面板真渲染。
  *   第 3 步：宿主 API 契约静态核对（根路径 + rest 全在表内）+ v4.1 静态核对
@@ -29,6 +30,9 @@
  *   ViewerSessionList #0=filter #1=expanded #2=showAll；
  *   TemplatesView #0=tab；TemplateCard #0=load #1=draft #2=save #3=refOpen #4=tick；
  *   CompositionBlock #0=open；KnobsPanel #0=open #1=tpl #2=diffPlan。
+ *   OocQuoteButton（F 单 20260918）#0=btnRef(useRef) #1=verdict（useState 初值 = 当前选区判据，
+ *     初值函数在台子上会真执行 ⇒ 靠 globalThis.window.getSelection / globalThis.document 假件喂选区）
+ *     #2=note；useEffect 台子上不执行 ⇒ selectionchange 监听只存在于真机。
  */
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -214,13 +218,20 @@ await check('★ D 单：apply(fakeCtx) 不抛；搜索类阅读源已删 ⇒ �
   assert.deepEqual(mod.inject, ['slots'])
 })
 
-await check('★ v5 P0 契约：恰好注册 2 个席位，id 集合 = {memory-archive, agent-editor}，都是 sidebar.footer.action', () => {
-  assert.equal(registeredList.length, 2, '席位数不是 2：' + registeredList.length)
+await check('★ 席位契约（20260918 F 单如实 2→3）：恰好注册 3 个席位 = 既有 sidebar.footer.action ×2（{memory-archive, agent-editor}，原样未动）+ 新增 conversation.input.right ×1（id ooc-quote，order 90）', () => {
+  // 为什么改 3：F 单「OOC 划词质疑」给插件加了第 3 席 conversation.input.right（输入栏发送键前）。
+  //   既有两席一字未动；这条断言仍然钉死**全插件席位总数恰好 N**（不是放宽成"至少 2"），只是 2 → 3。
+  assert.equal(registeredList.length, 3, '席位数不是 3：' + registeredList.length)
   const ids = registeredList.map((r) => r.meta.id).sort()
-  assert.deepEqual(ids, ['agent-editor', 'memory-archive'])
-  for (const r of registeredList) {
-    assert.equal(r.meta.name, 'sidebar.footer.action', '席位 ' + r.meta.id + ' 不是 sidebar.footer.action')
-  }
+  assert.deepEqual(ids, ['agent-editor', 'memory-archive', 'ooc-quote'])
+  const sidebar = registeredList.filter((r) => r.meta.name === 'sidebar.footer.action')
+  assert.equal(sidebar.length, 2, 'sidebar 席位数不是 2')
+  assert.deepEqual(sidebar.map((r) => r.meta.id).sort(), ['agent-editor', 'memory-archive'], '既有两席的 id 集合不许变')
+  const inputSeat = registeredList.find((r) => r.meta.name === 'conversation.input.right')
+  assert.ok(inputSeat, '缺 conversation.input.right 席位')
+  assert.equal(inputSeat.meta.id, 'ooc-quote', '第三席 id 应为 ooc-quote')
+  assert.equal(inputSeat.meta.order, 90, 'order 应为 90（排在重启按钮 restart-host 的 100 之前）')
+  assert.equal(['memory-archive', 'agent-editor', 'restart-host'].includes(inputSeat.meta.id), false, '⛔ 不许占用既有 id')
 })
 
 await check('★ settings.section 一个都没有（注入与注册两侧都为零）', () => {
@@ -1917,6 +1928,249 @@ await check('★ 消息流单 渲染（夹具）：消息流栏出分段段头/�
   assert.ok(ov === 'auto' || ov === 'scroll', '列表栏根容器不可滚：' + String(ov))
   assert.ok(typeof st.maxHeight === 'string' || (typeof st.maxHeight === 'number' && st.maxHeight >= 200), '列表栏根容器缺有界 maxHeight')
 })
+
+// ==================================================================
+// F 单（20260918）OOC 划词质疑：夹具 = 假 window.getSelection + 假 document + 假 DOM 节点
+//   （纯对象桩，无任何真 DOM）。★ 选区文本只在本进程内存里流转，本脚本不写任何文件；
+//   夹具文本全部是合成句（与 EDITOR_V2_FIXTURES 同一口径），不是真机剧情。
+// ==================================================================
+const ooc = mod.__ooc
+await check('OOC·出口在位：exports.__ooc 恰好 10 个成员（常量/纯函数/组件），未占用 __internals 等既有出口', () => {
+  assert.ok(ooc, '__ooc 缺失')
+  assert.deepEqual(Object.keys(ooc).sort(), [
+    'OOC_CONTAINER_SUFFIXES', 'OOC_QUOTE_MAX_CHARS', 'OOC_SEAT_SUFFIX', 'OocQuoteButton',
+    'buildOocText', 'findSessionContainer', 'oocAnchorInComposer', 'oocCurrentVerdict',
+    'readDraftFromProps', 'selectionVerdict',
+  ])
+  assert.equal(ooc.OOC_QUOTE_MAX_CHARS, 120, '截断口径应与 prompt-viewer 的 PREVIEW_MAX_CHARS 同为 120')
+  assert.equal(Object.keys(mod.__internals).length, 15, '⛔ __internals 必须仍是恰好 15 键')
+})
+
+// —— 假 DOM / 假选区环境（只服务 OOC 块，块尾恢复） ——
+// ★★ 2026-09-18 真机抓到「按钮恒禁用」后重做：类名改成**真机实测**的形状
+//   `<构建哈希>_<语义名>`（`_9UxHwG_scrollBody` / `_9UxHwG_composerSeat`；哈希随构建变 ⇒
+//   代码只认语义后缀），节点补齐 `parentElement` / `hasAttribute` / `querySelector`。
+//   ⛔ 旧夹具的两个盲区（就是漏掉这个 bug 的原因）：① 用的是 `.conversation.session` 这种
+//   真机根本不存在的类名；② 节点没有 `contains`，于是真实现里那条 `cur.contains(el)` 分支
+//   在台子上**一次都没被跑到** —— 而在真 DOM 里 `body.contains(任何元素)` 恒真。
+function oocMakeNode(className, parent) {
+  const el = {
+    className: className || '',
+    parentNode: parent || null,
+    parentElement: parent || null,
+    attrs: {},
+    kids: [],
+    setAttribute(k, v) { el.attrs[k] = String(v); return el },
+    hasAttribute(k) { return Object.prototype.hasOwnProperty.call(el.attrs, k) },
+    querySelector() { return null },
+  }
+  if (parent && Array.isArray(parent.kids)) parent.kids.push(el)
+  return el
+}
+const oocAppRoot = oocMakeNode('app-root', null)
+const oocRoot = oocMakeNode('_9UxHwG_root', oocAppRoot)
+const oocBody = oocMakeNode('_9UxHwG_body', oocRoot)
+const oocScrollBody = oocMakeNode('_9UxHwG_scrollBody', oocBody)          // ← 会话区容器（判据要认出来的）
+const oocMsgPara = oocMakeNode('', oocScrollBody)                         // 会话正文里的一段
+const oocSeat = oocMakeNode('_9UxHwG_composerSeat', oocScrollBody)        // 我们这一席挂的输入栏座位
+// ★★ 真机实测的**关键形状**：输入框那一坨自己带 `_root`（`sFkQRG_root`），且**比会话区更靠内**
+//   ⇒ 「第一个命中的祖先就返回」会停在只有输入框的一小块上。链的其余部分见 findSessionContainer 的注释。
+const oocCardRoot = oocMakeNode('sFkQRG_root', oocSeat)
+const oocCard = oocMakeNode('sFkQRG_card', oocCardRoot)
+const oocEditor = oocMakeNode('sFkQRG_input', oocCard)                    // 输入框（真机是 contenteditable）
+oocEditor.setAttribute('contenteditable', '')
+oocScrollBody.querySelector = (sel) => (sel === '[contenteditable]' ? oocEditor : null)
+const oocSidebarLeaf = oocMakeNode('z2cnRW_sessionRow', oocMakeNode('sidebar', oocAppRoot)) // 侧边栏行，不在会话区
+const oocDoc = {
+  querySelector(sel) { return String(sel).indexOf('_composerSeat') !== -1 ? oocSeat : null },
+  addEventListener() {}, removeEventListener() {},
+}
+function oocFakeSelection(text, anchor, collapsed) {
+  return {
+    rangeCount: collapsed ? 0 : 1,
+    isCollapsed: Boolean(collapsed),
+    getRangeAt() { return { commonAncestorContainer: anchor } },
+    toString() { return text },
+  }
+}
+let oocSelection = null
+win.getSelection = () => oocSelection
+globalThis.document = oocDoc
+
+const oocBtnComp = registeredList[2].comp        // 席位 3：ooc-quote（注册顺序 = apply 里的声明顺序）
+function oocFindButton(tree) {
+  const arr = collectNodes(tree, (n) => n.$$element === 'button', [])
+  assert.equal(arr.length, 1, 'OOC 组件应恰好渲染 1 个 button')
+  return arr[0]
+}
+function oocRecorder() { return { calls: [], setDraft(t) { this.calls.push(String(t)) } } }
+const OOC_PRESET_DRAFT = '我打算回到房间'
+// 草稿走**宿主 props.useInput**（生产口径：`SessionInput` 的 selector hook）——
+//   台子上直接给一个 (selector)=>draft 的假 hook；不给 ⇒ readDraftFromProps 返回 null ⇒ 不许写。
+function oocRenderWith(rec, sel, draft) {
+  oocSelection = sel
+  const props = { inputActions: rec }
+  if (draft !== undefined) props.useInput = () => draft
+  if (draft === null) props.__dmaReadDraft = () => undefined   // 「读不到」相（注入式）
+  return oocFindButton(fakeReact.createElement(oocBtnComp, props))
+}
+
+await check('OOC·★ 容器判据（2026-09-18 真机修正的回归位）：真机语义下必须认出会话区容器，且**不会**被 `<body>` 式的「谁 contains 谁」误判掉；侧边栏那片仍要拒', () => {
+  // 反证 1：这就是旧实现恒返回 null 的地方 —— 容器必须找得到
+  assert.equal(ooc.findSessionContainer(null, oocDoc), oocScrollBody, '首帧（按钮未挂）应退到输入栏座位再往上找到会话区容器')
+  assert.ok(ooc.OOC_CONTAINER_SUFFIXES.includes('_scrollBody'), '必须认语义后缀 _scrollBody（真机实测的类名形状）')
+  assert.equal(ooc.OOC_CONTAINER_SUFFIXES.some((s) => s.indexOf('conversation') !== -1), false, '⛔ 别再退回 `.conversation.session` 那套（真机里没这个词）')
+  // 反证 2：正常态（按钮已挂）—— 从按钮往上同样能找到
+  //   ★★ 这条同时钉住「后缀优先级扫整条链」：链上最近的那个命中是 `sFkQRG_root`（输入卡片自己的），
+  //   但正确答案是更外层的 `_9UxHwG_scrollBody`（会话区）。改回「第一个命中就返回」这条必红。
+  const oocBtnEl = oocMakeNode('dma-btn dma-entry', oocCard)
+  assert.equal(ooc.findSessionContainer(oocBtnEl, oocDoc), oocScrollBody, '按钮已挂时应从按钮往上找到同一个容器（不许停在输入卡片自己的 _root 上）')
+  // 反证 3：侧边栏那片**不是**会话区（锚点链条走不到容器）
+  assert.equal(ooc.selectionVerdict(oocSidebarLeaf, oocScrollBody).ok, false, '侧边栏选中必须拒')
+  // 反证 4：输入框里划自己的草稿也不算剧情（锚点是 contenteditable）
+  assert.equal(ooc.oocAnchorInComposer(oocEditor, oocScrollBody), true, '输入框里的选区要认出来')
+  assert.equal(ooc.oocAnchorInComposer(oocMsgPara, oocScrollBody), false, '正文里的选区不许误判成输入框')
+})
+
+await check('OOC·验收1 夹具渲染：假 inputActions + 会话区假选区 ⇒ 渲染出「质疑」按钮且可用；没有 inputActions ⇒ 如实禁用并给 title（不抛）', () => {
+  const rec = oocRecorder()
+  const btn = oocRenderWith(rec, oocFakeSelection('（夹具）他放下了剑。', oocMsgPara, false), OOC_PRESET_DRAFT)
+  assert.equal(btn.props.disabled, false, '有选区时按钮应可用')
+  assert.equal(typeof btn.props.onClick, 'function', 'onClick 应在')
+  assert.equal(btn.props.children, '质疑', '按钮文案应是「质疑」')
+  assert.ok(String(btn.props.title).includes('OOC 划词质疑'), '可用态 title 应说明功能')
+  const noActions = oocFindButton(fakeReact.createElement(oocBtnComp, {}))
+  assert.equal(noActions.props.disabled, true, '缺 inputActions 必须禁用')
+  assert.ok(String(noActions.props.title).includes('inputActions'), '禁用 title 应写明缺 inputActions')
+})
+
+await check('OOC·验收2 ★★反证（不许覆盖草稿）：预设「我打算回到房间」+ 有选区 ⇒ 点击后 setDraft 入参逐字保留原草稿全文、在最前、只在其后追加', () => {
+  const rec = oocRecorder()
+  const btn = oocRenderWith(rec, oocFakeSelection('（夹具）他推开门，走进屋。', oocMsgPara, false), OOC_PRESET_DRAFT)
+  assert.equal(btn.props.disabled, false)
+  btn.props.onClick()
+  assert.equal(rec.calls.length, 1, '点击应恰好写一次草稿')
+  const arg = rec.calls[0]
+  // ★★ 头号事故断言：原草稿的全部内容、逐字、在最前（其后追加以外不许重排/截断/改写）
+  assert.equal(arg.slice(0, OOC_PRESET_DRAFT.length), OOC_PRESET_DRAFT, '原草稿必须逐字保留在入参最前')
+  assert.equal(arg.indexOf(OOC_PRESET_DRAFT), 0, '原草稿不许被重排')
+  assert.ok(arg.length > OOC_PRESET_DRAFT.length, '引用块必须追加在原草稿之后')
+  assert.ok(arg.includes('\n\n> （夹具）他推开门，走进屋。\n\n【OOC】我的质疑：'), '拼装形状不对：' + JSON.stringify(arg))
+  assert.ok(arg.endsWith('【OOC】我的质疑：'), '结尾应是质疑引导行（不自动发送、留玩家续写）')
+})
+
+await check('OOC·★★验收2b 反证（读不到草稿就一个字不写）：会话位没给 useInput ⇒ 点击既不许调 setDraft，也要如实写明原因', () => {
+  const rec = oocRecorder()
+  const btn = oocRenderWith(rec, oocFakeSelection('（夹具）他推开了门。', oocMsgPara, false), null)
+  assert.equal(typeof btn.props.onClick, 'function')
+  btn.props.onClick()
+  assert.equal(rec.calls.length, 0, '读不到草稿时绝不许写（setDraft 是整体替换 ⇒ 盲写 = 覆盖玩家草稿）')
+  // 直接核读取口：没有 useInput / hook 抛错 ⇒ 一律 null（fail-closed）
+  assert.equal(ooc.readDraftFromProps({}), null, '没有 useInput ⇒ null')
+  assert.equal(ooc.readDraftFromProps({ useInput: () => 123 }), null, 'selector 返回非字符串 ⇒ null（不猜）')
+  assert.equal(ooc.readDraftFromProps({ useInput: () => '' }), '', '空草稿是合法值（要能区分「空字符串」与「读不到」）')
+  assert.equal(ooc.readDraftFromProps({ useInput: () => { throw new Error('boom') } }), null, 'hook 抛错 ⇒ null（不抛上去）')
+})
+
+await check('OOC·验收3 ★反证（空/纯空白选区）：按钮 disabled，且即便强行触发也不调用 setDraft', () => {
+  const rec = oocRecorder()
+  let btn = oocRenderWith(rec, oocFakeSelection('', oocMsgPara, true), OOC_PRESET_DRAFT)   // 完全空（折叠）
+  assert.equal(btn.props.disabled, true, '空选区必须禁用')
+  btn.props.onClick()
+  assert.equal(rec.calls.length, 0, '空选区强点也不许写草稿')
+  btn = oocRenderWith(rec, oocFakeSelection('   \n\t ', oocMsgPara, false), OOC_PRESET_DRAFT)   // 纯空白
+  assert.equal(btn.props.disabled, true, '纯空白选区必须禁用')
+  btn.props.onClick()
+  assert.equal(rec.calls.length, 0, '纯空白强点也不许写草稿')
+  assert.equal(ooc.oocCurrentVerdict(null).ok, false, '判据函数同样要给 false')
+})
+
+await check('OOC·验收4 ★反证（选区不在会话区）：侧边栏选中 / 容器判据落空 / 自家 dma- 面板正文 / 输入框内 ⇒ 一律 disabled 且强点不写', () => {
+  const rec = oocRecorder()
+  let btn = oocRenderWith(rec, oocFakeSelection('（夹具）某个文件名', oocSidebarLeaf, false), OOC_PRESET_DRAFT)
+  assert.equal(btn.props.disabled, true, '侧边栏选中必须禁用')
+  btn.props.onClick()
+  assert.equal(rec.calls.length, 0, '侧边栏选中强点也不许写')
+  // 会话区容器整个找不到（判据落空）⇒ 禁用，绝不放宽成「哪里选的都算」
+  oocSelection = oocFakeSelection('（夹具）他放下了剑。', oocMsgPara, false)
+  globalThis.document = { querySelector() { return null }, addEventListener() {}, removeEventListener() {} }
+  btn = oocFindButton(fakeReact.createElement(oocBtnComp, { inputActions: rec, useInput: () => OOC_PRESET_DRAFT }))
+  assert.equal(btn.props.disabled, true, '找不到会话区容器必须禁用')
+  btn.props.onClick()
+  assert.equal(rec.calls.length, 0, '容器缺失强点也不许写')
+  globalThis.document = oocDoc
+  // 自家面板正文（dma- 前缀链）不是剧情 —— 即便它挂在会话容器里也要拒
+  const dmaLeaf = oocMakeNode('dma-md-body', oocScrollBody)
+  btn = oocRenderWith(rec, oocFakeSelection('（夹具）面板正文', dmaLeaf, false), OOC_PRESET_DRAFT)
+  assert.equal(btn.props.disabled, true, '自家面板选中必须禁用')
+  btn.props.onClick()
+  assert.equal(rec.calls.length, 0, '面板正文强点也不许写')
+  // 输入框里划自己的草稿也不算「质疑 AI」
+  btn = oocRenderWith(rec, oocFakeSelection('（夹具）我打算回到房间', oocEditor, false), OOC_PRESET_DRAFT)
+  assert.equal(btn.props.disabled, true, '输入框内选区必须禁用')
+  btn.props.onClick()
+  assert.equal(rec.calls.length, 0, '输入框内强点也不许写')
+})
+
+await check('★ OOC·静态（验收5）：conversation.input.right 注册逐字在源码、meta 恰好一次、新 id 不撞既有三 id、既有两席注册行原样', () => {
+  assert.ok(src.includes("ctx.slots.inject('conversation.input.right'"), '缺第三席 inject')
+  const metaLine = "{ name: 'conversation.input.right', id: 'ooc-quote', order: 90 }"
+  assert.equal(src.split(metaLine).length - 1, 1, '第三席注册 meta 应恰好出现一次')
+  assert.equal(src.includes("id: 'restart-host'"), false, '⛔ 不许用重启按钮的 id restart-host')
+  assert.ok(src.includes("{ name: 'sidebar.footer.action', id: 'memory-archive' }"), '既有席位 memory-archive 原样在')
+  assert.ok(src.includes("{ name: 'sidebar.footer.action', id: 'agent-editor' }"), '既有席位 agent-editor 原样在')
+  assert.ok(src.includes('OocQuoteButton,'), 'apply 里应直接引用模块级 OocQuoteButton')
+})
+
+await check('OOC·纯函数 buildOocText：截断标注逐字、空草稿不带头前空行、草稿尾单换行/双换行三态', () => {
+  const long = '字'.repeat(150)
+  const t = ooc.buildOocText('', long)
+  assert.ok(t.startsWith('> ' + '字'.repeat(120) + '…（已截断，原 150 字符）\n\n【OOC】我的质疑：'), '截断形状不对：' + JSON.stringify(t.slice(0, 40)))
+  const t2 = ooc.buildOocText('', '（夹具）短句')
+  assert.ok(t2.startsWith('> （夹具）短句\n\n【OOC】我的质疑：'), '空草稿不应有前导空行')
+  assert.ok(ooc.buildOocText('前文\n', '短').startsWith('前文\n\n> '), '草稿尾单换行 ⇒ 补成空行')
+  assert.ok(ooc.buildOocText('前文\n\n', '短').startsWith('前文\n\n> '), '草稿尾已空两行 ⇒ 不再加')
+  const multi = ooc.buildOocText('', '第一行\n第二行')
+  assert.ok(multi.includes('> 第一行\n> 第二行'), '引用应逐行加 > ')
+})
+
+await check('OOC·纯函数 selectionVerdict 判据表：空锚点/缺容器/侧边栏链 ⇒ false，会话区链 ⇒ true', () => {
+  assert.equal(ooc.selectionVerdict(null, oocScrollBody).ok, false, '无锚点 ⇒ false')
+  assert.equal(ooc.selectionVerdict(oocMsgPara, null).ok, false, '缺容器 ⇒ false')
+  assert.equal(ooc.selectionVerdict(oocMsgPara, oocScrollBody).ok, true, '会话区链 ⇒ true')
+  assert.equal(ooc.selectionVerdict(oocSidebarLeaf, oocScrollBody).ok, false, '侧边栏链 ⇒ false')
+})
+
+await check('OOC·容器判定：从我们自己的按钮往上找（侧边栏天然不在链上）；后缀阶梯逐档回退；全都落空 ⇒ null', () => {
+  // 后缀阶梯：只有 `_root` 命中时也要认出来（真机实测三档都存在，这里核降级）
+  const onlyRoot = oocMakeNode('_9UxHwG_root', null)
+  const seat2 = oocMakeNode('somewhereElse', onlyRoot)
+  assert.equal(ooc.findSessionContainer(seat2, oocDoc), onlyRoot, '只有 _root 命中时也要认（后缀阶梯）')
+  // 全都不命中 ⇒ null（调用方据此禁用，绝不放宽成「哪里选的都算」）
+  const barren = oocMakeNode('nothing-matches', null)
+  assert.equal(ooc.findSessionContainer(barren, { querySelector() { return null } }), null, '三档都不命中 ⇒ null')
+  // 传入的 doc 兜底要用上（按钮未挂时）
+  const calls = []
+  const doc2 = { querySelector(sel) { calls.push(sel); return oocSeat } }
+  assert.equal(ooc.findSessionContainer(null, doc2), oocScrollBody, '按钮未挂 ⇒ 退到座位再往上找')
+  assert.equal(calls.length, 1, '兜底只查一次座位')
+  assert.ok(calls[0].indexOf('_composerSeat') !== -1, '兜底查的是语义后缀 _composerSeat：' + calls[0])
+})
+
+await check('OOC·环境缺失不抛：window.getSelection 不存在 ⇒ 判据 false 且原因可读', () => {
+  const saved = win.getSelection
+  delete win.getSelection
+  try {
+    const v = ooc.oocCurrentVerdict(null)
+    assert.equal(v.ok, false)
+    assert.ok(String(v.reason).includes('getSelection'), '原因应点名 getSelection：' + String(v.reason))
+  } finally { win.getSelection = saved }
+})
+
+// —— OOC 块收尾：摘掉假环境（防呆；本脚本在此之后只剩总结行） ——
+delete win.getSelection
+delete globalThis.document
+oocSelection = null
 
 console.log('== 总结：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
 if (fails.length > 0) {
