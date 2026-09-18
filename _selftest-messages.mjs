@@ -164,6 +164,29 @@ await check('part=messages 带 count + messages 行数组（W0 增量 5）', asy
     assert.ok(body.messages.every((m) => 'seq' in m && 'role' in m && 'preview' in m && 'chars' in m && 'isToolResult' in m && 'isCompacted' in m))
   })
 })
+await check('★ 甲（2026-09-18）：part=messages&seq= ⇒ 只回那一条的**原样**对象；⛔ 不许拿拼装结果冒充、不许给没落位的 seq', async () => {
+  await withServer(fakeSource({ s: messyEvents }), async (base) => {
+    const { body } = await getJson(base, '/api/part?id=s&turn=2&part=messages&seq=22')
+    assert.equal(body.ok, true)
+    assert.equal(body.seq, 22)
+    assert.equal(body.role, 'assistant')
+    // ★ 原样：日志里 assistant 那条的 message 对象就该逐字回来（role + content 都在）
+    assert.deepEqual(body.message, { role: 'assistant', content: '二楼回答' }, '原样对象不对：' + JSON.stringify(body.message))
+    assert.ok(/原样/.test(body.messageSource) && /wire JSON/.test(body.messageSource), '来源必须写清"是日志原样、不是 wire JSON"：' + body.messageSource)
+    // ★ 被压缩遮蔽的行（seq 13/14）已不在模型历史里 ⇒ 如实报没有（⛔ 不许捞回来）
+    const shadowed = await getJson(base, '/api/part?id=s&turn=2&part=messages&seq=13')
+    assert.equal(shadowed.body.ok, false, '被压缩遮蔽的行不许再捞出来：' + JSON.stringify(shadowed.body))
+    // 但**压缩摘要那一条本身**在历史里（它就是取代前史的那条 user 消息）⇒ 取得到，且带 isCompacted
+    const summaryRow = await getJson(base, '/api/part?id=s&turn=2&part=messages&seq=24')
+    assert.equal(summaryRow.body.ok, true, '摘要那条应该取得到')
+    assert.equal(summaryRow.body.isCompacted, true, '摘要那条要如实标 isCompacted')
+    assert.equal(summaryRow.body.message._event, 'compaction/summary', '压缩摘要不是消息 ⇒ 如实标它的事件类型')
+    const gone = await getJson(base, '/api/part?id=s&turn=1&part=messages&seq=22')
+    assert.equal(gone.body.ok, false, '第 1 楼发不出 seq=22 ⇒ 必须如实报没有')
+    const bad = await getJson(base, '/api/part?id=s&turn=2&part=messages&seq=abc')
+    assert.equal(bad.body.ok, false, 'seq 不是整数 ⇒ ok:false')
+  })
+})
 await check('参数卫兵：limit=0 / from=-1 / 缺 id ⇒ ok:false 且不抛', async () => {
   await withServer(fakeSource({ s: messyEvents }), async (base) => {
     for (const q of ['/api/messages?id=s&limit=0', '/api/messages?id=s&from=-1', '/api/messages', '/api/messages?id=nope']) {
