@@ -1269,6 +1269,53 @@ await check('★35 宿主定位段：4 段（harness:source/app:web-surface/cont
     'state:card 不该画出「RP 遮蔽」标')
 })
 
+// ===== 20260918 查看器单（T1 底本全覆盖）：「未抓到」= 底本 − 覆盖，只减不编 =====
+const fixText = (seed, n) => { let out = ''; while (out.length < n) out += seed + ' '; return out.slice(0, n) }
+// C4_CAPTURED 的 sections：48 + 2981 + 10 = 3,039，非空 3 段 ⇒ 覆盖 = 3,039 + (3−1)×2 = 3,043
+const PM_SYS_COVERED = 48 + 2981 + 10 + 2 * 2
+
+await check('★36 T1 反证（多一段）：底本比覆盖多一段 ⇒ [system] 框出「未抓到」行并报出精确字数（只减不编）', () => {
+  const sysBase = fixText('A', 48) + '\n\n' + fixText('B', 2981) + '\n\n' + fixText('C', 10) + '\n\n' + fixText('Z', 700)
+  const d = pm.buildMapFromSections(C4_CAPTURED, { messagesText: MSG_FULL_L2, systemText: sysBase })
+  assert.equal(d.totals.uncapturedChars, sysBase.length - PM_SYS_COVERED, '未抓到字数不是「底本−覆盖」减出来的')
+  assert.equal(d.totals.uncapturedChars, 702, '应恰为 700 字的多余段 + 2 个分隔符 = 702')
+  const row = findBlock(d, 'uncaptured')
+  assert.ok(row, '[system] 框缺「未抓到」行')
+  assert.equal(row.dashed, true, '未抓到该是灰虚线（内容没抓到，不是已检出段）')
+  assert.deepEqual(row.uncaptured, { baseChars: sysBase.length, coveredChars: PM_SYS_COVERED, chars: 702 }, '底本/覆盖/差值三个数都在')
+  // 渲染：行可见且把字数报出来
+  const tree = renderMap(d)
+  const text = visibleText(tree)
+  assert.ok(text.includes('未抓到'), '渲染层没画出「未抓到」行')
+  assert.ok(text.includes(fmtN(702) + ' 字'), '渲染层没报出未抓到字数')
+})
+
+await check('★37 T1 反证（恰好相等）：底本 = Σsections + 分隔符 ⇒ 「未抓到」行不出现（⛔ 不写 0 字占位行）；底本取不到同样不出', () => {
+  const sysBase = fixText('A', 48) + '\n\n' + fixText('B', 2981) + '\n\n' + fixText('C', 10)
+  assert.equal(sysBase.length, PM_SYS_COVERED, '夹具本身要恰好相等')
+  const d = pm.buildMapFromSections(C4_CAPTURED, { messagesText: MSG_FULL_L2, systemText: sysBase })
+  assert.equal(d.totals.uncapturedChars, null, '恰好相等必须 null（不出行）')
+  assert.equal(findBlock(d, 'uncaptured'), null, '恰好相等不许出现未抓到块')
+  // 底本取不到（不传 systemText）⇒ 无从相减 ⇒ 也不出行（既有 ★14 的形状断言走的就是这条路径）
+  const d2 = pm.buildMapFromSections(C4_CAPTURED, { messagesText: MSG_FULL_L2 })
+  assert.equal(d2.totals.uncapturedChars, null)
+  assert.equal(findBlock(d2, 'uncaptured'), null)
+})
+
+await check('★38 T1 边界：文本推断路径不出「未抓到」（块就是从底本切的，没得比）；底本比覆盖短（截断拷贝）不出负数行；降级路径不出', () => {
+  const sysBase = fixText('A', 48) + '\n\n' + fixText('B', 2981) + '\n\n' + fixText('C', 10) + '\n\n' + fixText('Z', 700)
+  const dInferred = pm.buildMapFromSections(
+    { ok: true, source: 'inferred', capturedAt: null, turn: 2, sections: C4_CAPTURED.sections, contexts: C4_CAPTURED.contexts, tools: C4_CAPTURED.tools },
+    { messagesText: MSG_FULL_L2, systemText: sysBase })
+  assert.equal(dInferred.totals.uncapturedChars, null, '推断路径不该出未抓到')
+  assert.equal(findBlock(dInferred, 'uncaptured'), null)
+  const dShort = pm.buildMapFromSections(C4_CAPTURED, { messagesText: MSG_FULL_L2, systemText: fixText('A', 100) })
+  assert.equal(dShort.totals.uncapturedChars, null, '底本 < 覆盖（如 40 万字符截断拷贝）不许出现负数「未抓到」')
+  const dFallback = pm.buildPromptMapData({ systemText: sysBase, tools: TOOLS_FULL, messagesText: MSG_FULL })
+  assert.ok(dFallback.totals.uncapturedChars == null, '降级路径不许给未抓到字数')
+  assert.equal(dFallback.boxes.some((bx) => (bx.blocks || []).some((b) => b && b.key === 'uncaptured')), false, '降级路径不许出未抓到块')
+})
+
 console.log('== 汇总：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
 if (fails.length > 0) {
   console.log('失败项：\n  - ' + fails.join('\n  - '))

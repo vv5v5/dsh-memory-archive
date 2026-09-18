@@ -5,12 +5,110 @@
   "part": "messages",
   "requestLogged": false,
   "headerCarried": true,
-  "count": 4,
-  "text": "（fixture 构造文本 —— 注意：这是第 2 楼实际发出的历史，不是整份会话历史）\n\nuser: （fixture）先查一下状态\nassistant: （fixture）正在查询……\ntool: （fixture）工具结果：ok\nassistant: （fixture）查询完成。",
+  "count": 6,
+  "chars": 278,
+  "text": "── [seq 16] user ──\n开始吧\n\n── [seq 18] assistant ──\n好的，我们开始。\n\n── [seq 520] user ──\n（fixture）先查一下状态\n\n── [seq 523] assistant ──\n（fixture 思维链）玩家要查状态：先调 status 工具，等结果再回答。\n这一段是词头演示，全文不进查看器。（fixture）正在查询……\n\n── [seq 526] tool ──\n（fixture）工具结果：ok\n\n── [seq 529] assistant ──\n（fixture）查询完成。",
   "messages": [
-    { "seq": 520, "role": "user", "preview": "（fixture）先查一下状态", "chars": 15, "isToolResult": false, "isCompacted": false },
-    { "seq": 523, "role": "assistant", "preview": "（fixture）正在查询……", "chars": 14, "isToolResult": false, "isCompacted": false },
-    { "seq": 526, "role": "tool", "preview": "（fixture）工具结果：ok", "chars": 16, "isToolResult": true, "isCompacted": false },
-    { "seq": 529, "role": "assistant", "preview": "（fixture）查询完成。", "chars": 14, "isToolResult": false, "isCompacted": false }
+    {
+      "seq": 16,
+      "turn": 1,
+      "role": "user",
+      "preview": "开始吧",
+      "chars": 3,
+      "isToolResult": false,
+      "isCompacted": false,
+      "blocks": [
+        {
+          "kind": "text",
+          "chars": 3,
+          "head": "开始吧"
+        }
+      ]
+    },
+    {
+      "seq": 18,
+      "turn": 1,
+      "role": "assistant",
+      "preview": "好的，我们开始。",
+      "chars": 8,
+      "isToolResult": false,
+      "isCompacted": false,
+      "blocks": [
+        {
+          "kind": "text",
+          "chars": 8,
+          "head": "好的，我们开始。"
+        }
+      ]
+    },
+    {
+      "seq": 520,
+      "turn": 2,
+      "role": "user",
+      "preview": "（fixture）先查一下状态",
+      "chars": 15,
+      "isToolResult": false,
+      "isCompacted": false,
+      "blocks": [
+        {
+          "kind": "text",
+          "chars": 15,
+          "head": "（fixture）先查一下状态"
+        }
+      ]
+    },
+    {
+      "seq": 523,
+      "turn": 2,
+      "role": "assistant",
+      "preview": "（fixture 思维链）玩家要查状态：先调 status 工具，等结果再回答。",
+      "chars": 73,
+      "isToolResult": false,
+      "isCompacted": false,
+      "blocks": [
+        {
+          "kind": "reasoning",
+          "chars": 58,
+          "head": "（fixture 思维链）玩家要查状态：先调 status 工具，等结果再回答。"
+        },
+        {
+          "kind": "text",
+          "chars": 15,
+          "head": "（fixture）正在查询……"
+        }
+      ]
+    },
+    {
+      "seq": 526,
+      "turn": 2,
+      "role": "tool",
+      "preview": "（fixture）工具结果：ok",
+      "chars": 16,
+      "isToolResult": true,
+      "isCompacted": false,
+      "blocks": [
+        {
+          "kind": "text",
+          "chars": 16,
+          "head": "（fixture）工具结果：ok"
+        }
+      ]
+    },
+    {
+      "seq": 529,
+      "turn": 2,
+      "role": "assistant",
+      "preview": "（fixture）查询完成。",
+      "chars": 14,
+      "isToolResult": false,
+      "isCompacted": false,
+      "blocks": [
+        {
+          "kind": "text",
+          "chars": 14,
+          "head": "（fixture）查询完成。"
+        }
+      ]
+    }
   ]
 }

@@ -74,7 +74,9 @@ function makeFakeReact() {
   const useEffect = () => { idx++ }
   const useLayoutEffect = () => { idx++ }
   const useCallback = (fn) => { idx++; return fn }
-  const useMemo = (fn) => { idx++; return fn }
+  // 20260918 查看器单：改回真语义（本帧求值一次）。此前返回 fn 本身，MarkdownBody
+  // （唯一 useMemo 用户，client.js:1407）在台子上会 blocks.map 抛错 —— 消息流下钻要真渲染它。
+  const useMemo = (fn) => { idx++; return fn() }
   function createElement(type, props) {
     const rest = Array.prototype.slice.call(arguments, 2)
     const p = {}
@@ -1599,6 +1601,111 @@ await check('★ 最近几楼卡（2026-09-17 新段 mt:lastFloors）：卡在�
   // ★ 灵敏度自证：把"卡没挂进设置视图"的写法喂给同一条判据，必须命中（否则是橡皮章）
   const notMounted = "e(EchoCard, { config: cfg, reload: reload }),"
   assert.equal(/e\(LastFloorsCard, \{ config: cfg, reload: reload \}\)/.test(notMounted), false, '反证失败：这条判据抓不住"卡没挂上"')
+})
+
+// ===== 20260918 查看器单（T2/T3）：消息流按楼分段 + 详细词头（含思维链） =====
+const vmsg = mod.__viewerMessages
+const FX_REASON_HEAD = '（fixture 思维链）玩家要查状态：先调 status 工具，等结果再回答。'
+const FX_REASON_TAIL = '这一段是词头演示，全文不进查看器。'
+// 结构级收集：每个 data-msg-seg 段容器 ⇒ { turn, seqs:它下面 data-msg-seq 成员 }（谁在哪个段，一眼可断）
+function collectMsgSegs(tree) {
+  const segs = []
+  const walk = (node, seg) => {
+    if (node == null || typeof node !== 'object') return
+    if (Array.isArray(node)) { node.forEach((n) => walk(n, seg)); return }
+    const props = node.props || {}
+    let cur = seg
+    if (props['data-msg-seg'] !== undefined) {
+      cur = { turn: props['data-msg-seg'], seqs: [] }
+      segs.push(cur)
+    }
+    if (cur !== null && props['data-msg-seq'] != null) cur.seqs.push(String(props['data-msg-seq']))
+    const child = node.rendered !== undefined ? node.rendered : (node.props && node.props.children)
+    walk(child, cur)
+  }
+  walk(tree, null)
+  return segs
+}
+
+await check('★ 20260918 出口：__viewerMessages 在（夹具整包/分段纯函数/消息流视图）；夹具带 turn + reasoning 块；__internals 仍恰 15 键', () => {
+  assert.ok(vmsg, '缺 exports.__viewerMessages')
+  assert.equal(typeof vmsg.groupMessagesByTurn, 'function', '缺 groupMessagesByTurn')
+  assert.equal(typeof vmsg.ViewerMessagesBody, 'function', '缺 ViewerMessagesBody')
+  const fx = vmsg.EDITOR_V2_FIXTURES['part-messages']
+  assert.ok(fx && fx.ok === true && Array.isArray(fx.messages) && fx.messages.length > 0, 'part-messages 夹具缺失')
+  assert.ok(fx.messages.every((m) => Number.isInteger(m.turn) && m.turn > 0), '夹具每条消息都该有正整数 turn（不猜 0）')
+  assert.ok(fx.messages.some((m) => Array.isArray(m.blocks) && m.blocks.some((b) => b && b.kind === 'reasoning')), '夹具缺带 reasoning 块的消息')
+  assert.deepEqual(Object.keys(mod.__internals).sort(),
+    [
+      'buildCatalogIndex', 'clipInfo', 'decodeWorkspaceSlug', 'groupSessionsByWorkspace',
+      'hiddenSessionReason', 'labelCharacter', 'labelPlaythrough', 'labelSession', 'pad4',
+      'parseMarkdown', 'relativeTime', 'shortId', 'splitMessagesText', 'splitSystemSections',
+      'workspaceLabelFromCwd',
+    ], '__internals 键集合不许动')
+})
+
+await check('★ 20260918 T3 夹具渲染：按楼分段段头出现（第 1 楼/第 2 楼），每条消息各归各段（结构级核对，不丢）', () => {
+  const fx = vmsg.EDITOR_V2_FIXTURES['part-messages']
+  const tree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, query: '', messages: fx.messages })
+  const segs = collectMsgSegs(tree)
+  assert.deepEqual(segs.map((s) => s.turn), ['1', '2'], '段序该按楼号出现序')
+  assert.deepEqual(segs[0].seqs.sort(), ['16', '18'], '第 1 楼成员不对')
+  assert.deepEqual(segs[1].seqs.sort(), ['520', '523', '526', '529'], '第 2 楼成员不对')
+  const text = visibleText(tree)
+  assert.ok(text.includes('第 1 楼') && text.includes('第 2 楼'), '缺「第 N 楼」段头')
+})
+
+await check('★ 20260918 T2：思维链词头可见且灰斜体可辨；正文词头行齐；⛔ 默认不展开全文（第二行不可见）', () => {
+  const fx = vmsg.EDITOR_V2_FIXTURES['part-messages']
+  const tree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, query: '', messages: fx.messages })
+  const rows = collectNodes(tree, (n) => n.props && n.props['data-msg-block'] === 'reasoning', [])
+  assert.equal(rows.length, 1, 'reasoning 词头行该恰 1 条：' + rows.length)
+  assert.ok(visibleText(rows[0]).includes(FX_REASON_HEAD), '思维链词头不可见')
+  assert.equal(visibleText(rows[0]).includes(FX_REASON_TAIL), false, '词头行不许带出全文')
+  const st = rows[0].props.style || {}
+  assert.equal(st.fontStyle, 'italic', '思维链要斜体可辨')
+  assert.equal(st.color, 'GrayText', '思维链要灰可辨')
+  const textRows = collectNodes(tree, (n) => n.props && n.props['data-msg-block'] === 'text', [])
+  assert.ok(textRows.length >= 5, '正文词头行数不对：' + textRows.length)
+  assert.equal(visibleText(tree).includes(FX_REASON_TAIL), false, '默认视图把思维链全文展开了（⛔ 不许默认展开）')
+})
+
+await check('★ 20260918 下钻：预设 hook0=展开 seq 523 ⇒ 该条全文（第二行）可见；不展开则只有词头 —— 可下钻但不默认展开', () => {
+  const fx = vmsg.EDITOR_V2_FIXTURES['part-messages']
+  fakeReact.__setPreset({ ViewerMessagesBody: { 0: new Set(['523']) } })
+  try {
+    const tree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, query: '', messages: fx.messages })
+    const all = visibleText(tree)
+    assert.ok(all.includes(FX_REASON_HEAD) && all.includes(FX_REASON_TAIL), '展开态没有出该条全文')
+    // 点开一条只展开一条：别的条不该被连带展开成全文视图（这里核对搜索态/老形态专属的整段兜底没被误用）
+    const flowSegs = collectMsgSegs(tree)
+    assert.equal(flowSegs.length, 2, '展开态仍该是按楼分段视图')
+  } finally { fakeReact.__setPreset(null) }
+})
+
+await check('★ 20260918 反证（缺 turn）：某条 turn 改成 null ⇒ 落「未标注楼」段（不丢、不被别的楼捞走）', () => {
+  const fx = JSON.parse(JSON.stringify(vmsg.EDITOR_V2_FIXTURES['part-messages']))
+  fx.messages[2].turn = null   // seq 520，原属第 2 楼
+  const tree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, query: '', messages: fx.messages })
+  const segs = collectMsgSegs(tree)
+  const unmarked = segs.find((s) => s.turn === '')
+  assert.ok(unmarked, '缺「未标注楼」段')
+  assert.deepEqual(unmarked.seqs, ['520'], '未标注楼段该恰含被抹掉 turn 的那条')
+  const t2 = segs.find((s) => s.turn === '2')
+  assert.equal(t2.seqs.length, 3, '第 2 楼不许把 null 消息捞进去')
+  const total = segs.reduce((n, s) => n + s.seqs.length, 0)
+  assert.equal(total, fx.messages.length, '消息丢了（未标注楼不是丢弃）')
+  assert.ok(visibleText(tree).includes('未标注楼'), '段头没写「未标注楼」')
+})
+
+await check('★ 20260918 搜索词：带 query ⇒ 退回整段分块高亮（分段词头视图不拦截搜索）；老宿主没有 messages 数组 ⇒ 原样全文视图', () => {
+  const fx = vmsg.EDITOR_V2_FIXTURES['part-messages']
+  const searchTree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, query: '查询', messages: fx.messages })
+  assert.equal(collectNodes(searchTree, (n) => n.props && n.props['data-msg-turn'] !== undefined, []).length, 0, '搜索态不该出分段视图')
+  assert.ok(visibleText(searchTree).includes('查询'), '搜索态正文丢了')
+  const oldTree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, query: '', messages: null })
+  assert.equal(collectNodes(oldTree, (n) => n.props && n.props['data-msg-turn'] !== undefined, []).length, 0, '没有逐楼数据不该出分段视图')
+  assert.ok(visibleText(oldTree).includes(FX_REASON_TAIL), '老形态该按既有口径显示完整正文')
 })
 
 console.log('== 总结：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
