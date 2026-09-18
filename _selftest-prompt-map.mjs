@@ -832,6 +832,39 @@ await check('★25b 取值链新增两条来路：① 沿用上一份底本（ca
   assert.equal(st.footer, '该段内容不可用（未记录位置）', '没有明细时如实退回原口径：' + st.footer)
 })
 
+// ---------- 25c（2026-09-18 甲）：[messages] 框给**真实消息**，不再只有"速览"计数行 ----------
+await check('★25c [messages] 框：有逐条数据 ⇒ 一条消息一行（按楼 + 角色 + 思维链单列报字数 + 正文词头）；⛔ 没有逐条数据才退回计数行', () => {
+  const msgs = [
+    { seq: 12, role: 'user', chars: 22, turn: 12, isToolResult: false, isCompacted: false,
+      blocks: [{ kind: 'text', chars: 22, head: '我打算回到我的房间，修好钟。' }] },
+    { seq: 19, role: 'assistant', chars: 14823, turn: 12, isToolResult: false, isCompacted: false,
+      blocks: [{ kind: 'reasoning', chars: 14471, head: '先判断房间里的时间线……' }, { kind: 'text', chars: 352, head: '钟摆停了。' }] },
+    { seq: 26, role: 'tool', chars: 40, turn: 13, isToolResult: true, isCompacted: false,
+      blocks: [{ kind: 'text', chars: 40, head: 'ok' }] },
+  ]
+  const rows = pm.pmMessagesBlocks(null, msgs)
+  assert.equal(rows.length, 4, '1 行小计 + 3 行真实消息')
+  assert.equal(rows[0].label, '本楼实际发出的对话历史 · 3 条')
+  assert.equal(rows[0].chars, 22 + 14823 + 40, '小计字数 = 逐条之和')
+  assert.ok(rows[0].tip.includes('思维链'), '小计要说明其中几条带思维链：' + rows[0].tip)
+  assert.ok(rows[1].label.startsWith('第 12 楼 · user'), '行首按楼 + 角色：' + rows[1].label)
+  assert.ok(rows[1].label.includes('我打算回到我的房间'), '正文词头要带上：' + rows[1].label)
+  assert.ok(rows[2].label.includes('第 12 楼 · AI') && rows[2].label.includes('思维链'), '★ AI 那行必须单列思维链：' + rows[2].label)
+  assert.ok(rows[2].label.includes('钟摆停了'), '★ 还要带正文（不是只报思维链）：' + rows[2].label)
+  assert.equal(rows[3].color, 'blue', '工具结果行照旧蓝标')
+  assert.ok(rows[3].label.startsWith('第 13 楼 · tool'), '工具行也要按楼：' + rows[3].label)
+  assert.ok(!rows[3].label.includes('未标注楼'), '⛔ 有楼号就不许写"未标注楼"：' + rows[3].label)
+
+  // 反证：没有逐条数据 ⇒ 如实退回旧计数口径（有 text 才切得开）
+  const fallback = pm.pmMessagesBlocks('── [seq 503] user ──\n（fixture）开始吧', null)
+  assert.ok(Array.isArray(fallback), '退回路径不抛')
+  assert.equal(fallback.filter((b) => /本楼实际发出/.test(String(b.label))).length, 0, '⛔ 没有逐条数据不许编"本楼实际发出 N 条"')
+  // 反证：两条都没有 ⇒ 如实「取不到」
+  const none = pm.pmMessagesBlocks(null, null)
+  assert.equal(none.length, 1)
+  assert.ok(/取不到/.test(String(none[0].reason || none[0].sub || '')), '拿不到就要说取不到：' + JSON.stringify(none[0]))
+})
+
 // ---------- 26（B）：抽屉体渲染 = 段头 + 徽标 + 注释（未收录）+ 正文 + 页脚；复合段页脚 ----------
 // 20260914 M7：可见文字里的「依据…」/mutWhy/「如实展示，不编」退到悬停 title —— 信息留着，元话去掉。
 await check('★26 B 抽屉体：段名/order/字数/徽标（只留 [每轮]，依据进 title）/注释齐备；表外段名注释位「未收录（注释表未收录）」；正文来自 state.text；复合段页脚含「复合段内部需 Tavern 接口」；取不到时正文区不出现任何编造内容', () => {
@@ -1314,11 +1347,22 @@ await check('★36 T1 反证（多一段）：底本比覆盖多一段 ⇒ [syst
   assert.ok(row, '[system] 框缺「未抓到」行')
   assert.equal(row.dashed, true, '未抓到该是灰虚线（内容没抓到，不是已检出段）')
   assert.deepEqual(row.uncaptured, { baseChars: sysBase.length, coveredChars: PM_SYS_COVERED, chars: 702 }, '底本/覆盖/差值三个数都在')
-  // 渲染：行可见且把字数报出来
+  // ★ 2026-09-18（用户口径）：数字要能从句子里挑出来 ⇒ 结构化 subParts（词/数字分开）
+  const nums = row.subParts.filter((p) => p.t === 'n').map((p) => p.v)
+  assert.deepEqual(nums, [fmtN(sysBase.length), fmtN(PM_SYS_COVERED), fmtN(702)], 'subParts 的三个数字（底本/已装配/未认领）不对：' + JSON.stringify(nums))
+  assert.ok(row.subParts.map((p) => p.v).join('').includes('底本（system 全文）'), 'subParts 少了「底本」说明词')
+  assert.ok(row.subParts.map((p) => p.v).join('').includes('已装配') && row.subParts.map((p) => p.v).join('').includes('未认领'), 'subParts 的措辞该是「已装配 / 未认领」')
+  // ⛔ 两处口径必须一致：subParts 的词拼接后要覆盖 pure-text sub 的全部数字与措辞
+  for (const p of row.subParts) assert.ok(String(row.sub).includes(p.v), 'subParts 与 sub 口径漂移：' + p.v + ' 不在 sub 里')
+  // 渲染：行可见、字数报出、走的是**结构化**渲染（数字单独成 span）
   const tree = renderMap(d)
   const text = visibleText(tree)
   assert.ok(text.includes('未抓到'), '渲染层没画出「未抓到」行')
   assert.ok(text.includes(fmtN(702) + ' 字'), '渲染层没报出未抓到字数')
+  const richNode = collectNodes(tree, (n) => n.props && n.props['data-pm'] === 'sub-rich', [])
+  assert.equal(richNode.length, 1, '未抓到那行该走结构化渲染（data-pm=sub-rich），实得 ' + richNode.length)
+  const numSpans = collectNodes(richNode[0], (n) => n.props && n.props.style && /monospace/.test(String(n.props.style.fontFamily || '')), [])
+  assert.ok(numSpans.length >= 3, '数字该各自成等宽 span，实得 ' + numSpans.length)
 })
 
 await check('★37 T1 反证（恰好相等）：底本 = Σsections + 分隔符 ⇒ 「未抓到」行不出现（⛔ 不写 0 字占位行）；底本取不到同样不出', () => {

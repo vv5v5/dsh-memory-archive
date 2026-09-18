@@ -1683,6 +1683,41 @@ await check('★ 20260918 下钻：预设 hook0=展开 seq 523 ⇒ 该条全文�
   } finally { fakeReact.__setPreset(null) }
 })
 
+await check('★ 20260918 甲：单条「原 JSON」——按钮齐、点开渲染**原样**对象并写清来源；取不到如实说原因（⛔ 不空白）', () => {
+  const fx = vmsg.EDITOR_V2_FIXTURES['part-messages']
+  const props = { text: fx.text, query: '', messages: fx.messages, sessionId: 'fixture-session-static', turn: 2 }
+  // ① 按钮：每条有 seq 的消息都要有一个（⛔ 没有 seq 的条目给不了，不许给假的）
+  const tree0 = fakeReact.createElement(vmsg.ViewerMessagesBody, props)
+  const btns = collectNodes(tree0, (n) => n.props && n.props['data-msg-raw-btn'] != null, [])
+  assert.ok(btns.length >= 5, '每条有 seq 的消息都该有「原 JSON」按钮，实得 ' + btns.length)
+  assert.ok(visibleText(btns[0]).includes('原 JSON'), '按钮文案不对：' + visibleText(btns[0]))
+
+  // ② 展开态：预设 rawData（hook#2）⇒ 原样对象里的内容必须**原封不动**出现
+  const raw = {
+    ok: true, seq: 523, role: 'assistant', chars: 14823,
+    message: { role: 'assistant', content: [{ type: 'reasoning', text: 'FXRAW-REASON-BODY' }] },
+    messageSource: '会话日志里那条消息对象（原样）。⛔ 不是线上 wire JSON',
+  }
+  fakeReact.__setPreset({ ViewerMessagesBody: { 1: new Set(['523']), 2: { 523: raw } } })
+  try {
+    const tree = fakeReact.createElement(vmsg.ViewerMessagesBody, props)
+    const box = collectNodes(tree, (n) => n.props && n.props['data-msg-raw'] === 'ok', [])
+    assert.equal(box.length, 1, '该恰有一个「原样 JSON」块，实得 ' + box.length)
+    const t = visibleText(box[0])
+    assert.ok(t.includes('FXRAW-REASON-BODY'), '★ 原样对象里的内容必须出现（不许加工）：' + t.slice(0, 200))
+    assert.ok(t.includes('会话日志里那条消息对象（原样）'), '★ 来源必须写清（回答"这是哪来的 json"）：' + t.slice(0, 200))
+  } finally { fakeReact.__setPreset(null) }
+
+  // ③ 反证：网络失败 ⇒ 如实说原因，⛔ 不许一片空白
+  fakeReact.__setPreset({ ViewerMessagesBody: { 1: new Set(['523']), 2: { 523: { __error: '网络炸了' } } } })
+  try {
+    const tree = fakeReact.createElement(vmsg.ViewerMessagesBody, props)
+    const box = collectNodes(tree, (n) => n.props && n.props['data-msg-raw'] === 'error', [])
+    assert.equal(box.length, 1, '取不到要出 error 块')
+    assert.ok(visibleText(box[0]).includes('网络炸了'), '要把原因说出来：' + visibleText(box[0]))
+  } finally { fakeReact.__setPreset(null) }
+})
+
 await check('★ 20260918 反证（缺 turn）：某条 turn 改成 null ⇒ 落「未标注楼」段（不丢、不被别的楼捞走）', () => {
   const fx = JSON.parse(JSON.stringify(vmsg.EDITOR_V2_FIXTURES['part-messages']))
   fx.messages[2].turn = null   // seq 520，原属第 2 楼
