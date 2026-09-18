@@ -164,32 +164,35 @@ try {
   )
 
   await call('PUT', '/config', { rootMode: 'workspace' })
+  // 20260918：旧的 `api.*` 面已删（那套是总结侧路的渠道设置）⇒ 密钥语义改指 `retrieval.*`
   await call('PUT', '/config', {
-    api: { url: 'https://example.invalid/v1/chat/completions', model: 'test-model', key: 'sk-TEST-abcd1234' },
+    retrieval: { url: 'https://example.invalid/v1', model: 'test-model', rerankModel: 'test-rerank', key: 'sk-TEST-abcd1234' },
   })
   const cK = await call('GET', '/config')
-  await call('PUT', '/config', { api: { key: '' } })
+  await call('PUT', '/config', { retrieval: { key: '' } })
   const cKeep = await call('GET', '/config')
-  await call('PUT', '/config', { api: { key: '__CLEAR__' } })
+  await call('PUT', '/config', { retrieval: { key: '__CLEAR__' } })
   const cClear = await call('GET', '/config')
   const cRoot = await call('GET', '/config')
   check(
-    "配置回环+密钥语义：workspace 读回；key→keySet=true keyHint=…1234 无原文；''保留；__CLEAR__→false；盘上有 config.json 无 .tmp",
-    cRoot.data?.rootMode === 'workspace' && cK.data?.keySet === true && cK.data?.keyHint === '…1234' &&
-      !cK.text.includes('sk-TEST-abcd1234') && !('key' in (cK.data?.api || {})) && cKeep.data?.keySet === true &&
-      cClear.data?.keySet === false && existsSync(join(HOME, 'dsh-memory-archive', 'config.json')) &&
+    "配置回环+密钥语义（改指 retrieval）：workspace 读回；key→retrieval.keySet=true keyHint=…1234 无原文；''保留；__CLEAR__→false；盘上有 config.json 无 .tmp",
+    cRoot.data?.rootMode === 'workspace' && cK.data?.retrieval?.keySet === true && cK.data?.retrieval?.keyHint === '…1234' &&
+      !cK.text.includes('sk-TEST-abcd1234') && !('key' in (cK.data?.retrieval || {})) && cKeep.data?.retrieval?.keySet === true &&
+      cClear.data?.retrieval?.keySet === false && existsSync(join(HOME, 'dsh-memory-archive', 'config.json')) &&
       !existsSync(join(HOME, 'dsh-memory-archive', 'config.json.tmp')),
   )
 
   const bad1 = await call('PUT', '/config', { rootMode: 'bogus' })
-  const bad2 = await call('PUT', '/config', { api: { url: 'ftp://nope' } })
+  const bad2 = await call('PUT', '/config', { retrieval: { url: 'ftp://nope' } })
+  const bad2b = await call('PUT', '/config', { api: { url: 'https://x.invalid' } })
   const bad3 = await call('PUT', '/config', '{not json')
   check(
-    '校验：rootMode=bogus / url=ftp:// / 非法JSON → 400 CONFIG_INVALID',
-    bad1.status === 400 && bad1.data?.error?.code === 'CONFIG_INVALID' && bad2.status === 400 && bad3.status === 400,
+    '校验：rootMode=bogus / url=ftp:// / 非法JSON → 400 CONFIG_INVALID；⛔ 旧 api 键应被明确拒（不静默）',
+    bad1.status === 400 && bad1.data?.error?.code === 'CONFIG_INVALID' && bad2.status === 400 && bad3.status === 400 &&
+      bad2b.status === 400,
   )
-  const t1 = await call('POST', '/config/test')
-  check('POST /config/test（key 已清空）→ 400 CONFIG_INCOMPLETE（未发网络请求）', t1.status === 400 && t1.data?.error?.code === 'CONFIG_INCOMPLETE')
+  const t1 = await call('POST', '/retrieval/test')
+  check('POST /retrieval/test（key 已清空）→ 400 CONFIG_INCOMPLETE（未发网络请求）', t1.status === 400 && t1.data?.error?.code === 'CONFIG_INCOMPLETE')
 
   const s503 = await call('GET', '/sessions')
   const e503 = await call('GET', '/session/events?sessionId=x')

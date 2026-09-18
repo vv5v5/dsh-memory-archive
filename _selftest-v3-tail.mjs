@@ -174,5 +174,26 @@ check('⑤ Tavern 缺席（没有 pmpDshTavernPrompt）⇒ 段照挂但永远为
   assert.equal(r.status().enabled, true)
 })
 
+// ─────────── 第二条入口：已渲染正文（2026-09-18 上游删 /sources 之后）
+{
+  check('已渲染正文 ⇒ 外壳与 tailTextFromSources 逐字同款', () => {
+    const a = mod.tailTextFromRendered('每次回复不超过两句。', { tag: 'st-character-field', label: 'post-history-instructions' })
+    const b = mod.tailTextFromSources(makeSources(), { tag: 'st-character-field', dataKey: 'postHistoryInstructions', label: 'post-history-instructions' })
+    assert.equal(a.text, b.text, '⛔ 两条入口必须产出同一个壳（否则同一份内容两种样子）')
+  })
+  check('★ 反证：空/空白 ⇒ 不给段（reason=empty-rendered，⛔ 不吐半个段）', () => {
+    for (const v of ['', '   ', null, undefined, 42]) {
+      const r = mod.tailTextFromRendered(v, {})
+      assert.equal(r.text, '')
+      assert.equal(r.reason, 'empty-rendered')
+    }
+  })
+  check('★ 反证：残留的 {{user}} / 未知变量要被中和（⛔ 不许原样透传 —— DSH 会判未解析变量、让整轮失败）', () => {
+    const r = mod.tailTextFromRendered('你好 {{user}} 以及 {{未知词}}', {})
+    assert.equal(r.text.includes('{{'), false, '⛔ 不许把 {{…}} 原样送出去')
+    assert.equal(r.text.includes('}}'), false)
+  })
+}
+
 console.log('\n== 汇总：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
 if (fails.length > 0) { console.log('失败项：\n  - ' + fails.join('\n  - ')); process.exit(1) }
