@@ -1670,51 +1670,165 @@ await check('★ 20260918 T2：思维链词头可见且灰斜体可辨；正文�
   assert.equal(visibleText(tree).includes(FX_REASON_TAIL), false, '默认视图把思维链全文展开了（⛔ 不许默认展开）')
 })
 
-await check('★ 20260918 下钻：预设 hook0=展开 seq 523 ⇒ 该条全文（第二行）可见；不展开则只有词头 —— 可下钻但不默认展开', () => {
+// ★ 20260918 消息流单 T2（并进抽屉）：点行 ⇒ onOpenSeq(该条 seq) 开单条抽屉；
+//   旧「行内就地展开全文 + 行内原 JSON 按钮」必须死透；列表不读整段拼装 text。
+await check('★ 消息流单 T2 下钻（并进抽屉）：有 seq 的行都可点且 onClick 携带该 seq；行内展开/行内原 JSON 残留 = 不合格；列表不依赖整段 text', () => {
   const fx = vmsg.EDITOR_V2_FIXTURES['part-messages']
-  fakeReact.__setPreset({ ViewerMessagesBody: { 0: new Set(['523']) } })
+  let got = null
+  const tree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, messages: fx.messages, onOpenSeq: (s) => { got = s } })
+  const rows = collectNodes(tree, (n) => n.props && n.props['data-msg-row'] === '1', [])
+  assert.equal(rows.length, fx.messages.length, '每条消息一行，实得 ' + rows.length)
+  const clickable = rows.filter((n) => typeof n.props.onClick === 'function')
+  assert.equal(clickable.length, fx.messages.filter((m) => m.seq != null).length, '有 seq 的行都该可点（端点按 seq 取）')
+  // data-msg-seq 挂在消息容器上，行（data-msg-row）是它的直接子行 —— 先找容器再找行
+  const box523 = collectNodes(tree, (n) => n.props && n.props['data-msg-seq'] === '523', [])
+  assert.equal(box523.length, 1, '缺 seq 523 的消息容器')
+  const row523 = collectNodes(box523[0], (n) => n.props && n.props['data-msg-row'] === '1', [])[0]
+  assert.ok(row523 && typeof row523.props.onClick === 'function', 'seq 523 那行不可点')
+  row523.props.onClick()
+  assert.equal(got, 523, '点行必须把这一条的 seq 交给抽屉（onOpenSeq）')
+  // 拆干净的证据：行内就地展开与行内「原 JSON」不许再有残留
+  const t = visibleText(tree)
+  assert.equal(t.includes('展开 ▾'), false, '行内「展开 ▾」残留（就地展开全文该死）')
+  assert.equal(collectNodes(tree, (n) => n.props && n.props['data-msg-raw-btn'] != null, []).length, 0, '行内「原 JSON」按钮残留（已并进抽屉）')
+  // 列表不读整段拼装 text：text 给空串，分段列表照常在（正文按条从抽屉取）
+  const noTextTree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: '', messages: fx.messages, onOpenSeq: () => {} })
+  assert.equal(collectMsgSegs(noTextTree).length, 2, '没有整段 text 也必须能渲染分段列表')
+  // ★ 灵敏度自证：老写法（行内展开残迹）喂给同一条判据，必须命中（否则是橡皮章）
+  const oldRow = { props: { 'data-msg-row': '1' }, rendered: ['展开 ▾'] }
+  assert.ok(visibleText(oldRow).includes('展开 ▾'), '反证失败：判据抓不住"行内展开"的老写法')
+})
+
+// ===== 20260918 消息流单（T1/T2/T3）：单条抽屉（ViewerMsgPanel）—— 与 system 单段抽屉同构 =====
+// 抽屉正文的夹具（照宿主 /api/part&seq= 响应形状）：带一条长正文 + 一条思维链（尾部有标记，抓"默认展开"）。
+const FX_DRAWER_LONG_TAIL = 'DRAWSOFIX-LONGTAIL-MARKER'
+const fxDrawerResp = () => ({
+  ok: true, sessionId: 'fixture-session-static', turn: 2, part: 'messages',
+  seq: 523, role: 'assistant', chars: 6000, isToolResult: false, isCompacted: false,
+  message: { role: 'assistant', content: [
+    { type: 'reasoning', text: 'FXDRAWER-REASON 开头。' + '想'.repeat(400) + FX_DRAWER_LONG_TAIL },
+    { type: 'text', text: 'FXDRAWER-BODY 第一段。\n\n第二段。' + '写'.repeat(5000) + FX_DRAWER_LONG_TAIL },
+  ] },
+  messageSource: '会话日志里那条消息对象（原样）。⛔ 不是线上 wire JSON —— DSH 不落盘请求体，那个谁也拿不到。',
+})
+
+await check('★ 消息流单 T2 反证（按条取，不是切整段）：抽屉正文请求 URL 带 seq=；⛔ 不读 state.data.text、不切整段、不用 preview 拼', () => {
+  const fnBody = (name) => {
+    const i = src.indexOf('function ' + name + '(')
+    assert.ok(i >= 0, '缺函数 ' + name)
+    const j = src.indexOf('\n      function ', i)
+    return src.slice(i, j > i ? j : src.length)
+  }
+  const body = fnBody('ViewerMsgPanel')
+  assert.ok(body.includes("'&part=messages&seq='"), '抽屉正文请求缺 seq=（必须按条从出口取）')
+  assert.equal(body.includes('data.text'), false, '抽屉读了整段拼装文本 state.data.text')
+  assert.equal(body.includes('splitMessagesText'), false, '抽屉在客户端切整段文本')
+  assert.equal(body.includes('preview'), false, '抽屉不许拿 messages[].preview 拼正文')
+})
+
+await check('★ 消息流单 T2 抽屉渲染（长正文夹具）：头（seq/role/字数）+ 正文原样可见 + 原 JSON 带来源；思维链只给词头（灰斜体，⛔ 默认不展开）', () => {
+  const resp = fxDrawerResp()
+  fakeReact.__setPreset({ ViewerMsgPanel: { 0: { phase: 'ready', resp: resp, errMsg: '' } } })
   try {
-    const tree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, query: '', messages: fx.messages })
-    const all = visibleText(tree)
-    assert.ok(all.includes(FX_REASON_HEAD) && all.includes(FX_REASON_TAIL), '展开态没有出该条全文')
-    // 点开一条只展开一条：别的条不该被连带展开成全文视图（这里核对搜索态/老形态专属的整段兜底没被误用）
-    const flowSegs = collectMsgSegs(tree)
-    assert.equal(flowSegs.length, 2, '展开态仍该是按楼分段视图')
+    const tree = fakeReact.createElement(vmsg.ViewerMsgPanel, { sessionId: 'fixture-session-static', turn: 2, seq: 523 })
+    // 头：seq / role / 字数
+    const head = collectNodes(tree, (n) => n.props && n.props['data-msg-drawer-head'] === '1', [])
+    assert.equal(head.length, 1, '缺抽屉头')
+    const ht = visibleText(head[0])
+    assert.ok(ht.includes('[assistant]') && ht.includes('seq 523') && ht.includes('6,000 字'), '抽屉头不全：' + ht)
+    // 正文：text 块原样可见
+    const body = collectNodes(tree, (n) => n.props && n.props['data-msg-drawer-body'] === '1', [])
+    assert.equal(body.length, 1, '缺正文容器')
+    const bt = visibleText(body[0])
+    assert.ok(bt.includes('FXDRAWER-BODY'), '正文块内容丢了')
+    // 思维链：独立词头行，灰斜体；⛔ 全文默认展开（词头行与正文里都不许带出思维链尾标）
+    const reason = collectNodes(tree, (n) => n.props && n.props['data-msg-drawer-block'] === 'reasoning', [])
+    assert.equal(reason.length, 1, '思维链词头行该恰 1 条，实得 ' + reason.length)
+    const rt = visibleText(reason[0])
+    assert.ok(rt.includes('思维链') && rt.includes('FXDRAWER-REASON'), '思维链词头不可见：' + rt)
+    const rst = reason[0].props.style || {}
+    assert.equal(rst.fontStyle, 'italic', '思维链要斜体可辨')
+    assert.equal(rst.color, 'GrayText', '思维链要灰可辨')
+    assert.equal(rt.includes(FX_DRAWER_LONG_TAIL), false, '思维链全文被默认展开了（⛔ 不许）')
+    // 原 JSON：原样对象 + 来源说明（这正是"要看全文在 JSON 里对照"的那一份）
+    const raw = collectNodes(tree, (n) => n.props && n.props['data-msg-drawer-raw'] === '1', [])
+    assert.equal(raw.length, 1, '缺「原始 JSON」块')
+    const rawT = visibleText(raw[0])
+    assert.ok(rawT.includes('原始 JSON'), '缺「原始 JSON」标题')
+    assert.ok(rawT.includes('会话日志里那条消息对象（原样）'), '来源说明（messageSource）没摆出来')
+    assert.ok(rawT.includes('FXDRAWER-REASON'), '原样对象里的内容必须原样在 JSON 里（不加工）')
   } finally { fakeReact.__setPreset(null) }
 })
 
-await check('★ 20260918 甲：单条「原 JSON」——按钮齐、点开渲染**原样**对象并写清来源；取不到如实说原因（⛔ 不空白）', () => {
-  const fx = vmsg.EDITOR_V2_FIXTURES['part-messages']
-  const props = { text: fx.text, query: '', messages: fx.messages, sessionId: 'fixture-session-static', turn: 2 }
-  // ① 按钮：每条有 seq 的消息都要有一个（⛔ 没有 seq 的条目给不了，不许给假的）
-  const tree0 = fakeReact.createElement(vmsg.ViewerMessagesBody, props)
-  const btns = collectNodes(tree0, (n) => n.props && n.props['data-msg-raw-btn'] != null, [])
-  assert.ok(btns.length >= 5, '每条有 seq 的消息都该有「原 JSON」按钮，实得 ' + btns.length)
-  assert.ok(visibleText(btns[0]).includes('原 JSON'), '按钮文案不对：' + visibleText(btns[0]))
-
-  // ② 展开态：预设 rawData（hook#2）⇒ 原样对象里的内容必须**原封不动**出现
-  const raw = {
-    ok: true, seq: 523, role: 'assistant', chars: 14823,
-    message: { role: 'assistant', content: [{ type: 'reasoning', text: 'FXRAW-REASON-BODY' }] },
-    messageSource: '会话日志里那条消息对象（原样）。⛔ 不是线上 wire JSON',
+await check('★ 消息流单 T3 反证（抽屉能滚）：滚动容器 overflow=auto/scroll 且 maxHeight 有界；加载态与完成态**同一个容器**（⛔ 不许只写在加载态）', () => {
+  const assertScroll = (tree, tag) => {
+    const nodes = collectNodes(tree, (n) => n.props && n.props['data-msg-drawer-scroll'] === '1', [])
+    assert.equal(nodes.length, 1, tag + '：滚动容器该恰一个，实得 ' + nodes.length)
+    const st = nodes[0].props.style || {}
+    const ov = st.overflowY || st.overflow
+    assert.ok(ov === 'auto' || ov === 'scroll', tag + '：overflow 不是 auto/scroll：' + String(ov))
+    const mh = st.maxHeight
+    const bounded = (typeof mh === 'number' && mh >= 200)
+      || (typeof mh === 'string' && mh.trim() !== ''
+        && (/calc\(/.test(mh) || /vh|%|em|rem/.test(mh) || (Number.isFinite(parseFloat(mh)) && parseFloat(mh) >= 200)))
+    assert.ok(bounded, tag + '：maxHeight 缺失或不是有界口径（视口/父容器推）：' + String(mh))
   }
-  fakeReact.__setPreset({ ViewerMessagesBody: { 1: new Set(['523']), 2: { 523: raw } } })
+  // ① 加载态
+  const loadingTree = fakeReact.createElement(vmsg.ViewerMsgPanel, { sessionId: 'fixture-session-static', turn: 2, seq: 523 })
+  assertScroll(loadingTree, '加载态')
+  assert.ok(visibleText(loadingTree).includes('正在取 seq 523'), '加载态没有可见文案')
+  // ② 完成态（长正文夹具 —— "超出时能滚到底"的那条）
+  fakeReact.__setPreset({ ViewerMsgPanel: { 0: { phase: 'ready', resp: fxDrawerResp(), errMsg: '' } } })
   try {
-    const tree = fakeReact.createElement(vmsg.ViewerMessagesBody, props)
-    const box = collectNodes(tree, (n) => n.props && n.props['data-msg-raw'] === 'ok', [])
-    assert.equal(box.length, 1, '该恰有一个「原样 JSON」块，实得 ' + box.length)
-    const t = visibleText(box[0])
-    assert.ok(t.includes('FXRAW-REASON-BODY'), '★ 原样对象里的内容必须出现（不许加工）：' + t.slice(0, 200))
-    assert.ok(t.includes('会话日志里那条消息对象（原样）'), '★ 来源必须写清（回答"这是哪来的 json"）：' + t.slice(0, 200))
+    assertScroll(fakeReact.createElement(vmsg.ViewerMsgPanel, { sessionId: 'fixture-session-static', turn: 2, seq: 523 }), '完成态')
+  } finally { fakeReact.__setPreset(null) }
+  // ★ 灵敏度自证：没有 overflow 的样式喂给同一条判据，必须命中
+  const dry = { props: { 'data-msg-drawer-scroll': '1', style: { flex: 1 } } }
+  let threw = false
+  try {
+    const st = dry.props.style || {}
+    const ov = st.overflowY || st.overflow
+    assert.ok(ov === 'auto' || ov === 'scroll')
+  } catch (e) { threw = true }
+  assert.ok(threw, '反证失败：判据抓不住"没给 overflow"的样式')
+})
+
+await check('★ 消息流单 反证（三种失败都要说话）：取数中 / 网络失败 / ok:false（含被压缩遮蔽）各带可见原因，⛔ 都不许空白', () => {
+  // ① 取数中（默认 hook 初值就是 loading）
+  const loading = fakeReact.createElement(vmsg.ViewerMsgPanel, { sessionId: 'fixture-session-static', turn: 2, seq: 523 })
+  let stNode = collectNodes(loading, (n) => n.props && n.props['data-msg-drawer-state'] === 'loading', [])
+  assert.equal(stNode.length, 1, '加载态缺 state 行')
+  assert.ok(visibleText(stNode[0]).trim() !== '', '取数中文案空白')
+
+  // ② 网络失败 ⇒ 带原因
+  fakeReact.__setPreset({ ViewerMsgPanel: { 0: { phase: 'error', resp: null, errMsg: '网络炸了' } } })
+  try {
+    const errTree = fakeReact.createElement(vmsg.ViewerMsgPanel, { sessionId: 'fixture-session-static', turn: 2, seq: 523 })
+    stNode = collectNodes(errTree, (n) => n.props && n.props['data-msg-drawer-state'] === 'error', [])
+    assert.equal(stNode.length, 1, '网络失败缺 state 行')
+    const t = visibleText(stNode[0])
+    assert.ok(t.includes('内容取不到') && t.includes('网络炸了'), '网络失败要把原因说出来：' + t)
   } finally { fakeReact.__setPreset(null) }
 
-  // ③ 反证：网络失败 ⇒ 如实说原因，⛔ 不许一片空白
-  fakeReact.__setPreset({ ViewerMessagesBody: { 1: new Set(['523']), 2: { 523: { __error: '网络炸了' } } } })
+  // ③ 接口 ok:false ⇒ 带服务端 error（被压缩摘要遮蔽的行宿主就是这么回的，⛔ 如实显示不绕道）
+  const serverMsg = '第 2 楼实际发出的历史里没有 seq=999 的消息（可能被压缩摘要遮蔽，或不属于这一楼）'
+  fakeReact.__setPreset({ ViewerMsgPanel: { 0: { phase: 'ready', resp: { ok: false, error: { message: serverMsg } }, errMsg: '' } } })
   try {
-    const tree = fakeReact.createElement(vmsg.ViewerMessagesBody, props)
-    const box = collectNodes(tree, (n) => n.props && n.props['data-msg-raw'] === 'error', [])
-    assert.equal(box.length, 1, '取不到要出 error 块')
-    assert.ok(visibleText(box[0]).includes('网络炸了'), '要把原因说出来：' + visibleText(box[0]))
+    const missTree = fakeReact.createElement(vmsg.ViewerMsgPanel, { sessionId: 'fixture-session-static', turn: 2, seq: 999 })
+    stNode = collectNodes(missTree, (n) => n.props && n.props['data-msg-drawer-state'] === 'error', [])
+    assert.equal(stNode.length, 1, 'ok:false 缺 state 行')
+    const t = visibleText(stNode[0])
+    assert.ok(t.includes('内容取不到') && t.includes('被压缩摘要遮蔽'), 'ok:false 要把服务端 error 带出来：' + t)
+  } finally { fakeReact.__setPreset(null) }
+})
+
+await check('★ 消息流单 徽标：工具结果 / 已压缩的条目在抽屉头带徽标（照 system 抽屉段头写法）', () => {
+  const resp = Object.assign(fxDrawerResp(), { isToolResult: true, isCompacted: true })
+  fakeReact.__setPreset({ ViewerMsgPanel: { 0: { phase: 'ready', resp: resp, errMsg: '' } } })
+  try {
+    const tree = fakeReact.createElement(vmsg.ViewerMsgPanel, { sessionId: 'fixture-session-static', turn: 2, seq: 523 })
+    const ht = visibleText(collectNodes(tree, (n) => n.props && n.props['data-msg-drawer-head'] === '1', [])[0])
+    assert.ok(ht.includes('工具结果') && ht.includes('已压缩'), '抽屉头缺徽标：' + ht)
   } finally { fakeReact.__setPreset(null) }
 })
 
@@ -1733,14 +1847,63 @@ await check('★ 20260918 反证（缺 turn）：某条 turn 改成 null ⇒ 落
   assert.ok(visibleText(tree).includes('未标注楼'), '段头没写「未标注楼」')
 })
 
-await check('★ 20260918 搜索词：带 query ⇒ 退回整段分块高亮（分段词头视图不拦截搜索）；老宿主没有 messages 数组 ⇒ 原样全文视图', () => {
+// ★ 消息流单 T1：搜索框拆除后 query 不再进本栏 —— 传了也走分段视图（旧"搜索态退整段"分支已死）；
+//   老宿主没有逐楼数据 ⇒ 仍按既有口径给原样整段全文。
+await check('★ 消息流单 T1：query 不再影响列表（传了也走分段视图）；老宿主没有 messages 数组 ⇒ 原样全文视图（口径不动）', () => {
   const fx = vmsg.EDITOR_V2_FIXTURES['part-messages']
-  const searchTree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, query: '查询', messages: fx.messages })
-  assert.equal(collectNodes(searchTree, (n) => n.props && n.props['data-msg-turn'] !== undefined, []).length, 0, '搜索态不该出分段视图')
-  assert.ok(visibleText(searchTree).includes('查询'), '搜索态正文丢了')
-  const oldTree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, query: '', messages: null })
+  const qTree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, query: '查询', messages: fx.messages })
+  assert.ok(collectNodes(qTree, (n) => n.props && n.props['data-msg-turn'] !== undefined, []).length > 0, 'query 传了也必须走分段视图（搜索框已拆）')
+  const oldTree = fakeReact.createElement(vmsg.ViewerMessagesBody, { text: fx.text, messages: null })
   assert.equal(collectNodes(oldTree, (n) => n.props && n.props['data-msg-turn'] !== undefined, []).length, 0, '没有逐楼数据不该出分段视图')
   assert.ok(visibleText(oldTree).includes(FX_REASON_TAIL), '老形态该按既有口径显示完整正文')
+})
+
+// ★ 消息流单 T1 反证（静态）：本栏不再渲染 PartTabs、不再有 #dma-viewer-search、query/setQuery 不再传进本栏；
+//   ⛔ system 段抽屉内的段内搜索（aria-label="在该段正文里搜索"）必须仍在（只断言"没了"会把误删当成合格）。
+//   别处引用情况如实钉住：PartTabs/PART_TABS 只剩 FullPromptView 在用（深链 box=full 才可达）——不许悬空。
+await check('★ 消息流单 T1 反证（静态）：消息流栏无 PartTabs/无搜索框；段抽屉内搜索仍在；FullPromptView 的 PartTabs 引用如实钉住', () => {
+  const fnBody = (name) => {
+    const i = src.indexOf('function ' + name + '(')
+    assert.ok(i >= 0, '缺函数 ' + name)
+    const j = src.indexOf('\n      function ', i)
+    return src.slice(i, j > i ? j : src.length)
+  }
+  const col = fnBody('PromptPartView')
+  assert.equal(col.includes('PartTabs'), false, '消息流栏还在渲染 PartTabs')
+  assert.equal(col.includes('dma-viewer-search'), false, '搜索框 #dma-viewer-search 还在消息流栏里')
+  assert.equal(col.includes('setQuery'), false, 'setQuery 还在往消息流栏传')
+  // 反证的另一半：段内搜索不许被误删
+  assert.ok(src.includes("'在该段正文里搜索'"), 'system 段抽屉内的段内搜索被误删（⛔ 不该动）')
+  assert.ok(src.includes('dma-section-search'), '段抽屉搜索框 id 被误删')
+  // 拆干净要有交代：本栏「只做消息流」的注释在
+  assert.ok(src.includes('这一栏只做消息流'), '缺「这一栏只做消息流」的交代注释')
+  // 别处引用情况（任务书 ⚠ 条）：FullPromptView 仍在用 PartTabs/PART_TABS —— 不许出现悬空引用
+  assert.ok(fnBody('FullPromptView').includes('PartTabs'), 'FullPromptView 对 PartTabs 的引用情况变了（若哪天拆了它，记得更新这条）')
+  assert.ok(src.includes('const PART_TABS'), 'PART_TABS 表没了但 PartTabs 还在用（悬空引用）')
+})
+
+// ★ 消息流单 T1/T2（列渲染）：夹具模式下渲染消息流栏（PromptPartView）⇒ 按楼分段段头 + 逐条行 + 逐块词头都在；
+//   文案是「消息流」不是「部件」。
+await check('★ 消息流单 渲染（夹具）：消息流栏出分段段头/逐条行/思维链词头；文案「消息流」；不再有「部件」并列视图', () => {
+  const fx = vmsg.EDITOR_V2_FIXTURES['part-messages']
+  const tree = fakeReact.createElement(vmsg.PromptPartView, {
+    sessionId: 'fixture-session-static', turn: 2, part: 'messages',
+    state: { status: 'ready', data: fx }, onOpenSeq: () => {},
+  })
+  const segs = collectMsgSegs(tree)
+  assert.deepEqual(segs.map((s) => s.turn), ['1', '2'], '分段视图没了')
+  const text = visibleText(tree)
+  assert.ok(text.includes('第 1 楼') && text.includes('第 2 楼'), '缺「第 N 楼」段头')
+  assert.equal(collectNodes(tree, (n) => n.props && n.props['data-msg-block'] === 'reasoning', []).length, 1, '思维链词头行丢了')
+  assert.ok(text.includes('消息流'), 'SectionLabel 文案不是「消息流」')
+  assert.equal(text.includes('部件'), false, '文案还在写「部件」')
+  // 滚动：列表栏根容器同样要有界可滚（用户原话："没给详细面板的滚动，只能看见头部"）
+  const root = collectNodes(tree, (n) => n.props && n.props['data-msg-col'] === '1', [])
+  assert.equal(root.length, 1, '缺消息流栏根容器')
+  const st = root[0].props.style || {}
+  const ov = st.overflowY || st.overflow
+  assert.ok(ov === 'auto' || ov === 'scroll', '列表栏根容器不可滚：' + String(ov))
+  assert.ok(typeof st.maxHeight === 'string' || (typeof st.maxHeight === 'number' && st.maxHeight >= 200), '列表栏根容器缺有界 maxHeight')
 })
 
 console.log('== 总结：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
