@@ -321,20 +321,20 @@ console.log('== 写面 · lib/preset-modules.js ==')
 const pm = await import('./lib/preset-modules.js')
 const ml = pm.keepFirstRoundMountLine().split('\n')
 check('W1', '挂载行：恰好三行（注释 + id 行 + name 行）', ml.length === 3 && ml[0].startsWith('#') && ml[1] === '- id: keep-first-round' && ml[2] === "  name: './keep-first-round.js'", JSON.stringify(ml))
-check('W2', '清单：默认两件不变 + 全量三件含 keep-first-round.js', pm.PRESET_MODULE_NAMES.length === 2 && pm.PRESET_MODULE_NAMES_ALL.length === 3 && pm.PRESET_MODULE_NAMES_ALL[2] === 'keep-first-round.js', JSON.stringify(pm.PRESET_MODULE_NAMES_ALL))
-check('W3', '包内第三副本存在且可读（随包发版）', (() => { try { return readFileSync(join(ROOT, 'preset-modules', 'keep-first-round.js')).length > 0 } catch { return false } })(), '')
+check('W2', '清单：默认两件不变 + 全量四件含 keep-first-round.js 与 memory-protocol.js（2026-09-18 增后者）', pm.PRESET_MODULE_NAMES.length === 2 && pm.PRESET_MODULE_NAMES_ALL.length === 4 && pm.PRESET_MODULE_NAMES_ALL[2] === 'keep-first-round.js' && pm.PRESET_MODULE_NAMES_ALL[3] === 'memory-protocol.js', JSON.stringify(pm.PRESET_MODULE_NAMES_ALL))
+check('W3', '包内第三 / 第四副本都存在且可读（随包发版）', (() => { try { return readFileSync(join(ROOT, 'preset-modules', 'keep-first-round.js')).length > 0 && readFileSync(join(ROOT, 'preset-modules', 'memory-protocol.js')).length > 0 } catch { return false } })(), '')
 
 const dirW = mkdtempSync(join(tmpdir(), 'dma-kfr-write-'))
 try {
   const r1 = pm.provisionPresetModules({ presetDir: dirW, moduleNames: pm.PRESET_MODULE_NAMES_ALL })
-  check('W4', '三件首次写入全是 create 且 ok', r1.ok === true && r1.results.length === 3 && r1.results.every((x) => x.action === 'create'), JSON.stringify((r1.results || []).map((x) => x.name + ':' + x.action)))
+  check('W4', '四件首次写入全是 create 且 ok', r1.ok === true && r1.results.length === 4 && r1.results.every((x) => x.action === 'create'), JSON.stringify((r1.results || []).map((x) => x.name + ':' + x.action)))
   let byteSame = true
   for (const name of pm.PRESET_MODULE_NAMES_ALL) {
     const pkg = readFileSync(join(ROOT, 'preset-modules', name))
     const onDisk = readFileSync(join(dirW, name))
     if (Buffer.compare(pkg, onDisk) !== 0) byteSame = false
   }
-  check('W5', '三件盘上逐字等于包内副本', byteSame, '')
+  check('W5', '四件盘上逐字等于包内副本', byteSame, '')
   const backupNames = () => {
     try {
       return readdirSync(join(dirW, '.dma-backup'))
