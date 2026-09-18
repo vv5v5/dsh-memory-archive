@@ -103,5 +103,57 @@ check('L8 端到端：装配期段表（含拿不到正文的段）+ 最终正�
   assert.equal(phi.offset, final.length - 3, '尾段就该在最后')
 })
 
+// ───────────────────── 锚点定界：宿主会改写段文本（2026-09-18 真机） ─────────────────────
+check('L9 ★★ 段被宿主改写 ⇒ 锚点定界给出正确区间，且内容 = **最终正文的切片**', () => {
+  // 真机形状：两边都以 `<recalledMemories>` 开头，第 19 字起分岔
+  const ours = '<recalledMemories>我们拿到的那一版内容</recalledMemories>'
+  const theirs = '<recalledMemories>宿主实际发出去的、更长的一版内容，和我们那版不是同一份</recalledMemories>'
+  const secs = [{ name: 'a', text: 'AAA' }, { name: 'anima:memory', text: ours }, { name: 'c', text: 'CCC' }]
+  const final = join(['AAA', theirs, 'CCC'])
+  const r = locateSections(secs, final)
+  assert.equal(r.reason, 'all-matched', '★ 全部落位（锚点也算）才敢发布')
+  assert.equal(r.exact, 2)
+  assert.equal(r.anchored, 1)
+  assert.equal(isFullyLocated(r), true)
+  const o = r.offsets[1]
+  assert.equal(o.anchored, true)
+  assert.equal(final.slice(o.offset, o.offset + o.chars), theirs, '★ 切出来的必须是**宿主那版**，不是我们手里那版')
+  assert.notEqual(o.chars, ours.length, '（我们那版长度不同 ⇒ 旧口径会整楼不发）')
+})
+
+check('L10 ★ 反证：锚点**找不到**（毫无共同前缀）⇒ 如实不发，不许硬塞区间', () => {
+  const secs = [{ name: 'a', text: 'AAA' }, { name: 'x', text: '完全对不上的一版内容' }, { name: 'c', text: 'CCC' }]
+  const final = join(['AAA', '宿主那版和它没有一个字相同', 'CCC'])
+  const r = locateSections(secs, final)
+  assert.equal(r.offsets[1].offset, null)
+  assert.equal(r.reason, 'partial')
+  assert.equal(isFullyLocated(r), false)
+})
+
+check('L11 ★ 反证：锚点与下一个锚点之间**还夹着未定位的非空段** ⇒ 拆不开，两个都不发', () => {
+  const oursA = '<wrap>A我们那版AAA内容AAA</wrap>'
+  const oursB = '<wrap>B我们那版BBB内容BBB</wrap>'
+  const secs = [
+    { name: 'a', text: 'AAA' },
+    { name: 'x', text: oursA },
+    { name: 'y', text: '这段完全对不上且非空' },
+    { name: 'c', text: 'CCC' },
+  ]
+  const final = join(['AAA', '<wrap>A宿主那版AAA</wrap>', '<wrap>B宿主那版BBB</wrap>', 'CCC'])
+  const r = locateSections(secs, final)
+  assert.equal(r.offsets[1].offset, null, '⛔ 中间夹着未定位的非空段 ⇒ 拆不开，不许硬切')
+  assert.equal(r.offsets[2].offset, null)
+})
+
+check('L12 ★ 锚点段在**尾**：终点取正文末尾（且它之后没有别的非空段）', () => {
+  const secs = [{ name: 'a', text: 'AAA' }, { name: 'z', text: '<wrap>尾部我们那版</wrap>' }]
+  const final = join(['AAA', '<wrap>尾部宿主那版，更长一些</wrap>'])
+  const r = locateSections(secs, final)
+  assert.equal(r.anchored, 1)
+  const o = r.offsets[1]
+  assert.equal(final.slice(o.offset, o.offset + o.chars), '<wrap>尾部宿主那版，更长一些</wrap>')
+  assert.equal(o.offset + o.chars, final.length, '尾段就该顶到末尾')
+})
+
 console.log('\n== 汇总：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
 if (fails.length > 0) { console.log('失败项：\n  - ' + fails.join('\n  - ')); process.exit(1) }
