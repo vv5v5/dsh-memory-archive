@@ -865,6 +865,17 @@ await check('★25c [messages] 框：有逐条数据 ⇒ 一条消息一行（�
   assert.ok(/取不到/.test(String(none[0].reason || none[0].sub || '')), '拿不到就要说取不到：' + JSON.stringify(none[0]))
 })
 
+// ---------- 25d（2026-09-18 真机踩到）：逐条数据的**取数接线**必须留住 —— 静态钉死 ----------
+await check('★25d 静态：/api/part?part=messages 的逐条数据（turn/blocks）必须单独存；⛔ 不许把它塞进 clipInfo', () => {
+  assert.ok(src.includes('out.messageRows = Array.isArray(d.messages) ? d.messages : null'),
+    '取数处必须把 d.messages 单独留出来（clipInfo 只留文本，会把它丢掉）')
+  assert.ok(src.includes('messages: out.messageRows,'),
+    '地图必须用 out.messageRows 喂 buildMapFromSections')
+  // ⛔ 真机踩到的那个写法：clipInfo 的产物里根本没有 messages 数组 ⇒ 永远是 undefined
+  assert.ok(!src.includes('out.messages.messages'),
+    '⛔ 不许再写 out.messages.messages —— 那是 clipInfo 的产物，逐条数据不在里面（这就是真机上 [messages] 框静默退回旧口径的原因）')
+})
+
 // ---------- 26（B）：抽屉体渲染 = 段头 + 徽标 + 注释（未收录）+ 正文 + 页脚；复合段页脚 ----------
 // 20260914 M7：可见文字里的「依据…」/mutWhy/「如实展示，不编」退到悬停 title —— 信息留着，元话去掉。
 await check('★26 B 抽屉体：段名/order/字数/徽标（只留 [每轮]，依据进 title）/注释齐备；表外段名注释位「未收录（注释表未收录）」；正文来自 state.text；复合段页脚含「复合段内部需 Tavern 接口」；取不到时正文区不出现任何编造内容', () => {
