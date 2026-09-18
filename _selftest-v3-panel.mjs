@@ -189,6 +189,46 @@ await check('⑨ ★ replace 看守：atRisk 时必须出**醒目**行（warn）
   assert.notEqual(calmLine.kind, 'warn')
 })
 
+await check('⑨b ★★ 看守改版（2026-09-18）：以**直接观察**为主 —— 一个都不在才喊危险；缺一部分只如实报', () => {
+  const base = { ok: true, tavern: { status: 200 }, capabilities: { apiVersion: 3 }, composer: { usable: true, owners: [] }, mode: null, sources: null }
+  const mk = (rg) => Object.assign({}, base, { contract: { id: 'trace', known: true, label: 'trace（只读补集）', detail: 'd', composerUsable: false, tailServiceUsable: false, modeSwitchable: false }, replaceGuard: rg })
+
+  // ① 观察：我们 7 段一个都不在那一轮装配里 ⇒ 醒目的 ⚠ 行
+  const gone = mk({ basis: 'observed', presetMode: null, ourSections: ['state:card', 'mt:postHistory'], observed: true, total: 30, present: [], missing: ['state:card', 'mt:postHistory'], partial: false, atRisk: true,
+    note: '⚠ 这一轮装配（共 30 段）里**我们自己的段一个都没有**：state:card、mt:postHistory ⇒ 极可能是预设的 systemPromptMode = replace 把非 Tavern 段整批滤掉了（预设模式读不到，这里是直接观察的结论）。' })
+  const warnLine = lines(gone).find((l) => l.label === '⚠ 装配模式')
+  assert.ok(warnLine, '全缺时必须出 ⚠ 行')
+  assert.equal(warnLine.kind, 'warn')
+  assert.match(warnLine.value, /一个都没有/)
+  assert.match(warnLine.value, /replace/)
+
+  // ② 观察：全在 ⇒ 一行事实、不是 warn
+  const all = mk({ basis: 'none', presetMode: null, ourSections: ['state:card'], observed: true, total: 30, present: ['state:card'], missing: [], partial: false, atRisk: false,
+    note: '这一轮装配（共 30 段）里我们 1 段**全在** ⇒ 没有被滤' })
+  const okLine = lines(all).find((l) => l.label === '装配模式')
+  assert.ok(okLine, '全在时也该有一行事实')
+  assert.notEqual(okLine.kind, 'warn')
+  assert.match(okLine.value, /全在/)
+
+  // ③ 观察：缺一部分 ⇒ 如实报缺了谁，但⛔ 不许升级成 warn（可能只是某插件没启用）
+  const part = mk({ basis: 'none', presetMode: null, ourSections: ['state:card', 'anima:memory'], observed: true, total: 30, present: ['anima:memory'], missing: ['state:card'], partial: true, atRisk: false,
+    note: '这一轮装配（共 30 段）里我们缺了 state:card（在的有 1 段）—— 可能只是某个插件没启用（例如 state:card 属 state-bridge），不一定是被滤；换 preset 模式时留意这几段。' })
+  const partLine = lines(part).find((l) => l.label === '装配模式')
+  assert.ok(partLine, '缺一部分时也要有一行')
+  assert.notEqual(partLine.kind, 'warn', '⛔ 缺一部分不是危险信号，不许渲染成 warn')
+  assert.match(partLine.value, /缺了 state:card/)
+
+  // ④ ★ 反证（真机踩到过的那一档）：**presetMode=append 是正向判据**，没有观察也该给"不会滤"的判词，
+  //    ⛔ 不许退化成"无法判定" —— 那会把已知的安全说成未知（真机 2026-09-18 实测到）。
+  const appendNoObs = mk({ basis: 'preset', presetMode: 'append', ourSections: ['state:card'], observed: false, total: null, present: [], missing: [], partial: false, atRisk: false,
+    note: '预设是 append 模式 ⇒ Tavern **不会**滤掉我们的段（这一轮的段表还没观察到；下一轮 RP 后会有直接观察）' })
+  const appendLine = lines(appendNoObs).find((l) => l.label === '装配模式')
+  assert.ok(appendLine, 'append 时也要有一行')
+  assert.notEqual(appendLine.kind, 'warn')
+  assert.match(appendLine.value, /不会/)
+  assert.doesNotMatch(appendLine.value, /无法判定/, '⛔ 已知安全不许说成"无法判定"')
+})
+
 await check('⑩ ★ 合同认不准 ⇒ 明确警告"下面的状态一律不可信，⛔ 别按它做判断"', () => {
   const d = {
     ok: true, tavern: { status: 200 },

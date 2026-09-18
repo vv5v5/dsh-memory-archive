@@ -11,7 +11,7 @@ import {
   CONTRACT_TRACE, CONTRACT_COMPOSER, CONTRACT_ABSENT, CONTRACT_UNKNOWN,
   detectV3Contract, contractInfo, v3Paths, parsePartSectionName, fieldChars,
   projectSources, projectAssemblyIndex, projectAssemblyRecord, pickSectionText,
-  PHI_PART_FIELD, isPhiPartSection, stripPhiParts, phiSectionText,
+  PHI_PART_FIELD, isPhiPartSection, stripPhiParts, phiSectionText, guardFromSections,
 } from './lib/v3-contract.js'
 
 let pass = 0
@@ -363,6 +363,29 @@ console.log('\nC11 isPhiPartSection / stripPhiParts')
       const r = stripPhiParts(sections)
       return r.removed.length === 1 && phiSectionText(sections) === '乙'
     })())
+}
+
+// ─────────── C13 看守（直接观察版）：这一轮段表里我们自己的段在不在
+{
+  const OUR = ['state:card', 'dma:echo', 'anima:memory']
+  const sec = (name) => ({ name, text: '' })
+  check('C13a', '全在 ⇒ observed=true、present 全、missing 空、wholesale/partial 都 false',
+    (() => { const g = guardFromSections([sec('harness:identity'), sec('state:card'), sec('dma:echo'), sec('anima:memory')], OUR)
+      return g.observed === true && g.present.length === 3 && g.missing.length === 0 && g.wholesale === false && g.partial === false })())
+  check('C13b', '★ 反证（这是 replace 的签名）：一个都不在 ⇒ wholesale=true（atRisk 的强信号）',
+    (() => { const g = guardFromSections([sec('harness:identity'), sec('pmp-dsh-tavern:profile')], OUR)
+      return g.observed === true && g.present.length === 0 && g.wholesale === true && g.missing.length === 3 })())
+  check('C13c', '缺一部分 ⇒ partial=true 但 wholesale=false（⛔ 不喊狼来了：可能只是某插件没启用）',
+    (() => { const g = guardFromSections([sec('state:card'), sec('dma:echo')], OUR)
+      return g.observed === true && g.partial === true && g.wholesale === false && g.missing.join() === 'anima:memory' })())
+  check('C13d', '★ 反证：段表为空 ⇒ observed=false（还没装配过，⛔ 不据此下结论）',
+    (() => { const g = guardFromSections([], OUR); return g.observed === false && g.wholesale === false })())
+  check('C13e', '★ 反证：畸形输入不抛（null / 字符串 / 数字 ⇒ observed=false）',
+    [null, undefined, 'x', 42, {}].every((v) => { try { const g = guardFromSections(v, OUR); return g.observed === false } catch { return false } }))
+  check('C13f', '★ 反证：我们的名字清单为空 ⇒ 不判"全缺"（那是无意义输入，不是危险）',
+    (() => { const g = guardFromSections([sec('harness:identity')], []); return g.observed === false && g.wholesale === false })())
+  check('C13g', '空段也算"在"（DSH 为每个已注册段落一行，text 可为空）—— 这正是它与"有没有正文"无关的原因',
+    (() => { const g = guardFromSections([{ name: 'mt:postHistory', text: '' }], ['mt:postHistory']); return g.present.length === 1 && g.wholesale === false })())
 }
 
 console.log(`\n── ${pass} 通过 / ${fail} 失败 ──`)

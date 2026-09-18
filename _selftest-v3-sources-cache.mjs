@@ -313,5 +313,52 @@ check('K4j ★ 反证：readRenderedPhi 抛 / 畸形 ⇒ 空段且不抛（与 K
   }
 })
 
+// ─────────── K6 第三槽：看守的直接观察（我们自己的段在不在这一轮段表里）
+{
+  check('K6a 存了就能取到；空/非对象不存、不抛', () => {
+    const c = cache.createSourcesCache()
+    assert.equal(c.getObserved('s1'), null, '没存过 ⇒ null')
+    assert.equal(c.setObserved('s1', null), false, '⛔ 非对象不存')
+    assert.equal(c.setObserved('s1', 'x'), false)
+    assert.equal(c.setObserved('', { observed: true }), false, '空 sessionId 不存')
+    assert.equal(c.setObserved('s1', { observed: true, total: 30, present: ['a'], missing: [], wholesale: false, partial: false }), true)
+    assert.equal(c.getObserved('s1').total, 30)
+  })
+  check('K6b 三槽互不踩：setObserved 保留另外两槽，且另两个 set 也保留 observed', () => {
+    const c = cache.createSourcesCache()
+    c.setObserved('s1', { observed: true, total: 1, present: ['a'], missing: [], wholesale: false, partial: false })
+    c.setRendered('s1', '正文')
+    c.set('s1', mkSources('来自端点'))
+    assert.equal(c.getObserved('s1').total, 1, 'setRendered/set 不许把 observed 冲掉')
+    assert.equal(c.getRendered('s1'), '正文')
+    assert.ok(c.get('s1') !== null)
+  })
+  check('K6c ★★ 反证（与 K5b 同款的那一脚）：只装了 observed 的行，`get`/`getRendered` 取不到时**不许删行**', () => {
+    const c = cache.createSourcesCache()
+    c.setObserved('s1', { observed: true, total: 2, present: [], missing: ['a'], wholesale: true, partial: false })
+    assert.equal(c.get('s1'), null, '没有 sources ⇒ get 给 null')
+    assert.equal(c.getRendered('s1'), null, '没有 rendered ⇒ null')
+    assert.equal(c.getObserved('s1').wholesale, true, '⛔ 前两个 get 把行删了 ⇒ 观察也丢了')
+  })
+  check('K6d ★ 反证：observed 吃同一套 TTL（过期即无）', () => {
+    let t = 0
+    const c = cache.createSourcesCache({ ttlMs: 1000, now: () => t })
+    c.setObserved('s1', { observed: true, total: 3 })
+    t = 1000
+    assert.equal(c.getObserved('s1').total, 3, 'age ≤ ttl 有效')
+    t = 1001
+    assert.equal(c.getObserved('s1'), null, 'age > ttl ⇒ null')
+    assert.equal(c.stats().size, 0, '过期条目已被丢掉')
+  })
+  check('K6e ★ 反证：observed 与另两槽**共用容量**（⛔ 不做第二套生命周期）', () => {
+    const c = cache.createSourcesCache({ maxSessions: 2 })
+    c.setObserved('a', { observed: true, total: 1 })
+    c.setObserved('b', { observed: true, total: 1 })
+    c.setObserved('c', { observed: true, total: 1 })
+    assert.equal(c.stats().size, 2, '同一个 Map ⇒ 同一个上限')
+    assert.equal(c.getObserved('a'), null, '最久没用的被淘汰')
+  })
+}
+
 console.log('\n== 汇总：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
 if (fails.length > 0) { console.log('失败项：\n  - ' + fails.join('\n  - ')); process.exit(1) }
