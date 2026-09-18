@@ -6,11 +6,15 @@ Copyright (c) 2026 magictarven contributors
 SPDX-License-Identifier: CC-BY-NC-4.0
 
 ★ 移植来源与署名（按上游要求保留）
-  原项目      ：anima-rag
-  原作者      ：Ellinav
-  原项目地址  ：https://github.com/Ellinav/anima-rag
+  原项目      ：Anima-Memory-System
+  原作者      ：Ellina
+  原项目地址  ：https://gitee.com/Ellinav/Anima-Memory-System
+  原项目版本  ：3.3.6
   原项目许可  ：Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)
-  移植许可    ：经原作者 Ellinav 许可后移植
+  移植许可    ：经原作者 Ellina 许可后移植
+  ⚠️ 2026-09-18 更正：本块原写「anima-rag / Ellinav / github.com/Ellinav/anima-rag」——
+     与项目文档实测记录不符（方案 §6 与交接 §296 两处独立记为 gitee / Ellina / v3.3.6）。
+     上游 `LICENSE.txt` 本身只有 CC 正文、不含项目地址，故以那两处记录为准。
 
 ★ 场景限制（移植许可的条件）
   · 仅限个人学习与非商业性用途
