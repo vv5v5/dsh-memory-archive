@@ -155,5 +155,33 @@ check('L12 ★ 锚点段在**尾**：终点取正文末尾（且它之后没有�
   assert.equal(o.offset + o.chars, final.length, '尾段就该顶到末尾')
 })
 
+check('L13 ★ 逐段原因码：四个失败码必须分得开（界面「为什么给不出位置」全靠它）', () => {
+  // 四种结局各一例，且**段序要与正文序一致**（blocked 的前提正是"锚点找到了、但后面夹着未定位段"）
+  const secs = [
+    { name: 'anchored-sec', text: '<wrap>我们那版</wrap>' },           // 共同前缀 10 字（≥ MIN_ANCHOR_CHARS）⇒ 锚点定界成功
+    { name: 'exact-sec', text: 'AAA' },                                // 逐字命中
+    { name: 'blocked-sec', text: '<wrap>B我们那版BBB</wrap>' },         // 锚点找得到…
+    { name: 'miss-sec', text: '这一段的开头正文里根本没有' },             // …但后面夹着这一段 ⇒ 拆不开
+    { name: 'tail-sec', text: 'CCC' },
+  ]
+  const final = join([
+    '<wrap>我们那版宿主改写的更长的内容</wrap>',
+    'AAA',
+    '<wrap>B我们那版BBB宿主尾巴</wrap>',
+    '一段完全不相干的东西',
+    'CCC',
+  ])
+  const r = locateSections(secs, final)
+  assert.deepEqual(r.reasons, ['anchored', 'exact', 'blocked', 'anchor-miss', 'exact'])
+  assert.equal(r.reason, 'partial', '★ 有段没落位 ⇒ 整楼不许发布 offset')
+  // 空段不参与定界，如实标 'empty'
+  assert.deepEqual(locateSections([{ name: 'e', text: '' }, { name: 'a', text: 'AAA' }], 'AAA').reasons, ['empty', 'exact'])
+  assert.deepEqual(locateSections([{ text: '' }], '').reasons, ['empty'])
+  // ★ 正文为空（no-final-text）：非空段标 'pending'（= 根本没机会定界），⛔ 不许谎报 exact
+  assert.deepEqual(locateSections([{ text: 'X' }], '').reasons, ['pending'])
+  // ★ 畸形输入不抛
+  assert.doesNotThrow(() => locateSections(null, 'ABC'))
+})
+
 console.log('\n== 汇总：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
 if (fails.length > 0) { console.log('失败项：\n  - ' + fails.join('\n  - ')); process.exit(1) }

@@ -801,6 +801,37 @@ await check('★25 B 取值链：text 非空⇒「来源：记忆库路径切片
   assert.ok(st.footer.includes('turn-not-found') && st.footer !== '', '契约外的 unavailable 码要如实带码显示，不空白')
 })
 
+// ---------- 25b（2026-09-18 底本回退 + 失败自查）：两条新来路**必须说清**，⛔ 不许与普通楼混同 ----------
+await check('★25b 取值链新增两条来路：① 沿用上一份底本（carried）要写明沿自第几楼；② 定稿失败要逐段点名"哪一段、为什么"，且只认已知原因码', () => {
+  // ① 正常切到、但底本是**沿用**来的 ⇒ 页脚必须写明来路，不能看起来跟普通楼一样
+  let st = pm.pmSectionTextState(
+    { ok: true, sessionId: 's', turn: 16, offset: 8199, chars: 2293, source: 'captured', text: '正文', unavailable: null, anchored: true, finalizeBasis: 'carried', carriedFromTurn: 12 },
+    '',
+  )
+  assert.equal(st.kind, 'text')
+  assert.ok(st.footer.includes('[8199, 2293]'), '切片区间照旧要给：' + st.footer)
+  assert.ok(st.footer.includes('锚点定界'), '锚点定界要照旧标出来：' + st.footer)
+  assert.ok(st.footer.includes('沿用第 12 楼的底本'), '★ 必须写明沿用的是哪一楼：' + st.footer)
+  // 本楼自带正文（own）⇒ ⛔ 不许出现"沿用"
+  st = pm.pmSectionTextState({ ok: true, offset: 1, chars: 2, text: '正文', unavailable: null, finalizeBasis: 'own' }, '')
+  assert.ok(!st.footer.includes('沿用'), 'own 的楼不许标成沿用：' + st.footer)
+  // 拿不到上一份（老记录 / 首楼）⇒ 不许硬写"沿用第 undefined 楼"
+  st = pm.pmSectionTextState({ ok: true, offset: 1, chars: 2, text: '正文', unavailable: null, finalizeBasis: 'carried', carriedFromTurn: null }, '')
+  assert.ok(st.footer.includes('沿用第 上一 楼'), '拿不到楼号时如实说"上一"：' + st.footer)
+
+  // ② 定稿失败：逐段点名 + 逐段给原因（四个码含义不同，⛔ 不许糊成一句）
+  st = pm.pmSectionTextState(
+    { ok: true, text: null, offset: null, chars: 2368, unavailable: 'no-offset', locateMiss: ['anima:memory', 'mt:postHistory'], locateWhy: { 'anima:memory': 'anchor-miss', 'mt:postHistory': 'blocked' } },
+    '',
+  )
+  assert.equal(st.kind, 'no-offset')
+  assert.ok(st.footer.includes('anima:memory') && st.footer.includes('锚点没找到'), '要点名并说清原因：' + st.footer)
+  assert.ok(st.footer.includes('mt:postHistory') && st.footer.includes('夹着别的未定位段'), '第二种原因要分开说：' + st.footer)
+  // 没有明细 ⇒ 退回原来那句（老记录兼容，⛔ 不许编明细）
+  st = pm.pmSectionTextState({ ok: true, text: null, offset: null, chars: 1, unavailable: 'no-offset' }, '')
+  assert.equal(st.footer, '该段内容不可用（未记录位置）', '没有明细时如实退回原口径：' + st.footer)
+})
+
 // ---------- 26（B）：抽屉体渲染 = 段头 + 徽标 + 注释（未收录）+ 正文 + 页脚；复合段页脚 ----------
 // 20260914 M7：可见文字里的「依据…」/mutWhy/「如实展示，不编」退到悬停 title —— 信息留着，元话去掉。
 await check('★26 B 抽屉体：段名/order/字数/徽标（只留 [每轮]，依据进 title）/注释齐备；表外段名注释位「未收录（注释表未收录）」；正文来自 state.text；复合段页脚含「复合段内部需 Tavern 接口」；取不到时正文区不出现任何编造内容', () => {

@@ -596,6 +596,270 @@ await t('行为级: ★★ 装配期抄的是瀑布**返回值** —— 下游 `
   assert.equal(anima.hash, hash16(INJECTED))
 })
 
+// ---------------------------------------------------------------------------
+// ★★ 底本回退（2026-09-18）：本楼宿主**没有重发**系统提示词时，沿用**上一份**正文定界。
+// 机制出处：`core/agent-loop/src/runtime-context.ts:94`
+//   `if (latest.text === rendered) return []` —— 正文没变就不追加 `system/message`，
+//   而 `latest` 取的是 `findLast(node => node.text !== '')`（同文件 :87）。
+//   ⇒ **本楼没有 `system/message` ⟺ 本楼发出去的系统正文与上一份逐字节相同。**
+// 真机证据：`session-c37c466c` 第 11/13/14 楼没有 `system/message`（1–10、12 楼都有）。
+// ---------------------------------------------------------------------------
+await t('行为级 ★★ 底本回退: 本楼没有 system/message ⇒ turn/end 拿上一份定界，且**如实标来路**', async () => {
+  const listeners = {}
+  const on = (ev, fn) => {
+    ;(listeners[ev] ??= []).push(fn)
+    return () => {}
+  }
+  const waterfall = async (ev, ...args) => {
+    const l = listeners[ev] ?? []
+    let i = -1
+    const next = async () => { i += 1; if (i >= l.length) return args[0]; return l[i](...args, next) }
+    return next()
+  }
+  const emitAll = (ev, ...args) => { for (const fn of (listeners[ev] ?? [])) { try { fn(...args) } catch {} } }
+  let turn = 7
+  const fakeScope = {
+    on,
+    effect: () => {},
+    logger: { info() {}, warn() {} },
+    systemPrompt: { getSectionOrder: () => undefined },
+    sessionProjections: { stateOf: (s, k) => (k === 'turnBoundary' ? { lastTurn: turn } : null) },
+  }
+  const ctx = { plugin: (p) => p, on }
+  registerSectionsCapture(ctx, { dir }).apply(fakeScope)
+  const file = join(dir, 'sess-carry.jsonl')
+  const wait = () => new Promise((r) => setTimeout(r, 120))
+  const rec = (n) => readAssemblyFile(file).records.find((x) => x.turn === n) ?? null
+  const sess = { id: 'sess-carry' }
+
+  // 第 7 楼：宿主**重发了**系统提示词 ⇒ 普通路径定稿
+  await waterfall('system-prompt/assemble', ASSEMBLY, { agent: { id: 'a', session: sess }, scope: fakeScope })
+  emitAll('session/event', sess, { type: 'system/message', data: { turn: 7, message: { content: [{ type: 'text', text: RENDERED }] } } })
+  await wait()
+  assert.equal(rec(7).finalized, true, '第 7 楼自带正文 ⇒ 正常定稿')
+  assert.equal(rec(7).finalizeBasis, 'own', '★ 来路标为「本楼自带」')
+
+  // 第 8 楼：装配了，但**从头到尾没有** system/message
+  turn = 8
+  await waterfall('system-prompt/assemble', ASSEMBLY, { agent: { id: 'a', session: sess }, scope: fakeScope })
+  await wait()
+  assert.equal(rec(8).finalized, false, '⛔ 这会儿还不知道宿主发不发 —— 不许提前定稿')
+  assert.equal(rec(8).finalizeReason, 'waiting-final-text')
+  // ★ 反证：楼号对不上的 system/message **不算**"本楼自带正文" ⇒ 不许借它定稿，
+  //   也⛔不许把第 8 楼标成"自带过正文"（否则回退会被白白放弃）
+  emitAll('session/event', sess, { type: 'system/message', data: { turn: 99, message: { content: [{ type: 'text', text: RENDERED }] } } })
+  await wait()
+  assert.equal(rec(8).finalized, false, '楼号不符 ⇒ 不许借它定稿')
+  emitAll('session/event', sess, { type: 'turn/end', data: { turn: 8 } })
+  await wait()
+  const carried = rec(8)
+  assert.equal(carried.finalized, true, '★ 该楼结束、始终没有正文 ⇒ 用上一份定稿')
+  assert.equal(carried.finalizeBasis, 'carried', '★ 来路必须标成「沿用」')
+  assert.equal(carried.carriedFromTurn, 7, '★ 并写清沿用的是哪一楼')
+  assert.deepEqual(
+    carried.sections.map((s) => s.offset),
+    rec(7).sections.map((s) => s.offset),
+    '★ 同一份正文 ⇒ 位置与第 7 楼逐字段相同',
+  )
+  assert.equal(carried.sections[0].renderedHash, hash16(RENDERED), '整段凭据照给（切片端点要靠它两道验）')
+
+  // ★ 读路径也要跟上：第 8 楼在本楼找不到 system/message，端点必须能回退到第 7 楼那份正文
+  const sends = []
+  const carryEvents = [
+    { seq: 1, type: 'turn/start', data: { turn: 7 } },
+    { seq: 2, type: 'system/message', data: { turn: 7, step: 1, message: { role: 'system', content: [{ type: 'text', text: RENDERED }] } } },
+    { seq: 3, type: 'turn/end', data: { turn: 7 } },
+    { seq: 4, type: 'turn/start', data: { turn: 8 } },
+    { seq: 5, type: 'turn/end', data: { turn: 8 } },
+  ]
+  await handleSectionsTextGet(
+    ctxWith(carryEvents),
+    new URL('http://dsh.local/sections/text?sessionId=sess-carry&turn=8&name=harness%3Aidentity'),
+    (s, p) => sends.push({ s, p }),
+    (s) => s,
+    { warn() {} },
+    { dir },
+  )
+  const got = sends[0]
+  assert.equal(got.p.unavailable, null, '★ 本楼没有 system/message 也要切得出（回退到上一份）')
+  assert.equal(got.p.text, 'identity-static', '★ 切出来的就是它实际发出去的那一段')
+  assert.equal(got.p.finalizeBasis, 'carried', '★ 端点如实转达来路')
+  assert.equal(got.p.carriedFromTurn, 7)
+})
+
+await t('反证 ★ 会话第一楼就没有 system/message ⇒ 没有「上一份」可沿用，⛔ 不许编位置', async () => {
+  const listeners = {}
+  const on = (ev, fn) => {
+    ;(listeners[ev] ??= []).push(fn)
+    return () => {}
+  }
+  const waterfall = async (ev, ...args) => {
+    const l = listeners[ev] ?? []
+    let i = -1
+    const next = async () => { i += 1; if (i >= l.length) return args[0]; return l[i](...args, next) }
+    return next()
+  }
+  const emitAll = (ev, ...args) => { for (const fn of (listeners[ev] ?? [])) { try { fn(...args) } catch {} } }
+  const fakeScope = {
+    on,
+    effect: () => {},
+    logger: { info() {}, warn() {} },
+    systemPrompt: { getSectionOrder: () => undefined },
+    sessionProjections: { stateOf: (s, k) => (k === 'turnBoundary' ? { lastTurn: 1 } : null) },
+  }
+  registerSectionsCapture({ plugin: (p) => p, on }, { dir }).apply(fakeScope)
+  const sess = { id: 'sess-first' }
+  await waterfall('system-prompt/assemble', ASSEMBLY, { agent: { id: 'a', session: sess }, scope: fakeScope })
+  emitAll('session/event', sess, { type: 'turn/end', data: { turn: 1 } })
+  await new Promise((r) => setTimeout(r, 120))
+  const first = readAssemblyFile(join(dir, 'sess-first.jsonl')).records[0]
+  assert.equal(first.finalized, false)
+  assert.equal(first.finalizeReason, 'waiting-final-text', '★ 没有上一份 ⇒ 如实留白')
+  assert.deepEqual(first.sections.map((s) => s.offset), [null, null, null, null], '⛔ 绝不许编位置')
+  assert.equal(first.finalizeBasis, undefined)
+})
+
+await t('反证 ★ 本楼**自带**正文但定位失败 ⇒ turn/end 不许拿上一份去覆盖它的结论', async () => {
+  const listeners = {}
+  const on = (ev, fn) => {
+    ;(listeners[ev] ??= []).push(fn)
+    return () => {}
+  }
+  const waterfall = async (ev, ...args) => {
+    const l = listeners[ev] ?? []
+    let i = -1
+    const next = async () => { i += 1; if (i >= l.length) return args[0]; return l[i](...args, next) }
+    return next()
+  }
+  const emitAll = (ev, ...args) => { for (const fn of (listeners[ev] ?? [])) { try { fn(...args) } catch {} } }
+  let turn = 7
+  const fakeScope = {
+    on,
+    effect: () => {},
+    logger: { info() {}, warn() {} },
+    systemPrompt: { getSectionOrder: () => undefined },
+    sessionProjections: { stateOf: (s, k) => (k === 'turnBoundary' ? { lastTurn: turn } : null) },
+  }
+  registerSectionsCapture({ plugin: (p) => p, on }, { dir }).apply(fakeScope)
+  const file = join(dir, 'sess-ownbad.jsonl')
+  const wait = () => new Promise((r) => setTimeout(r, 120))
+  const sess = { id: 'sess-ownbad' }
+  await waterfall('system-prompt/assemble', ASSEMBLY, { agent: { id: 'a', session: sess }, scope: fakeScope })
+  emitAll('session/event', sess, { type: 'system/message', data: { turn: 7, message: { content: [{ type: 'text', text: RENDERED }] } } })
+  await wait()
+  assert.equal(readAssemblyFile(file).records[0].finalized, true)
+  // 第 8 楼：**自带**一条对不上的正文 ⇒ 定位必然失败；turn/end 之后仍须是失败结论
+  turn = 8
+  await waterfall('system-prompt/assemble', ASSEMBLY, { agent: { id: 'a', session: sess }, scope: fakeScope })
+  emitAll('session/event', sess, { type: 'system/message', data: { turn: 8, message: { content: [{ type: 'text', text: '完全不相干的正文' }] } } })
+  await wait()
+  emitAll('session/event', sess, { type: 'turn/end', data: { turn: 8 } })
+  await wait()
+  const own = readAssemblyFile(file).records.find((r) => r.turn === 8)
+  assert.equal(own.finalized, false)
+  assert.match(String(own.finalizeReason), /^locate-/, '★ 该楼自带正文 ⇒ 结论就是它自己的定位结果')
+  assert.equal(own.finalizeBasis, undefined, '⛔ 自带正文的楼不许被标成「沿用」')
+  assert.deepEqual(own.sections.map((s) => s.offset), [null, null, null, null])
+})
+
+await t('★ 定稿失败要能自查: 记下**哪几段**没落位（⛔ 只有名字与计数），且端点如实转达', async () => {
+  const listeners = {}
+  const on = (ev, fn) => {
+    ;(listeners[ev] ??= []).push(fn)
+    return () => {}
+  }
+  const waterfall = async (ev, ...args) => {
+    const l = listeners[ev] ?? []
+    let i = -1
+    const next = async () => { i += 1; if (i >= l.length) return args[0]; return l[i](...args, next) }
+    return next()
+  }
+  const emitAll = (ev, ...args) => { for (const fn of (listeners[ev] ?? [])) { try { fn(...args) } catch {} } }
+  const fakeScope = {
+    on,
+    effect: () => {},
+    logger: { info() {}, warn() {} },
+    systemPrompt: { getSectionOrder: () => undefined },
+    sessionProjections: { stateOf: (s, k) => (k === 'turnBoundary' ? { lastTurn: 3 } : null) },
+  }
+  registerSectionsCapture({ plugin: (p) => p, on }, { dir }).apply(fakeScope)
+  const sess = { id: 'sess-miss' }
+  await waterfall('system-prompt/assemble', ASSEMBLY, { agent: { id: 'a', session: sess }, scope: fakeScope })
+  // 最终正文里**少了** tail 那一段（另两段逐字都在）
+  const partialText = FINAL_TEXTS.filter((t) => t !== '').slice(0, 2).join('\n\n')
+  emitAll('session/event', sess, { type: 'system/message', data: { turn: 3, message: { content: [{ type: 'text', text: partialText }] } } })
+  await new Promise((r) => setTimeout(r, 150))
+  const rec = readAssemblyFile(join(dir, 'sess-miss.jsonl')).records[0]
+  assert.equal(rec.finalized, false)
+  assert.equal(rec.finalizeReason, 'locate-partial')
+  assert.deepEqual(rec.locateMiss, ['tail:notes'], '★ 必须点名没落位的那一段')
+  assert.deepEqual(rec.locateCounts, { exact: 2, anchored: 0, total: 3 }, '★ 并给出三类计数')
+  assert.deepEqual(rec.locateWhy, { 'tail:notes': 'anchor-miss' }, '★ 还要说清**为什么**（哪一类失败）')
+  assert.ok(!JSON.stringify(rec).includes('identity-static'), '⛔ 失败明细里不许夹带正文')
+
+  // 端点也要如实转达（界面靠它把"为什么给不出位置"讲清楚）
+  const sends = []
+  await handleSectionsTextGet(
+    ctxWith([{ seq: 1, type: 'turn/start', data: { turn: 3 } }, { seq: 2, type: 'system/message', data: { turn: 3, message: { content: [{ type: 'text', text: partialText }] } } }]),
+    new URL('http://dsh.local/sections/text?sessionId=sess-miss&turn=3&name=harness%3Aidentity'),
+    (s, p) => sends.push({ s, p }),
+    (s) => s,
+    { warn() {} },
+    { dir },
+  )
+  assert.equal(sends[0].p.unavailable, 'no-offset')
+  assert.deepEqual(sends[0].p.locateMiss, ['tail:notes'], '★ 端点转达失败明细')
+})
+
+await t('★ 宿主重启后（内存空）⇒ 从**会话日志的 surface** 恢复上一份底本，照抄宿主那条判据', async () => {
+  const listeners = {}
+  const on = (ev, fn) => {
+    ;(listeners[ev] ??= []).push(fn)
+    return () => {}
+  }
+  const waterfall = async (ev, ...args) => {
+    const l = listeners[ev] ?? []
+    let i = -1
+    const next = async () => { i += 1; if (i >= l.length) return args[0]; return l[i](...args, next) }
+    return next()
+  }
+  const emitAll = (ev, ...args) => { for (const fn of (listeners[ev] ?? [])) { try { fn(...args) } catch {} } }
+  const fakeScope = {
+    on,
+    effect: () => {},
+    logger: { info() {}, warn() {} },
+    systemPrompt: { getSectionOrder: () => undefined },
+    sessionProjections: { stateOf: (s, k) => (k === 'turnBoundary' ? { lastTurn: 6 } : null) },
+  }
+  // ★ 模拟"重启后"的宿主：日志的当前 surface 里躺着第 5 楼那条 system/message
+  const log = new Map([
+    [1, { type: 'system/message', data: { turn: 5, message: { content: [{ type: 'text', text: RENDERED }] } } }],
+  ])
+  const sess = { id: 'sess-logprev', surface: { nodes: [1] }, eventAt: (seq) => log.get(seq) }
+  registerSectionsCapture({ plugin: (p) => p, on }, { dir }).apply(fakeScope)
+  await waterfall('system-prompt/assemble', ASSEMBLY, { agent: { id: 'a', session: sess }, scope: fakeScope })
+  emitAll('session/event', sess, { type: 'turn/end', data: { turn: 6 } })
+  await new Promise((r) => setTimeout(r, 150))
+  const rec = readAssemblyFile(join(dir, 'sess-logprev.jsonl')).records[0]
+  assert.equal(rec.finalized, true, '★ 内存里没有，但日志里有 ⇒ 照样能定稿')
+  assert.equal(rec.finalizeBasis, 'carried')
+  assert.equal(rec.carriedFromTurn, 5, '★ 沿用的是日志里第 5 楼那一份')
+  assert.deepEqual(rec.sections.map((s) => s.offset), [0, 17, null, 24])
+
+  // ★ 反证：surface 里那条是**空的** ⇒ 等于没有上一份，⛔ 不许编位置
+  const log2 = new Map([[1, { type: 'system/message', data: { turn: 5, message: { content: [{ type: 'text', text: '' }] } } }]])
+  const sess2 = { id: 'sess-logempty', surface: { nodes: [1] }, eventAt: (seq) => log2.get(seq) }
+  const fs2 = { ...fakeScope, sessionProjections: { stateOf: (s, k) => (k === 'turnBoundary' ? { lastTurn: 6 } : null) } }
+  registerSectionsCapture({ plugin: (p) => p, on }, { dir }).apply(fs2)
+  await waterfall('system-prompt/assemble', ASSEMBLY, { agent: { id: 'a', session: sess2 }, scope: fs2 })
+  emitAll('session/event', sess2, { type: 'turn/end', data: { turn: 6 } })
+  await new Promise((r) => setTimeout(r, 150))
+  const rec2 = readAssemblyFile(join(dir, 'sess-logempty.jsonl')).records[0]
+  assert.equal(rec2.finalized, false)
+  assert.equal(rec2.finalizeReason, 'waiting-final-text', '★ 日志里那份是空的 ⇒ 等于没有，如实留白')
+  assert.deepEqual(rec2.sections.map((s) => s.offset), [null, null, null, null])
+})
+
 console.log(`PASS ${PASS.length}: ${PASS.join(' | ')}`)
 if (FAIL.length) {
   console.log(`FAIL ${FAIL.length}: ${FAIL.join(' | ')}`)
