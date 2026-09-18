@@ -1008,10 +1008,23 @@ await check('★ v5 P0 双席位在源码里：memory-archive + agent-editor，�
   assert.equal(src.includes("id: 'prompt-viewer'"), false, '旧席位 prompt-viewer 应已改名 agent-editor')
 })
 
-await check('★ 完整视图：三个 /api/part 各取一次、复制全文、截断必须显式标注「已截断，原 N 字符」', () => {
-  for (const t of ["'&part=system'", "'&part=tools'", "'&part=messages'", '复制全文', '已截断，原 ', 'clipInfo']) {
-    assert.ok(src.includes(t), '缺: ' + t)
+// ★ 2026-09-18（用户口径「拆了吧不需要了」）：**完整视图与并列版块页签已整体删除**。
+//   原来是「★ 完整视图：三个 /api/part 各取一次、复制全文、截断标注」那条 —— 功能没了，
+//   那条测试也就没了。换成这条**删除护栏**：拆掉的东西⛔ 不许偷偷长回来。
+await check('★ 完整视图 / 并列版块页签已整体删除（护栏）：代码里⛔ 不许再出现 FullPromptView / PartTabs / PART_TABS / fullState / copyFull', () => {
+  // ⚠️ 只看**代码**、不看注释：拆掉的东西值得在注释里留一段"为什么拆、别再复活"的交代，
+  //    所以先去掉块注释与行注释再判。⚠️ 代价（已知并接受）：源码里有少数带 `://` 的字面量
+  //    （链接），行注释剥法会把那些行的后半截一起吃掉 —— 只会**漏报**、不会误报，
+  //    而这几行里不存在被禁标识符 ⇒ 对本条判据无影响。
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  for (const t of ['FullPromptView', 'PartTabs', 'PART_TABS', 'fullState', 'copyFull']) {
+    assert.equal(code.includes(t), false, '★ 已删除的完整视图残留了 ' + t + ' —— 它把整个并列架构带回来了？')
   }
+  // ⛔ 也不许再出现「切到 'full'」这种分支（part 只剩 messages/system/tools + 如实指路）
+  assert.equal(/part\s*===\s*'full'/.test(code), false, "★ 还在判 part === 'full'")
+  // 但「复制整楼」这类**别的**功能要照旧（buildFullPlainText 是段抽屉在用的，别误删）
+  assert.ok(code.includes('function buildFullPlainText('), 'buildFullPlainText 被误删了（段抽屉的「复制整楼」还在用它）')
+  assert.ok(code.includes('已截断，原 '), '截断标注口径没了')
 })
 
 await check('★ 大文本不许塞一个 <pre>：FULL_CHUNK_CHARS=2000 分块 + content-visibility:auto', () => {
@@ -1197,12 +1210,11 @@ await check('★ D 单静态：无 dangerouslySetInnerHTML；md 只用于正文�
     assert.ok(fnBody(name).includes('MarkdownBody'), name + ' 应该用 MarkdownBody 渲染正文')
   }
   assert.ok(fnBody('MarkdownBody').includes('useMemo'), 'MarkdownBody 应该 useMemo 解析一次（不重解析）')
-  // ⛔ 原样侧：messages 的 md 只经 ViewerMessagesBody 这一个入口；system/tools/完整/状态 一律不用 md
+  // ⛔ 原样侧：messages 的 md 只经 ViewerMessagesBody 这一个入口；system/tools/状态 一律不用 md
+  //   （「完整视图」原也在这一串里 —— 2026-09-18 它已整体删除，故那两条断言一并去掉）
   const part = fnBody('PromptPartView')
   assert.ok(part.includes('ViewerMessagesBody'), 'messages 视图应经 ViewerMessagesBody')
   assert.equal(part.includes('MarkdownBody'), false, 'PromptPartView 里不得直接用 MarkdownBody（只能经 messages 入口）')
-  assert.equal(fnBody('FullPromptView').includes('MarkdownBody'), false, '完整视图是原样 prompt，不许 md 化')
-  assert.equal(fnBody('FullPromptView').includes('ViewerMessagesBody'), false, '完整视图不许用 messages 的 md 入口')
   assert.equal(fnBody('StateFlow').includes('MarkdownBody'), false, '状态源是 JSON，保持等宽原样')
   assert.equal(src.includes('ProseBody'), false, '被 MarkdownBody 取代的旧正文组件应删干净')
 })
@@ -1368,7 +1380,7 @@ await check('★ v5 P0 零写入：/agent 两个 rest 只经 requestJson（GET�
   assert.equal(/mutateJson\(HOST_API_BASE \+ '\/agent/.test(src), false, '/agent 出现在写请求里')
 })
 
-await check('★ 可写项块三态渲染（修复单 v2 §五.2；20260913：可写项在「维护」抽屉里，故预设 hook18=maintOpen）：读取中⇒禁用+如实理由；可写⇒三按钮启用；只读⇒禁用+官方语义；未知⇒禁用+可读理由；Skill 勾选框不再存在', () => {
+await check('★ 可写项块三态渲染（修复单 v2 §五.2；20260913：可写项在「维护」抽屉里，故预设 hook17=maintOpen）：读取中⇒禁用+如实理由；可写⇒三按钮启用；只读⇒禁用+官方语义；未知⇒禁用+可读理由；Skill 勾选框不再存在', () => {
   const collectBtns = (tree, pred, out) => collectNodes(tree, (n) => n.$$element === 'button' && n.props && pred(n), out)
   const agentReady = (writable) => ({
     status: 'ready',
@@ -1379,8 +1391,8 @@ await check('★ 可写项块三态渲染（修复单 v2 §五.2；20260913：�
     },
   })
   // 态 1 · 读取中（默认 loading）：三按钮禁用，理由 = 正在读取可写性…（如实，无过期承诺）
-  // hook18 = maintOpen（维护抽屉开着，可写项块才渲染 —— 20260913 改版）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 18: true } })
+  // hook17 = maintOpen（维护抽屉开着，可写项块才渲染 —— 20260913 改版）
+  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 17: true } })
   try {
     const tree = fakeReact.createElement(viewerBtn, { wide: true })
     const disabled = []
@@ -1391,7 +1403,7 @@ await check('★ 可写项块三态渲染（修复单 v2 §五.2；20260913：�
     assert.equal(boxes.length, 0, 'Skill 勾选框应已移除（20260913 用户拍板），不该再有任何 checkbox')
   } finally { fakeReact.__setPreset(null) }
   // 态 2 · 可写（preset.writable === true）⇒ 三按钮 disabled === false（P2 起的真实契约，必须断言到）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(true), 18: true } })
+  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 14: agentReady(true), 17: true } })
   try {
     const tree = fakeReact.createElement(viewerBtn, { wide: true })
     const enabled = []
@@ -1399,7 +1411,7 @@ await check('★ 可写项块三态渲染（修复单 v2 §五.2；20260913：�
     assert.ok(enabled.length >= 3, '可写态：启用的三按钮（预览差异/应用/回滚）不足 3 个: ' + enabled.length)
   } finally { fakeReact.__setPreset(null) }
   // 态 3 · 只读（writable === false）⇒ 三按钮禁用 + 官方语义理由（agent-preset/read-only）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(false), 18: true } })
+  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 14: agentReady(false), 17: true } })
   try {
     const tree = fakeReact.createElement(viewerBtn, { wide: true })
     const disabled = []
@@ -1407,7 +1419,7 @@ await check('★ 可写项块三态渲染（修复单 v2 §五.2；20260913：�
     assert.ok(disabled.length >= 3, '只读态：禁用按钮不足 3 个: ' + disabled.length)
   } finally { fakeReact.__setPreset(null) }
   // 态 4 · 未知（读不到 preset）⇒ 三按钮禁用 + 可读理由（不猜）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 15: agentReady(null), 18: true } })
+  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 14: agentReady(null), 17: true } })
   try {
     const tree = fakeReact.createElement(viewerBtn, { wide: true })
     const disabled = []
@@ -1540,10 +1552,10 @@ await check('★ C 单三级导航静态：源码删净轮次胶囊（dma-turn�
   assert.ok(src.includes('function editorV2FixtureMode') && src.includes('EDITOR_V2_FIXTURES'), 'fixture 取数层缺失（惰性判定 editorV2FixtureMode）')
 })
 
-await check('★ C 单三级导航渲染：选中会话（hook5）+ L2 开（hook28）+ L3 开（hook8=system）⇒ 消息定位面板、详细抽屉、地图容器（data-pm-main）同框；轮次胶囊不存在', () => {
+await check('★ C 单三级导航渲染：选中会话（hook5）+ L2 开（hook27）+ L3 开（hook8=system）⇒ 消息定位面板、详细抽屉、地图容器（data-pm-main）同框；轮次胶囊不存在', () => {
   fakeReact.__setPreset({
     AgentEditorButton: { 0: true },
-    AgentEditorPanel: { 5: 'session-abcdef0123456789', 7: 2, 8: 'system', 28: true },
+    AgentEditorPanel: { 5: 'session-abcdef0123456789', 7: 2, 8: 'system', 27: true },
   })
   try {
     const tree = fakeReact.createElement(viewerBtn, { wide: true })
@@ -1877,9 +1889,9 @@ await check('★ 消息流单 T1 反证（静态）：消息流栏无 PartTabs/�
   assert.ok(src.includes('dma-section-search'), '段抽屉搜索框 id 被误删')
   // 拆干净要有交代：本栏「只做消息流」的注释在
   assert.ok(src.includes('这一栏只做消息流'), '缺「这一栏只做消息流」的交代注释')
-  // 别处引用情况（任务书 ⚠ 条）：FullPromptView 仍在用 PartTabs/PART_TABS —— 不许出现悬空引用
-  assert.ok(fnBody('FullPromptView').includes('PartTabs'), 'FullPromptView 对 PartTabs 的引用情况变了（若哪天拆了它，记得更新这条）')
-  assert.ok(src.includes('const PART_TABS'), 'PART_TABS 表没了但 PartTabs 还在用（悬空引用）')
+  // ★ 2026-09-18：`PartTabs`/`PART_TABS` 原本还剩 `FullPromptView` 在用（上一轮如实钉住了这一事实）；
+  //   用户随后说「拆了吧不需要了」⇒ 完整视图整体删除，那两条「别处仍在用」的断言随之作废，
+  //   换成上面那条**删除护栏**（整份源码里不许再出现它们）。这里只留"本栏无页签"这一半。
 })
 
 // ★ 消息流单 T1/T2（列渲染）：夹具模式下渲染消息流栏（PromptPartView）⇒ 按楼分段段头 + 逐条行 + 逐块词头都在；
