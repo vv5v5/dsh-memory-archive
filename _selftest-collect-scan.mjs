@@ -18,6 +18,8 @@ import {
   planScan,
   applyScan,
   scanConstants,
+  selectModelSummary,
+  normalizeSummaryEventDoc,
 } from './lib/collect-scan.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -322,12 +324,13 @@ try {
   ])
   const regionsD1 = findShadowRegions(bySeqD1)
   const inputD1 = { sessionId: 'sess-d1', target: { characterId: 'charD1', playthroughId: 'ptD1' } }
-  const depsD1 = (events, withLoader = true) => ({
+  const depsD1 = (events, withLoader = true, instruction) => ({
     loadSurfaces: async () => bySeqD1,
     maxExistingFloor: async () => null,
     collect: makeFakeCollect().collect,
     dshHome: mkdtempSync(join(workRoot, 'd1-')),
     ...(withLoader ? { loadSummaryEvents: async () => events } : {}),
+    ...(typeof instruction === 'string' ? { instruction } : {}),
   })
   const regionOf = (plan) => plan.regions.find((r) => !r.skipped)
 
@@ -400,6 +403,55 @@ try {
   function isMetaEq(meta, want) {
     return JSON.stringify(meta) === JSON.stringify(want)
   }
+
+  // ═══ 11. 回声闸门（20260918 自总结侧路搬进来）══════════════════════════
+  // 模型把**压缩指令原文**当摘要回吐 ⇒ 该区间拒收模型正文、回落机械条目 + warnings 大声播报。
+  // 指令用**自造**占位行（⛔ 仓库源码不写任何真实提示词原文）；「当前生效指令从哪来」的
+  // 接线（templates.compaction.current）由宿主侧自检锁死，这里只锁 collect-scan 行为本身。
+  const ECHO_INSTR = [
+    '归档指令占位第零行：逐段总结正文。',
+    '归档指令占位第一行：连续叙事不许切开。',
+    '归档指令占位第二行：只记录证据，不下抽象结论。',
+    '归档指令占位第三行：只输出原始 JSON 数组。',
+  ].join('\n')
+  const ECHO_TEXT = ECHO_INSTR.split('\n').slice(0, 3).join('\n')
+  const GOOD_ZH = '1966年9月1日 上午：她在陌生的旅馆房间醒来，记忆一片空白；她把一枚鳞片与旧围巾收进皮箱，门外的脚步声打断了她的动作。'
+
+  // ① 单元直测：selectModelSummary 带 instruction ⇒ prompt-echo
+  const evEchoNorm = [mkSummaryDoc(9, [0, 1, 2], ECHO_TEXT)].map(normalizeSummaryEventDoc).filter(Boolean)
+  const selEcho = selectModelSummary(evEchoNorm, regionsD1[0], { instruction: ECHO_INSTR })
+  check('11a', '★反证：回声正文 + 指令 ⇒ mechanical + reason=prompt-echo',
+    selEcho.kind === 'mechanical' && selEcho.reason === 'prompt-echo', JSON.stringify(selEcho))
+
+  // ② 端到端：planScan 喂回声事件 + 指令 ⇒ 机械条目 + 大声播报
+  const p11a = await planScan(inputD1, depsD1([mkSummaryDoc(9, [0, 1, 2], ECHO_TEXT)], true, ECHO_INSTR))
+  const r11a = regionOf(p11a)
+  check('11b', '★反证：回声 ⇒ 该区间回落机械条目 + summaryFallback=prompt-echo',
+    r11a && r11a.summaryKind === 'mechanical' && r11a.summaryFallback === 'prompt-echo',
+    JSON.stringify(r11a && { kind: r11a.summaryKind, why: r11a.summaryFallback }))
+  check('11c', '★反证：warnings 里有 prompt-echo 播报（⛔ 不许静默跳过）',
+    p11a.warnings.some((w) => w.includes('prompt-echo') && w.includes('拒收')),
+    JSON.stringify(p11a.warnings))
+
+  // ③ 误杀检查：正常中文摘要 + 同一份指令 ⇒ 照常采用 model-summary
+  const p11b = await planScan(inputD1, depsD1([mkSummaryDoc(9, [0, 1, 2], GOOD_ZH)], true, ECHO_INSTR))
+  const r11b = regionOf(p11b)
+  check('11d', '★反证：正常中文摘要不许误杀（采用模型正文，逐字）',
+    r11b && r11b.summaryKind === 'model-summary' && r11b.summary.text === GOOD_ZH,
+    JSON.stringify(r11b && { kind: r11b.summaryKind, head: (r11b.summary && r11b.summary.text || '').slice(0, 12) }))
+
+  // ④ 拿不到指令（未注入）⇒ 只按结构判：不给出 echo 判定（如实降级，⛔ 不瞎猜）
+  const p11c = await planScan(inputD1, depsD1([mkSummaryDoc(9, [0, 1, 2], ECHO_TEXT)]))
+  const r11c = regionOf(p11c)
+  check('11e', '未注入指令 ⇒ 闸门不判 echo（只按结构判，model-summary 照旧）',
+    r11c && r11c.summaryKind === 'model-summary' && !p11c.warnings.some((w) => w.includes('prompt-echo')),
+    JSON.stringify(r11c && { kind: r11c.summaryKind }))
+
+  // ⑤ 接线锚（静态）：collectOnce 的 deps 确实把 instruction 传进 planScan
+  check('11f', '静态：collect-scan 的 deps.instruction 透传在位',
+    scanSrc.includes("instruction: typeof instruction === 'string' ? instruction : ''"),
+    'collect-scan.js 缺 deps.instruction 透传')
+
 } finally {
   // 8d 的判定必须在全部输出之后做：自检自己的输出也不能带 fixture 前 12 字
   check('8d', 'fixture 前 12 字不在自检输出里', !outBuf.join('\n').includes(FIX12))

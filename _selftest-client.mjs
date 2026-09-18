@@ -770,12 +770,17 @@ await check('★ 模板读取失败（宿主不可用）：可读红字 + 重试
   } finally { fakeReact.__setPreset(null) }
 })
 
-await check('设置视图（工作区）：返回阅读 + 根模式/工作区根/API 设置/诊断；下拉显示真名', () => {
+await check('设置视图（工作区）：返回阅读 + 根模式/工作区根/向量检索 API/诊断；下拉显示真名；★ 卡片恰好 4 个输入框、密钥框 type=password 初值恒空（验收 1）', () => {
   const readyHost = {
     healthStatus: 'ready',
     health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
     healthError: '', configStatus: 'ready',
-    config: { ok: true, rootMode: 'workspace', api: { url: 'https://example.invalid/v1', model: 'test-model' }, keySet: true, keyHint: '…abcd', storageDir: '/tmp/x', configPath: '/tmp/x/config.json', configError: null },
+    config: {
+      ok: true, rootMode: 'workspace', api: { url: 'https://example.invalid/v1', model: 'test-model' }, keySet: true, keyHint: '…abcd',
+      // ★ 假 config：retrieval 四项齐全（密钥只有 keySet/keyHint 投影 —— 投影侧反证在 _selftest-retrieval-config.mjs）
+      retrieval: { url: 'https://api.example.invalid/v1', model: 'emb-model-x', rerankModel: 'rerank-model-x', keySet: true, keyHint: '…ef01' },
+      storageDir: '/tmp/x', configPath: '/tmp/x/config.json', configError: null,
+    },
     configError: '',
   }
   fakeReact.__setPreset(basePreset('settings', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }))
@@ -784,15 +789,42 @@ await check('设置视图（工作区）：返回阅读 + 根模式/工作区根
     const s = JSON.stringify(tree)
     const text = visibleText(tree)
     assert.ok(s.includes('← 返回阅读'), '缺返回阅读')
-    for (const t of ['根模式', '工作区根（自动发现）', 'API 设置', '诊断']) assert.ok(s.includes(t), '缺设置块: ' + t)
+    for (const t of ['根模式', '工作区根（自动发现）', '向量检索 API', '诊断']) assert.ok(s.includes(t), '缺设置块: ' + t)
+    assert.equal(s.includes('API 设置（用户自配）'), false, '旧「API 设置（用户自配）」卡应已被替换（20260918）')
     assert.ok(text.includes('示例角色'), '角色下拉没有真名')
     assert.ok(text.includes('1周目'), '周目下拉没有真名')
     assert.equal(FULL_UUID_RE.test(text), false, '设置视图可见文本泄漏完整 id')
-    const pwInputs = []
-    collectNodes(tree, (n) => n.props && n.props.type === 'password', pwInputs)
-    assert.equal(pwInputs.length, 1, '密码输入框应当恰好 1 个')
-    assert.equal(pwInputs[0].props.value, '', '★ 密钥输入框初值必须为空（不回显）')
-    assert.ok(s.includes('已保存（…abcd）· 留空则不修改'), '密钥 placeholder 没用 keyHint')
+    // ── 验收 1：恰好 4 个输入框（地址/向量模型/重排模型/密钥），密钥框 password 且初值恒空 ──
+    const inputs = []
+    collectNodes(tree, (n) => n.props && typeof n.props.id === 'string' && n.props.id.startsWith('dma-retrieval-'), inputs)
+    assert.equal(inputs.length, 4, '向量检索卡应当恰好 4 个输入框（实有 ' + inputs.map((n) => n.props.id).join(',') + '）')
+    const byId = Object.fromEntries(inputs.map((n) => [n.props.id, n]))
+    for (const id of ['dma-retrieval-url', 'dma-retrieval-model', 'dma-retrieval-rerank-model', 'dma-retrieval-key']) {
+      assert.ok(byId[id], '缺输入框: ' + id)
+    }
+    // 密钥框初值**恒**为空（不回显）；其余三框回显已保存值（喂的是假 config 的非空值）
+    assert.equal(byId['dma-retrieval-key'].props.value, '', '★ 密钥框初值必须为空（不回显）')
+    assert.equal(byId['dma-retrieval-url'].props.value, 'https://api.example.invalid/v1', '地址框应回显已保存值')
+    assert.equal(byId['dma-retrieval-model'].props.value, 'emb-model-x', '向量模型框应回显已保存值')
+    assert.equal(byId['dma-retrieval-rerank-model'].props.value, 'rerank-model-x', '重排模型框应回显已保存值')
+    assert.equal(byId['dma-retrieval-key'].props.type, 'password', '密钥框必须 type=password')
+    for (const id of ['dma-retrieval-url', 'dma-retrieval-model', 'dma-retrieval-rerank-model']) {
+      assert.notEqual(byId[id].props.type, 'password', '非密钥框不许是 password: ' + id)
+    }
+    assert.ok(s.includes('已保存（…ef01）· 留空则不修改'), '密钥 placeholder 没用 retrieval.keyHint')
+    assert.equal(inputs.some((n) => n.props.id === 'dma-api-key' || n.props.id === 'dma-api-url' || n.props.id === 'dma-api-model'), false, '旧 dma-api-* 输入框应已移除')
+    // 灰字说明（两条都是任务书要求的）
+    assert.ok(s.includes('整库重算') && s.includes('_reembed-anima-vectors.mjs'), '缺「换向量模型必须整库重算」灰字')
+    assert.ok(s.includes('唯一真相就是本配置文件'), '缺「唯一真相是配置文件」灰字')
+    // 另喂一份全空 config：四个输入框初值都是空（没有已存值可回显；密钥框任何情况下都恒空）
+    const emptyHost = JSON.parse(JSON.stringify(readyHost))
+    emptyHost.config.retrieval = { url: '', model: '', rerankModel: '', keySet: false, keyHint: null }
+    fakeReact.__setPreset(basePreset('settings', emptyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }))
+    const tree2 = fakeReact.createElement(comp, { wide: true })
+    const inputs2 = []
+    collectNodes(tree2, (n) => n.props && typeof n.props.id === 'string' && n.props.id.startsWith('dma-retrieval-'), inputs2)
+    assert.equal(inputs2.length, 4, '空 config 下仍应恰好 4 个输入框')
+    for (const n of inputs2) assert.equal(n.props.value, '', '空 config 下初值应为空: ' + n.props.id)
   } finally { fakeReact.__setPreset(null) }
 })
 
@@ -856,7 +888,9 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
   const TABLE = [
     ['GET', '/config'],
     ['PUT', '/config'],
-    ['POST', '/config/test'],
+    // （20260918：/config/test 随旧「API 设置」卡一起退出面板 —— 卡换成了「向量检索 API」，
+    //   测试连接改打 /retrieval/test；服务端那条端点仍在，只是面板不再用。）
+    ['POST', '/retrieval/test'],
     ['GET', '/sessions'],
     ['GET', '/session/events'],
     ['GET', '/agent'],
@@ -881,11 +915,7 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     // trace 合同的「单条装配记录」详情（2026-09-17）：面板的逐轮装配视图按需读一条，
     // 段正文还要再点一次（带 &section=N）。同一条 rest，不额外开端点。
     ['GET', '/v3/assembly'],
-    // 手动「扫归档原文 → 总结」（2026-09-16）：用户实测「导入之后摘要只有批次清单」⇒ 补的这一步。
-    // 与导入同一套纪律：POST /summarize/plan 只规划（零 LLM），POST /summarize/apply 才调模型。
-    ['POST', '/summarize/plan'],
-    ['POST', '/summarize/apply'],
-    // 清空总结（补救：预设没调好就重来）
+    // 清空总结（运维口；20260918 撤侧路后剩下的唯一一条 summarize 端点 —— 摘要由压缩链产出）
     ['POST', '/summarize/reset'],
   ]
   const found = [...src.matchAll(/HOST_API_BASE \+ '([^']+)'/g)].map((m) => m[1].split('?')[0])
@@ -1279,9 +1309,9 @@ await check('★ 导入/收纳视图（2026-09-15 U1/B2）：三张卡齐 + 控�
     const text = visibleText(tree)
     for (const t of ['写到哪个「角色-周目」', '导入外部聊天记录', '收纳：把本机会话的楼段收进归档',
       '① 扫描 Tavern 留下的待导入文件', '看一看能收什么',
-      // 归档总结（2026-09-16）：用户实测「导入之后摘要只有批次清单」⇒ 补的这一步（手动、两步走）
-      '归档总结：把原文按区间总结成摘要', '① 扫描归档（预览区间）',
-      // 清空总结（补救）+ 重新导入（覆盖同号楼层）
+      // 归档摘要卡（20260918 撤侧路）：不再有「扫归档 → 总结」两步，只剩压缩链说明 + 清空总结运维口
+      '归档摘要：由压缩链自动产出', '摘要不再单独调模型',
+      // 清空总结（运维口）+ 重新导入（覆盖同号楼层）
       '清空总结（先看计划）', '覆盖同号楼层（重新导入）',
       // 用户 2026-09-16 指定：那个按钮的文案改成「导入①」
       '导入①',
@@ -1289,8 +1319,10 @@ await check('★ 导入/收纳视图（2026-09-15 U1/B2）：三张卡齐 + 控�
       '压缩后自动收（默认开）', '只收**绑定周目**的会话']) {
       assert.ok(text.includes(t), '缺: ' + t)
     }
-    // 「② 开始总结」是**扫描之后**才出现的动作（与「② 收进归档」同一套纪律）⇒ 这里做反向断言
-    assert.ok(!text.includes('② 开始总结'), '「② 开始总结」不该在没扫描时就出现')
+    // ★ 撤侧路（20260918）反向断言：两步入口与手动总结的字样不许再回来（摘要由压缩链产出）
+    for (const gone of ['① 扫描归档', '② 开始总结', '开始总结', '交给总结模型']) {
+      assert.ok(!text.includes(gone), '侧路字样不该再出现: ' + gone)
+    }
     // 「② 收进归档」按钮与「该周目下没有待导入文件」提示都是**动作之后**才出现的
     // （前者要预览、后者要扫描过）⇒ 不在常显清单里，由下面的反向断言兜住。
     // 顶栏入口必须存在（否则用户"看不见导入"——这正是这次要修的）
