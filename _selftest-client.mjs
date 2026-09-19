@@ -16,6 +16,9 @@
  *            （无 dangerouslySetInnerHTML；md 只用于正文不用于 system/tools/完整/状态；
  *            源列表无「会话搜索」、仍有 摘要/原文/状态；「阅读源」标签不再出现；
  *            CSS 兼容备忘两处逐字）。
+ *   第 5 步（20260919 大纲单）：工作区四档逐字（摘要/原文/状态/剧情大纲）+ ★防剧透门
+ *            （确认控件在、未确认路径零取数、判据灵敏度自证、"渲染门控与发起请求是同一个
+ *            条件"的结构断言、大纲字面量全源码只在门后出现一次）。
  *
  * 假 react 说明：createElement 遇到函数组件会**立即以假 hooks 调用它一次**（useEffect 只登记不执行，
  * 因此不会发任何网络请求）；useState 支持按「组件名 → hook 序号」注入预设值（__setPreset）。
@@ -218,20 +221,25 @@ await check('★ D 单：apply(fakeCtx) 不抛；搜索类阅读源已删 ⇒ �
   assert.deepEqual(mod.inject, ['slots'])
 })
 
-await check('★ 席位契约（20260918 F 单如实 2→3）：恰好注册 3 个席位 = 既有 sidebar.footer.action ×2（{memory-archive, agent-editor}，原样未动）+ 新增 conversation.input.right ×1（id ooc-quote，order 90）', () => {
-  // 为什么改 3：F 单「OOC 划词质疑」给插件加了第 3 席 conversation.input.right（输入栏发送键前）。
-  //   既有两席一字未动；这条断言仍然钉死**全插件席位总数恰好 N**（不是放宽成"至少 2"），只是 2 → 3。
-  assert.equal(registeredList.length, 3, '席位数不是 3：' + registeredList.length)
+await check('★ 席位契约（20260918 F 单 2→3；20260919 加 OOC 前缀席 3→4）：恰好 4 个席位 = sidebar ×2（原样未动）+ conversation.input.right ×2（{ooc-quote,90} + {ooc-prefix,89}）', () => {
+  // 为什么改 4：F 单「OOC 划词质疑」加第 3 席；20260919 又在同一座位加了「OOC」前缀席（一键标场外）。
+  //   既有两席一字未动；这条断言仍钉死**全插件席位总数恰好 N**（不是放宽成"至少 2"），只是 3 → 4。
+  assert.equal(registeredList.length, 4, '席位数不是 4：' + registeredList.length)
   const ids = registeredList.map((r) => r.meta.id).sort()
-  assert.deepEqual(ids, ['agent-editor', 'memory-archive', 'ooc-quote'])
+  assert.deepEqual(ids, ['agent-editor', 'memory-archive', 'ooc-prefix', 'ooc-quote'])
   const sidebar = registeredList.filter((r) => r.meta.name === 'sidebar.footer.action')
   assert.equal(sidebar.length, 2, 'sidebar 席位数不是 2')
   assert.deepEqual(sidebar.map((r) => r.meta.id).sort(), ['agent-editor', 'memory-archive'], '既有两席的 id 集合不许变')
-  const inputSeat = registeredList.find((r) => r.meta.name === 'conversation.input.right')
-  assert.ok(inputSeat, '缺 conversation.input.right 席位')
-  assert.equal(inputSeat.meta.id, 'ooc-quote', '第三席 id 应为 ooc-quote')
-  assert.equal(inputSeat.meta.order, 90, 'order 应为 90（排在重启按钮 restart-host 的 100 之前）')
-  assert.equal(['memory-archive', 'agent-editor', 'restart-host'].includes(inputSeat.meta.id), false, '⛔ 不许占用既有 id')
+  const inputSeats = registeredList.filter((r) => r.meta.name === 'conversation.input.right')
+  assert.equal(inputSeats.length, 2, '输入栏座位应是 2 席')
+  const quote = inputSeats.find((r) => r.meta.id === 'ooc-quote')
+  const prefix = inputSeats.find((r) => r.meta.id === 'ooc-prefix')
+  assert.ok(quote && prefix, '缺 ooc-quote / ooc-prefix 席位')
+  assert.equal(quote.meta.order, 90, '质疑席 order 应为 90（排在重启按钮 restart-host 的 100 之前）')
+  assert.equal(prefix.meta.order, 89, 'OOC 前缀席 order 应为 89（排在质疑 90 之前）')
+  for (const s of [quote, prefix]) {
+    assert.equal(['memory-archive', 'agent-editor', 'restart-host'].includes(s.meta.id), false, '⛔ 不许占用既有 id')
+  }
 })
 
 await check('★ settings.section 一个都没有（注入与注册两侧都为零）', () => {
@@ -520,7 +528,7 @@ await check('★ 读视图（工作区）：顶栏=当前根人话名+提示词+
     assert.ok(s.includes('当前根：示例角色 / 1周目'), '顶栏没有当前根人话名')
     for (const t of ['提示词', '⚙ 设置', '⛶', '✕']) assert.ok(s.includes(t), '顶栏缺按钮: ' + t)
     assert.equal(s.includes('根：会话') || s.includes('根：工作区'), false, '顶栏还残留常驻根模式单选')
-    // D 单更新：「阅读源」标签已撤掉；源只剩 摘要/原文/状态（搜索类源已移除）——用渲染断言（tab 按钮标签）
+    // D 单更新：「阅读源」标签已撤掉；源为 摘要/原文/状态/剧情大纲（搜索类源已移除，大纲为 20260919 第四档）——用渲染断言（tab 按钮标签）
     const srcTabs = []
     collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && typeof n.props.children === 'string', srcTabs)
     const srcLabels = srcTabs.map((n) => n.props.children)
@@ -908,6 +916,8 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     ['POST', '/import/apply'],
     // 自动收纳的状态出口（2026-09-15：压缩后自动收，失败要播报 ⇒ 顶栏红标读它）
     ['GET', '/auto-collect'],
+    // 「角色扮演记忆库」只读出口（20260919）：同一档的上一块 —— 清单（不带 ?file=）与单份正文各一次调用
+    ['GET', '/playthrough/rp-memory'],
     // v3 消费端（2026-09-16）：维护抽屉的「v3 外部组合」面板读投影 + 两个显式动作
     // （面板那条 PUT /config 走的是表里已有的 ['PUT','/config']，这里两条是新端点）
     ['GET', '/v3'],
@@ -1423,55 +1433,6 @@ await check('★ v5 P0 零写入：/agent 两个 rest 只经 requestJson（GET�
   assert.equal(/mutateJson\(HOST_API_BASE \+ '\/agent/.test(src), false, '/agent 出现在写请求里')
 })
 
-await check('★ 可写项块三态渲染（修复单 v2 §五.2；20260913：可写项在「维护」抽屉里，故预设 hook17=maintOpen）：读取中⇒禁用+如实理由；可写⇒三按钮启用；只读⇒禁用+官方语义；未知⇒禁用+可读理由；Skill 勾选框不再存在', () => {
-  const collectBtns = (tree, pred, out) => collectNodes(tree, (n) => n.$$element === 'button' && n.props && pred(n), out)
-  const agentReady = (writable) => ({
-    status: 'ready',
-    data: {
-      preset: { id: writable == null ? null : 'roleplay', name: null, trust: writable == null ? null : (writable ? 'user' : 'deployment'), writable: writable == null ? null : writable },
-      sections: [],
-      compaction: {},
-    },
-  })
-  // 态 1 · 读取中（默认 loading）：三按钮禁用，理由 = 正在读取可写性…（如实，无过期承诺）
-  // hook17 = maintOpen（维护抽屉开着，可写项块才渲染 —— 20260913 改版）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 17: true } })
-  try {
-    const tree = fakeReact.createElement(viewerBtn, { wide: true })
-    const disabled = []
-    collectBtns(tree, (n) => n.props.disabled === true && n.props.title === '正在读取可写性…', disabled)
-    assert.ok(disabled.length >= 3, '读取中态：禁用按钮（预览差异/应用/回滚）不足 3 个: ' + disabled.length)
-    const boxes = []
-    collectNodes(tree, (n) => n.$$element === 'input' && n.props && n.props.type === 'checkbox', boxes)
-    assert.equal(boxes.length, 0, 'Skill 勾选框应已移除（20260913 用户拍板），不该再有任何 checkbox')
-  } finally { fakeReact.__setPreset(null) }
-  // 态 2 · 可写（preset.writable === true）⇒ 三按钮 disabled === false（P2 起的真实契约，必须断言到）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 14: agentReady(true), 17: true } })
-  try {
-    const tree = fakeReact.createElement(viewerBtn, { wide: true })
-    const enabled = []
-    collectBtns(tree, (n) => !n.props.disabled && ['预览差异', '应用', '回滚'].includes(String(n.props.children)), enabled)
-    assert.ok(enabled.length >= 3, '可写态：启用的三按钮（预览差异/应用/回滚）不足 3 个: ' + enabled.length)
-  } finally { fakeReact.__setPreset(null) }
-  // 态 3 · 只读（writable === false）⇒ 三按钮禁用 + 官方语义理由（agent-preset/read-only）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 14: agentReady(false), 17: true } })
-  try {
-    const tree = fakeReact.createElement(viewerBtn, { wide: true })
-    const disabled = []
-    collectBtns(tree, (n) => n.props.disabled === true && n.props.title === '随部署附带，不可修改（agent-preset/read-only）', disabled)
-    assert.ok(disabled.length >= 3, '只读态：禁用按钮不足 3 个: ' + disabled.length)
-  } finally { fakeReact.__setPreset(null) }
-  // 态 4 · 未知（读不到 preset）⇒ 三按钮禁用 + 可读理由（不猜）
-  fakeReact.__setPreset({ AgentEditorButton: { 0: true }, AgentEditorPanel: { 14: agentReady(null), 17: true } })
-  try {
-    const tree = fakeReact.createElement(viewerBtn, { wide: true })
-    const disabled = []
-    collectBtns(tree, (n) => n.props.disabled === true && n.props.title === '读不到 preset，先修数据面', disabled)
-    assert.ok(disabled.length >= 3, '未知态：禁用按钮不足 3 个: ' + disabled.length)
-  } finally { fakeReact.__setPreset(null) }
-})
-
-// ---------- 20260913 改版：会话列表「调用次数」徽标的两态语义（缺陷 3 的界面侧防线） ----------
 await check('★ 调用次数四形态渲染：-1⇒「—」、-2⇒「⚠ 失败」、0⇒「0 次」（showAll 才可见）、3⇒「3 次」；解析失败绝不画成 0', () => {
   const now = new Date().toISOString()
   const mk = (id, requests) => ({ id: 'sess-20260913-' + id, workspace: 'ws--x--', sizeBytes: 1, mtime: now, title: '', requests })
@@ -1512,18 +1473,23 @@ await check('★ 调用次数四形态渲染：-1⇒「—」、-2⇒「⚠ 失�
   } finally { fakeReact.__setPreset(null) }
 })
 
-await check('★ v5 P0 宿主侧（lib/index.js）：ENDPOINTS 恰好新增 /agent 与 /agent/detect 两条 GET；6 条事实口径在；agent 函数体零写盘调用', () => {
+await check('★ 宿主侧（lib/index.js）：ENDPOINTS 有 /agent 与 /agent/cards、/agent/card；★ 预设线六条已退役；6 条事实口径在；agent 函数体零写盘调用', () => {
   const hostSrc = readFileSync(path.join(here, 'lib', 'index.js'), 'utf8')
   assert.ok(hostSrc.includes("'/agent': ['GET']"), 'ENDPOINTS 缺 /agent')
-  assert.ok(hostSrc.includes("'/agent/detect': ['GET']"), 'ENDPOINTS 缺 /agent/detect')
+  assert.ok(hostSrc.includes("'/agent/cards': ['GET']"), 'ENDPOINTS 缺 /agent/cards')
+  assert.ok(hostSrc.includes("'/agent/card': ['GET']"), 'ENDPOINTS 缺 /agent/card')
+  // ★★ 2026-09-19 预设线整块退役（用户口径「不用保持了」）：这六条**不该**还在路由表里。
+  for (const gone of ['/agent/detect', '/agent/apply', '/agent/rollback', '/agent/provision', '/agent/backups', '/agent/pack/apply']) {
+    assert.equal(hostSrc.includes("'" + gone + "': ["), false, '预设线退役后不该还在路由表里：' + gone)
+  }
   for (const t of [
     '创作即复制',
     'agent-presets/README.zh.md:173',
     'system-prompt/src/index.ts:601-610',
     'mcp-chrome',
     'compaction 整块必留',
-    '本版只做检测与预览，不会写入任何文件。',
-  ]) assert.ok(hostSrc.includes(t), '宿主缺 6 条事实口径: ' + t)
+    // ★ 2026-09-19：「本版只做检测与预览，不会写入任何文件。」原属 /agent/detect（预设线，已退役删掉）
+  ]) assert.ok(hostSrc.includes(t), '宿主缺事实口径: ' + t)
   const fnSlice = (name) => {
     const i = hostSrc.indexOf('async function ' + name + '(')
     assert.ok(i >= 0, '缺函数 ' + name)
@@ -1532,7 +1498,7 @@ await check('★ v5 P0 宿主侧（lib/index.js）：ENDPOINTS 恰好新增 /age
     const ends = [j, k].filter((x) => x > i)
     return hostSrc.slice(i, ends.length ? Math.min(...ends) : hostSrc.length)
   }
-  for (const name of ['handleAgentGet', 'handleAgentDetect']) {
+  for (const name of ['handleAgentGet']) {
     const body = fnSlice(name)
     for (const bad of ['writeFileSync', 'mkdirSync', 'renameSync', 'chmodSync']) {
       assert.equal(body.includes(bad), false, name + ' 函数体出现写盘调用 ' + bad + '（违反零写入）')
@@ -1656,6 +1622,19 @@ await check('★ 最近几楼卡（2026-09-17 新段 mt:lastFloors）：卡在�
   // ★ 灵敏度自证：把"卡没挂进设置视图"的写法喂给同一条判据，必须命中（否则是橡皮章）
   const notMounted = "e(EchoCard, { config: cfg, reload: reload }),"
   assert.equal(/e\(LastFloorsCard, \{ config: cfg, reload: reload \}\)/.test(notMounted), false, '反证失败：这条判据抓不住"卡没挂上"')
+})
+
+await check('★★ 记忆库写入卡已整块退役（2026-09-19 用户口径「也可以摘除，包括代码和描述」）：面板里⛔ 不该再有它的任何痕迹', () => {
+  // 这条是**退役的可验证事实**：曾经存在的卡/组件/控件 id 一个都不许还在。
+  for (const gone of [
+    'data-memory-write-card', 'function MemoryWriteCard', 'MemoryWriteCard',
+    'dma-memory-write-enabled', 'dma-memory-write-maxchars', 'dma-memory-write-description',
+    'MEMORY_WRITE_DETAIL',
+  ]) {
+    assert.equal(src.includes(gone), false, '记忆库写入已整块退役，面板里不该还有：' + gone)
+  }
+  // ★ 灵敏度自证：把"它还在"的写法喂给同一条判据，必须**命中**（否则这条断言是橡皮章）
+  assert.equal('const x = 1 // MemoryWriteCard'.includes('MemoryWriteCard'), true, '反证失败：判据抓不住"它还在"')
 })
 
 // ===== 20260918 查看器单（T2/T3）：消息流按楼分段 + 详细词头（含思维链） =====
@@ -1967,14 +1946,15 @@ await check('★ 消息流单 渲染（夹具）：消息流栏出分段段头/�
 //   夹具文本全部是合成句（与 EDITOR_V2_FIXTURES 同一口径），不是真机剧情。
 // ==================================================================
 const ooc = mod.__ooc
-await check('OOC·出口在位：exports.__ooc 恰好 10 个成员（常量/纯函数/组件），未占用 __internals 等既有出口', () => {
+await check('OOC·出口在位：exports.__ooc 恰好 13 个成员（常量/纯函数/组件），未占用 __internals 等既有出口', () => {
   assert.ok(ooc, '__ooc 缺失')
   assert.deepEqual(Object.keys(ooc).sort(), [
-    'OOC_CONTAINER_SUFFIXES', 'OOC_QUOTE_MAX_CHARS', 'OOC_SEAT_SUFFIX', 'OocQuoteButton',
-    'buildOocText', 'findSessionContainer', 'oocAnchorInComposer', 'oocCurrentVerdict',
-    'readDraftFromProps', 'selectionVerdict',
+    'OOC_CONTAINER_SUFFIXES', 'OOC_PREFIX', 'OOC_QUOTE_MAX_CHARS', 'OOC_SEAT_SUFFIX',
+    'OocModeButton', 'OocQuoteButton', 'buildOocPrefix', 'buildOocText', 'findSessionContainer',
+    'oocAnchorInComposer', 'oocCurrentVerdict', 'readDraftFromProps', 'selectionVerdict',
   ])
   assert.equal(ooc.OOC_QUOTE_MAX_CHARS, 120, '截断口径应与 prompt-viewer 的 PREVIEW_MAX_CHARS 同为 120')
+  assert.equal(ooc.OOC_PREFIX, 'OOC: ', '★ 场外前缀逐字：社区预设的 OOC 契约认的就是这个开头形式')
   assert.equal(Object.keys(mod.__internals).length, 15, '⛔ __internals 必须仍是恰好 15 键')
 })
 
@@ -2035,6 +2015,19 @@ function oocFindButton(tree) {
   assert.equal(arr.length, 1, 'OOC 组件应恰好渲染 1 个 button')
   return arr[0]
 }
+// 按钮的**可见文字**（深层收集字符串子节点）：「OOC」钮 20260919 起是 [svg 图标, span 文案]
+//   （svg 无文字不会混进来）—— 逐字断言钉的始终是玩家看见的字，不钉内部结构。
+function oocBtnText(btn) {
+  let out = ''
+  const walk = (n) => {
+    if (n == null || typeof n === 'boolean') return
+    if (typeof n === 'string' || typeof n === 'number') { out += String(n); return }
+    if (Array.isArray(n)) { for (const k of n) walk(k); return }
+    if (n.props && n.props.children !== undefined) walk(n.props.children)
+  }
+  walk(btn.props ? btn.props.children : btn)
+  return out
+}
 function oocRecorder() { return { calls: [], setDraft(t) { this.calls.push(String(t)) } } }
 const OOC_PRESET_DRAFT = '我打算回到房间'
 // 草稿走**宿主 props.useInput**（生产口径：`SessionInput` 的 selector hook）——
@@ -2055,7 +2048,7 @@ await check('OOC·★ 容器判据（2026-09-18 真机修正的回归位）：�
   // 反证 2：正常态（按钮已挂）—— 从按钮往上同样能找到
   //   ★★ 这条同时钉住「后缀优先级扫整条链」：链上最近的那个命中是 `sFkQRG_root`（输入卡片自己的），
   //   但正确答案是更外层的 `_9UxHwG_scrollBody`（会话区）。改回「第一个命中就返回」这条必红。
-  const oocBtnEl = oocMakeNode('dma-btn dma-entry', oocCard)
+  const oocBtnEl = oocMakeNode('dma-ooc-btn', oocCard)
   assert.equal(ooc.findSessionContainer(oocBtnEl, oocDoc), oocScrollBody, '按钮已挂时应从按钮往上找到同一个容器（不许停在输入卡片自己的 _root 上）')
   // 反证 3：侧边栏那片**不是**会话区（锚点链条走不到容器）
   assert.equal(ooc.selectionVerdict(oocSidebarLeaf, oocScrollBody).ok, false, '侧边栏选中必须拒')
@@ -2070,25 +2063,36 @@ await check('OOC·验收1 夹具渲染：假 inputActions + 会话区假选区 �
   assert.equal(btn.props.disabled, false, '有选区时按钮应可用')
   assert.equal(typeof btn.props.onClick, 'function', 'onClick 应在')
   assert.equal(btn.props.children, '质疑', '按钮文案应是「质疑」')
+  // 视觉契约（20260919，对齐输入栏邻居 dsh-restart-button）：专用类名 + 28 高幽灵盒
+  assert.equal(btn.props.className, 'dma-ooc-btn', '类名应是输入栏专用 .dma-ooc-btn（面板 .dma-btn 规矩不同，⛔ 不许借用）')
+  assert.equal(btn.props.style.height, 28, '定高 28（邻居实测：这一行图标控件全是 28 高，发送键 34×34）')
+  assert.equal(btn.props.style.boxSizing, 'border-box', 'border-box：防 padding 把盒子撑过 28')
+  assert.equal(btn.props.style.whiteSpace, 'nowrap', 'nowrap：不许换行长高/溢出')
   assert.ok(String(btn.props.title).includes('OOC 划词质疑'), '可用态 title 应说明功能')
   const noActions = oocFindButton(fakeReact.createElement(oocBtnComp, {}))
   assert.equal(noActions.props.disabled, true, '缺 inputActions 必须禁用')
   assert.ok(String(noActions.props.title).includes('inputActions'), '禁用 title 应写明缺 inputActions')
 })
 
-await check('OOC·验收2 ★★反证（不许覆盖草稿）：预设「我打算回到房间」+ 有选区 ⇒ 点击后 setDraft 入参逐字保留原草稿全文、在最前、只在其后追加', () => {
+await check('OOC·验收2 ★★反证（不许覆盖草稿，20260919 新形状）：预设「我打算回到房间」+ 有选区 ⇒ `OOC:` 单独占首行、前缀之后逐字等于原草稿、引用块只在其后追加', () => {
   const rec = oocRecorder()
   const btn = oocRenderWith(rec, oocFakeSelection('（夹具）他推开门，走进屋。', oocMsgPara, false), OOC_PRESET_DRAFT)
   assert.equal(btn.props.disabled, false)
   btn.props.onClick()
   assert.equal(rec.calls.length, 1, '点击应恰好写一次草稿')
   const arg = rec.calls[0]
-  // ★★ 头号事故断言：原草稿的全部内容、逐字、在最前（其后追加以外不许重排/截断/改写）
-  assert.equal(arg.slice(0, OOC_PRESET_DRAFT.length), OOC_PRESET_DRAFT, '原草稿必须逐字保留在入参最前')
-  assert.equal(arg.indexOf(OOC_PRESET_DRAFT), 0, '原草稿不许被重排')
-  assert.ok(arg.length > OOC_PRESET_DRAFT.length, '引用块必须追加在原草稿之后')
-  assert.ok(arg.includes('\n\n> （夹具）他推开门，走进屋。\n\n【OOC】我的质疑：'), '拼装形状不对：' + JSON.stringify(arg))
-  assert.ok(arg.endsWith('【OOC】我的质疑：'), '结尾应是质疑引导行（不自动发送、留玩家续写）')
+  const OOC_HEAD = 'OOC:\n\n'   // 前缀独占首行 + 空行 —— 社区预设的场外契约看的就是这个开头
+  // ★★ 头号事故断言：原草稿的全部内容、逐字、"前缀之后逐字等于原草稿"（位置从"最前"挪到
+  //   "前缀的下一段"，⛔ 照旧一个字符都不许改写/截断/重排）
+  assert.equal(arg.slice(OOC_HEAD.length, OOC_HEAD.length + OOC_PRESET_DRAFT.length), OOC_PRESET_DRAFT, '前缀之后必须逐字等于原草稿')
+  assert.equal(arg.indexOf(OOC_PRESET_DRAFT), OOC_HEAD.length, '原草稿必须紧跟前缀（不许被重排）')
+  assert.ok(arg.length > OOC_HEAD.length + OOC_PRESET_DRAFT.length, '引用块必须追加在原草稿之后')
+  assert.ok(arg.includes('\n\n> （夹具）他推开门，走进屋。\n\n我的质疑：'), '拼装形状不对：' + JSON.stringify(arg))
+  assert.ok(arg.endsWith('我的质疑：'), '结尾应是质疑引导行（不自动发送、留玩家续写）')
+  // ★ 逐字钉死任务书的目标形状（空位一个字符都不能差）；旧 `【OOC】` 标记必须消失
+  //   （场外标记由首行 `OOC:` 承担，预设名单里没有 `【OOC】` 这种写法）
+  assert.equal(arg, 'OOC:\n\n我打算回到房间\n\n> （夹具）他推开门，走进屋。\n\n我的质疑：')
+  assert.equal(arg.includes('【OOC】'), false, '旧 `【OOC】` 标记不许再出现')
 })
 
 await check('OOC·★★验收2b 反证（读不到草稿就一个字不写）：会话位没给 useInput ⇒ 点击既不许调 setDraft，也要如实写明原因', () => {
@@ -2152,18 +2156,83 @@ await check('★ OOC·静态（验收5）：conversation.input.right 注册逐�
   assert.ok(src.includes("{ name: 'sidebar.footer.action', id: 'memory-archive' }"), '既有席位 memory-archive 原样在')
   assert.ok(src.includes("{ name: 'sidebar.footer.action', id: 'agent-editor' }"), '既有席位 agent-editor 原样在')
   assert.ok(src.includes('OocQuoteButton,'), 'apply 里应直接引用模块级 OocQuoteButton')
+  // 视觉单（20260919）：交互态必须走注入 CSS（内联表达不了 :hover/:disabled），逐字对齐邻居 .dsrrb-btn 口径
+  assert.ok(src.includes('.dma-ooc-btn { border: none; background: transparent; color: GrayText; font: inherit; line-height: 1.4; }'), '缺 .dma-ooc-btn 常态规则（幽灵样式）')
+  assert.ok(src.includes('.dma-ooc-btn:hover { color: CanvasText; background: color-mix(in srgb, CanvasText 6%, Canvas); }'), '缺 .dma-ooc-btn hover 规则')
+  assert.ok(src.includes('.dma-ooc-btn:focus-visible { outline: 1px solid Highlight; outline-offset: -1px; }'), '缺 .dma-ooc-btn 焦点环规则（1px 内描边）')
+  assert.ok(src.includes('.dma-ooc-btn:disabled { color: GrayText; background: transparent; opacity: .55; cursor: default; }'), '缺 .dma-ooc-btn 禁用规则')
 })
 
-await check('OOC·纯函数 buildOocText：截断标注逐字、空草稿不带头前空行、草稿尾单换行/双换行三态', () => {
+await check('OOC·纯函数 buildOocText（20260919 新形状）：`OOC:` 单独首行逐字、截断标注照旧逐字、草稿尾单换行/双换行三态、引用逐行 > ', () => {
   const long = '字'.repeat(150)
   const t = ooc.buildOocText('', long)
-  assert.ok(t.startsWith('> ' + '字'.repeat(120) + '…（已截断，原 150 字符）\n\n【OOC】我的质疑：'), '截断形状不对：' + JSON.stringify(t.slice(0, 40)))
-  const t2 = ooc.buildOocText('', '（夹具）短句')
-  assert.ok(t2.startsWith('> （夹具）短句\n\n【OOC】我的质疑：'), '空草稿不应有前导空行')
-  assert.ok(ooc.buildOocText('前文\n', '短').startsWith('前文\n\n> '), '草稿尾单换行 ⇒ 补成空行')
-  assert.ok(ooc.buildOocText('前文\n\n', '短').startsWith('前文\n\n> '), '草稿尾已空两行 ⇒ 不再加')
-  const multi = ooc.buildOocText('', '第一行\n第二行')
-  assert.ok(multi.includes('> 第一行\n> 第二行'), '引用应逐行加 > ')
+  assert.ok(t.startsWith('OOC:\n\n> ' + '字'.repeat(120) + '…（已截断，原 150 字符）\n\n我的质疑：'), '截断形状不对：' + JSON.stringify(t.slice(0, 40)))
+  // ★ 逐字钉死任务书目标形状 1（空草稿 + 引文）
+  assert.equal(ooc.buildOocText('', '（夹具）短句'), 'OOC:\n\n> （夹具）短句\n\n我的质疑：', '空草稿形状不对（不应有前导空行）')
+  assert.ok(ooc.buildOocText('前文\n', '短').startsWith('OOC:\n\n前文\n\n> '), '草稿尾单换行 ⇒ 补成空行')
+  assert.ok(ooc.buildOocText('前文\n\n', '短').startsWith('OOC:\n\n前文\n\n> '), '草稿尾已空两行 ⇒ 不再加')
+  // ★ 逐行引用 + 多行逐字：`OOC:\n\n> 第一行\n> 第二行\n\n我的质疑：`
+  assert.equal(ooc.buildOocText('', '第一行\n第二行'), 'OOC:\n\n> 第一行\n> 第二行\n\n我的质疑：')
+})
+
+await check('OOC·纯函数 buildOocPrefix（20260919）：空草稿只放前缀、有内容就地前置、引用块另起一行、★ 幂等（已有前缀一个字不动）', () => {
+  assert.equal(ooc.OOC_PREFIX, 'OOC: ', '前缀逐字（社区预设 OOC 契约认的开头形式）')
+  assert.equal(ooc.buildOocPrefix(''), 'OOC: ', '空草稿 ⇒ 只放前缀（"激活"，玩家接着写要求）')
+  assert.equal(ooc.buildOocPrefix('我打算回到房间'), 'OOC: 我打算回到房间', '有内容 ⇒ 就地前置')
+  assert.equal(ooc.buildOocPrefix('> 引文\n\n【OOC】我的质疑：'), 'OOC:\n\n> 引文\n\n【OOC】我的质疑：', '引用块 ⇒ 前缀单独一行，别插进 `>` 里')
+  // ★ 幂等反证：已经是场外指令 ⇒ 原样返回（绝不二次加前缀、绝不改写玩家已写的字）
+  for (const already of ['OOC: x', 'OOC：x', '（OOC）x', '(OOC) x', '  OOC: x']) {
+    assert.equal(ooc.buildOocPrefix(already), already, '已有场外前缀不许再动：' + JSON.stringify(already))
+  }
+  // ★ 20260919 新形状联动：「质疑」产出自己就带 `OOC:` 首行 ⇒ 再按 OOC 按钮必须一字不动
+  const quoted = ooc.buildOocText('我打算回到房间', '（夹具）引文')
+  assert.ok(quoted.startsWith('OOC:\n\n'), '前置 sanity：质疑产出应以 OOC: 首行开头')
+  assert.equal(ooc.buildOocPrefix(quoted), quoted, '质疑的新产出已带 OOC: 开头 ⇒ 前缀按钮一个字不动')
+  // ★ 反证：坏输入不抛、不猜（非字符串一律当空草稿，⛔ 不是 String(x)）
+  assert.equal(ooc.buildOocPrefix(undefined), 'OOC: ', 'undefined ⇒ 当空草稿')
+  assert.equal(ooc.buildOocPrefix(null), 'OOC: ', 'null ⇒ 当空草稿')
+  assert.equal(ooc.buildOocPrefix(123), 'OOC: ', '数字 ⇒ 当空草稿（不 String 化）')
+})
+
+await check('OOC·验收5（OOC 前缀席，20260919）：一键标场外；★ 幂等反证（已有前缀一次都不写）；缺 inputActions ⇒ 禁用；读不到草稿 ⇒ 一个字不写', () => {
+  // 席位 4 = ooc-prefix（apply 里的声明顺序：memory-archive / agent-editor / ooc-quote / ooc-prefix）
+  const prefixComp = registeredList[3].comp
+  const findBtn = (tree) => {
+    const arr = collectNodes(tree, (n) => n.$$element === 'button', [])
+    assert.equal(arr.length, 1, 'OOC 前缀席应恰好渲染 1 个 button')
+    return arr[0]
+  }
+  // ① 空草稿 ⇒ 写进去的只有前缀
+  let rec = oocRecorder()
+  let btn = findBtn(fakeReact.createElement(prefixComp, { inputActions: rec, useInput: () => '' }))
+  assert.equal(oocBtnText(btn), 'OOC', '按钮可见文字应逐字是「OOC」（图标不掺进来）')
+  assert.equal(btn.props.className, 'dma-ooc-btn', '类名应是输入栏专用 .dma-ooc-btn（面板 .dma-btn 规矩不同，⛔ 不许借用）')
+  assert.equal(btn.props.style.height, 28, '定高 28（与「质疑」钮同盒，成对）')
+  assert.equal(btn.props.disabled, false, '有 inputActions ⇒ 可用（这一席**不看选区**）')
+  btn.props.onClick()
+  assert.deepEqual(rec.calls, ['OOC: '], '空草稿 ⇒ 只写前缀')
+  // ② 有内容 ⇒ 就地前置，原文逐字保留在后
+  rec = oocRecorder()
+  btn = findBtn(fakeReact.createElement(prefixComp, { inputActions: rec, useInput: () => OOC_PRESET_DRAFT }))
+  btn.props.onClick()
+  assert.deepEqual(rec.calls, ['OOC: ' + OOC_PRESET_DRAFT], '有内容 ⇒ 就地前置，内容逐字保留')
+  // ③ ★ 幂等反证：已经是场外指令 ⇒ 一次都不许写
+  rec = oocRecorder()
+  btn = findBtn(fakeReact.createElement(prefixComp, { inputActions: rec, useInput: () => 'OOC: 已经在场外了' }))
+  btn.props.onClick()
+  assert.equal(rec.calls.length, 0, '已有前缀时绝不许写（免得动玩家的字）')
+  // ④ 缺 inputActions ⇒ 禁用，且强行触发不写
+  rec = oocRecorder()
+  btn = findBtn(fakeReact.createElement(prefixComp, {}))
+  assert.equal(btn.props.disabled, true, '缺 inputActions 必须禁用')
+  assert.ok(String(btn.props.title).includes('inputActions'), '禁用 title 应写明缺 inputActions')
+  btn.props.onClick()
+  assert.equal(rec.calls.length, 0, '禁用态强点也不许写')
+  // ⑤ ★ 读不到草稿 ⇒ 一个字不写（setDraft 是整体替换 ⇒ 盲写 = 覆盖玩家草稿）
+  rec = oocRecorder()
+  btn = findBtn(fakeReact.createElement(prefixComp, { inputActions: rec, __dmaReadDraft: () => undefined }))
+  btn.props.onClick()
+  assert.equal(rec.calls.length, 0, '读不到草稿时绝不许写')
 })
 
 await check('OOC·纯函数 selectionVerdict 判据表：空锚点/缺容器/侧边栏链 ⇒ false，会话区链 ⇒ true', () => {
@@ -2203,6 +2272,184 @@ await check('OOC·环境缺失不抛：window.getSelection 不存在 ⇒ 判据 
 delete win.getSelection
 delete globalThis.document
 oocSelection = null
+
+// =======================================================================
+// 20260919 大纲单：工作区第四档「剧情大纲」—— 入口同层 + ★ 防剧透门
+// 门的核心纪律：未确认前**连请求都不发**（⛔ 不是"先加载好再遮住"）。
+// 判据写成 outlineGateContract(源码文本)，对真源码必须命中、对反例必须不命中（灵敏度自证）。
+// =======================================================================
+
+// 花括号配对切片：从 marker 后第一个 `) {`（函数签名尾）或 marker 后第一个 `{` 起配对到闭括号。
+// ⚠️ 只用于本块判据；文本里有不平衡花括号（字符串字面量里带 {）时会切错 —— 现有目标函数体里没有。
+function outlineSliceBraces(text, start) {
+  let depth = 0
+  for (let j = start; j < text.length; j++) {
+    const c = text[j]
+    if (c === '{') depth++
+    else if (c === '}') {
+      depth--
+      if (depth === 0) return text.slice(start, j + 1)
+    }
+  }
+  return null
+}
+function outlineFnBody(code, name) {
+  const sig = code.indexOf('function ' + name + '(')
+  if (sig < 0) return null
+  const open = code.indexOf(') {', sig) // 跳过参数表（首个 { 是形参解构，不能当函数体开头）
+  if (open < 0) return null
+  return outlineSliceBraces(code, open + 2)
+}
+function outlineArrowBody(code, marker) {
+  const i = code.indexOf(marker)
+  if (i < 0) return null
+  const open = code.indexOf('{', i + marker.length)
+  if (open < 0) return null
+  return outlineSliceBraces(code, open)
+}
+
+
+// 剥掉块注释与行注释后的 client.js（只看代码、不看注释 —— 与本文件"完整视图删除护栏"同款剥法；
+// 已知代价：带 `://` 的行后半截会被行注释剥法吃掉，只会漏报不会误报，对本块判据无影响）
+const outlineCodeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+
+await check('★ 大纲·四档逐字（验收1）：computeSources 工作区返回恰好 [摘要, 原文, 状态, 剧情大纲]（逐字+渲染顺序）；会话模式无此档', () => {
+  const cs = outlineFnBody(src, 'computeSources')
+  assert.ok(cs, '缺 computeSources 函数')
+  assert.ok(
+    cs.includes("return [['summaries', '摘要'], ['floors', '原文'], ['state', '状态'], ['outline', '剧情大纲']]"),
+    '四档返回不是逐字约定形状',
+  )
+  // 渲染断言：工作区就绪读视图，tab 标签按序恰为四档
+  const readyHost = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }
+  fakeReact.__setPreset(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const clickables = []
+    collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && typeof n.props.children === 'string', clickables)
+    const labels = clickables.map((n) => n.props.children)
+    const order = labels.filter((l) => ['摘要', '原文', '状态', '剧情大纲'].includes(l))
+    assert.deepEqual(order, ['摘要', '原文', '状态', '剧情大纲'], '四档顺序或成员不对: ' + order.join(','))
+  } finally { fakeReact.__setPreset(null) }
+  // 会话模式：不该出现这一档（入口只在工作区模式与 摘要/原文/状态 同层）
+  const sessHost = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'session', root: { sessionId: SESS_ID, characterId: null, playthroughId: null }, api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }
+  fakeReact.__setPreset(basePreset('read', sessHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const clickables = []
+    collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && typeof n.props.children === 'string', clickables)
+    assert.equal(clickables.some((n) => n.props.children === '剧情大纲'), false, '会话模式不该有剧情大纲入口')
+  } finally { fakeReact.__setPreset(null) }
+})
+
+// ===========================================================================
+// 「角色扮演记忆库」那一块（20260919）：读的是**别人（社区 RP 预设）写出来的文件**。
+// 纪律与大纲那条完全同款（防剧透门 + 零 useEffect），所以判据照那份形状再写一遍。
+// ===========================================================================
+
+/**
+ * 判据：① RpMemoryFlow 存在且零 useEffect；② 清单取数只在确认回调 reveal 体内；
+ * ③ 正文取数只在**点开那一行**的回调 toggleFile 体内；④ 上述两处之外（未确认路径/渲染路径）零取数；
+ * ⑤ 确认按钮 dma-rpmem-reveal 的 onClick 恰好接 reveal。
+ */
+function rpMemGateContract(code) {
+  const body = outlineFnBody(code, 'RpMemoryFlow')
+  if (!body) return { ok: false, why: '缺 RpMemoryFlow 组件' }
+  if (/useEffect/.test(body)) return { ok: false, why: 'RpMemoryFlow 里有 useEffect（挂载即取数）' }
+  const reveal = outlineArrowBody(body, 'const reveal = () => ')
+  if (!reveal) return { ok: false, why: '缺清单取数回调 reveal' }
+  if (!reveal.includes("requestJson(HOST_API_BASE + '/playthrough/rp-memory'")) {
+    return { ok: false, why: '确认回调 reveal 里没有清单取数调用' }
+  }
+  const toggle = outlineArrowBody(body, 'const toggleFile = (name) => ')
+  if (!toggle) return { ok: false, why: '缺按行取正文的回调 toggleFile' }
+  if (!toggle.includes("requestJson(HOST_API_BASE + '/playthrough/rp-memory?file='")) {
+    return { ok: false, why: '按行回调 toggleFile 里没有正文取数调用' }
+  }
+  const outside = body.replace(reveal, '').replace(toggle, '')
+  if (/requestJson|\.fetch\(/.test(outside)) return { ok: false, why: '门外（未确认路径/渲染路径）出现了取数调用' }
+  if (!body.includes("id: 'dma-rpmem-reveal'")) return { ok: false, why: '缺手动确认按钮 id dma-rpmem-reveal' }
+  if (!body.includes('onClick: reveal')) return { ok: false, why: '确认按钮的 onClick 没接 reveal（门与请求不是同一个条件）' }
+  return { ok: true, why: '' }
+}
+
+// ★ 灵敏度自证的反例（字符串夹具，永不求值）：挂载即取清单 + 按钮只翻开关 ⇒ 必须不命中。
+const RP_MEM_GATE_BAD_SAMPLE = [
+  "function RpMemoryFlow({ scrollBind }) {",
+  "  const [gate, setGate] = React.useState('locked')",
+  "  React.useEffect(() => {",
+  "    requestJson(HOST_API_BASE + '/playthrough/rp-memory').then((d) => setFiles(d.files))",
+  "  }, [])",
+  "  const reveal = () => { setGate('open') }",
+  "  if (gate !== 'open') return e('button', { id: 'dma-rpmem-reveal', onClick: reveal }, '显示角色扮演记忆库（含剧透）')",
+  "  return e('pre', null, JSON.stringify(files))",
+  "}",
+].join('\n')
+
+await check('★ 记忆库·门（验收R1）：确认控件 dma-rpmem-reveal 在源码与渲染树里；未确认态只有说明+按钮；判据灵敏度自证', () => {
+  const body = outlineFnBody(src, 'RpMemoryFlow')
+  assert.ok(body, '缺 RpMemoryFlow 组件')
+  assert.ok(body.includes("id: 'dma-rpmem-reveal'"), '缺确认按钮 id')
+  assert.ok(body.includes('显示角色扮演记忆库（含剧透）'), '确认按钮措辞没点名剧透')
+  // 未确认（locked）分支：只有说明文案与按钮，零取数（与大纲那条同款切片）
+  const li = body.indexOf("gate === 'locked' && ")
+  const ni = body.indexOf("gate === 'loading'", li)
+  assert.ok(li >= 0 && ni > li, '缺未确认分支（切片失锚）')
+  const locked = body.slice(li, ni)
+  assert.equal(/requestJson|\.fetch\(/.test(locked), false, '未确认分支里出现了取数调用')
+  assert.ok(locked.includes('避免剧透'), '未确认态缺一句"为什么默认不展示"的说明')
+  // 渲染断言：active=outline（两块都未确认）⇒ 两个门各自的按钮都在
+  const readyHost = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }
+  fakeReact.__setPreset(Object.assign(
+    basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }),
+    { ReadArea: { 0: 'outline' } },
+  ))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const s = JSON.stringify(tree)
+    const text = visibleText(tree)
+    assert.ok(s.includes('dma-rpmem-reveal'), '渲染树里没有记忆库确认按钮 id')
+    assert.ok(text.includes('显示角色扮演记忆库（含剧透）'), '渲染树里没有记忆库确认按钮')
+  } finally { fakeReact.__setPreset(null) }
+  const bad = rpMemGateContract(RP_MEM_GATE_BAD_SAMPLE)
+  assert.equal(bad.ok, false, '反例竟能通过判据 —— 判据是橡皮章')
+  assert.ok(bad.why.includes('useEffect'), '反例该因 useEffect（挂载即取数）被抓，实际原因: ' + bad.why)
+})
+
+await check('★★ 记忆库·两条取数路径（验收R2）：清单只在 reveal、正文只在按行回调；整份代码里该端点恰好 2 次；RP_MEMORY_MISSING 恰好 1 次', () => {
+  const v = rpMemGateContract(src)
+  assert.equal(v.ok, true, '门结构判据未命中: ' + v.why)
+  const hits = outlineCodeOnly.match(/\/playthrough\/rp-memory/g) || []
+  assert.equal(hits.length, 2, '该端点在代码里出现 ' + hits.length + ' 次（只许清单 + 按行正文这两次）')
+  const miss = outlineCodeOnly.split('RP_MEMORY_MISSING').length - 1
+  assert.equal(miss, 1, 'RP_MEMORY_MISSING 出现 ' + miss + ' 次（只许清单那条空态分支里的一次）')
+})
+
+await check('★ 记忆库·互不越界（验收R3）：另外四个阅读源组件都不碰 rp-memory', () => {
+  for (const name of ['SummariesFlow', 'FloorsFlow', 'StateFlow', 'EventsFlow']) {
+    const b = outlineFnBody(src, name)
+    assert.ok(b, '缺组件 ' + name)
+    assert.equal(b.includes('rp-memory'), false, name + ' 里出现了 rp-memory 引用')
+  }
+})
 
 console.log('== 总结：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
 if (fails.length > 0) {

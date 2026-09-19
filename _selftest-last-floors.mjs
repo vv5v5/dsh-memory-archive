@@ -5,7 +5,9 @@
 import {
   LAST_FLOORS_VERSION, LAST_FLOORS_SECTION_NAME, LAST_FLOORS_ORDER,
   DEFAULT_LAST_FLOORS_COUNT, DEFAULT_LAST_FLOORS_MAX_CHARS, LAST_FLOORS_PREAMBLE,
+  LAST_FLOORS_CONTEXT_CHARS,
   readSwitch, pickRecentFloors, renderRecentFloors, decideInject, findOrderConflicts, isFirstTurn,
+  contextIsShort,
 } from './lib/last-floors.js'
 
 let pass = 0
@@ -26,7 +28,8 @@ check('L1b', '段名是 mt:lastFloors', LAST_FLOORS_SECTION_NAME === 'mt:lastFlo
 check('L1c', 'order = 10202（倒数第二）', LAST_FLOORS_ORDER === 10202, LAST_FLOORS_ORDER)
 check('L1d', '★ 反证：order 必须 > rp:firstRound 的 10201', LAST_FLOORS_ORDER > 10201)
 check('L1e', '★ 反证：order 必须 < mt:postHistory 的 10203（后处理提示词留在最后）', LAST_FLOORS_ORDER < 10203)
-check('L1f', '默认值合理', DEFAULT_LAST_FLOORS_COUNT === 8 && DEFAULT_LAST_FLOORS_MAX_CHARS === 3000)
+check('L1f', '默认值合理（2026-09-19 起：默认 5 楼）', DEFAULT_LAST_FLOORS_COUNT === 5 && DEFAULT_LAST_FLOORS_MAX_CHARS === 3000, String(DEFAULT_LAST_FLOORS_COUNT))
+check('L1h', '★ 上下文阈值 = 5000 字（用户口径：少于 5000 字才注入）', LAST_FLOORS_CONTEXT_CHARS === 5000, String(LAST_FLOORS_CONTEXT_CHARS))
 check('L1g', '前言含"已经发生过"与"承接"两个硬说明',
   LAST_FLOORS_PREAMBLE.includes('已经发生过') && LAST_FLOORS_PREAMBLE.includes('承接'))
 
@@ -48,9 +51,9 @@ check('L2.on', 'enabled:true ⇒ 开', readSwitch({ lastFloors: { enabled: true 
 console.log('\nL2b 数值键：非法的回落默认、越界的夹住')
 {
   const d = readSwitch({ lastFloors: { enabled: true } })
-  check('L2b-1', '缺 count/maxChars ⇒ 用默认', d.count === 8 && d.maxChars === 3000, JSON.stringify(d))
+  check('L2b-1', '缺 count/maxChars ⇒ 用默认', d.count === 5 && d.maxChars === 3000, JSON.stringify(d))
   const s = readSwitch({ lastFloors: { enabled: true, count: '9', maxChars: '4000' } })
-  check('L2b-2', '字符串数字 ⇒ 回落默认（不猜）', s.count === 8 && s.maxChars === 3000, JSON.stringify(s))
+  check('L2b-2', '字符串数字 ⇒ 回落默认（不猜）', s.count === 5 && s.maxChars === 3000, JSON.stringify(s))
   const c = readSwitch({ lastFloors: { enabled: true, count: 0, maxChars: 1 } })
   check('L2b-3', '过小 ⇒ 夹到下界', c.count === 1 && c.maxChars === 200, JSON.stringify(c))
   const h = readSwitch({ lastFloors: { enabled: true, count: 1e9, maxChars: 1e9 } })
@@ -114,32 +117,61 @@ console.log('\nL5 超预算 ⇒ 丢最旧的、留最新的、如实标注')
 }
 
 // ───────────────────────────── L6 决策真值表 ─────────────────────────────
-console.log('\nL6 decideInject 真值表')
+console.log('\nL6 decideInject 真值表（★ 触发条件：上下文 < 5000 字）')
 {
   const floors = mk(3)
   const text = 'X'
+  const short = LAST_FLOORS_CONTEXT_CHARS - 1 // 4999 = 短
+  const full = LAST_FLOORS_CONTEXT_CHARS // 5000 = 够长（**不含**等于）
   const rows = [
-    ['L6a', { enabled: false, isFirstTurn: true, floors, text }, false, 'switch-off'],
-    ['L6b', { enabled: true, isFirstTurn: false, floors, text }, false, 'has-history'],
-    ['L6c', { enabled: true, isFirstTurn: true, floors: [], text }, false, 'no-floors'],
-    ['L6d', { enabled: true, isFirstTurn: true, floors, text: '' }, false, 'empty-render'],
+    ['L6a', { enabled: false, contextChars: short, floors, text }, false, 'switch-off'],
+    ['L6b', { enabled: true, contextChars: full, floors, text }, false, 'context-full'],
+    ['L6c', { enabled: true, contextChars: short, floors, text }, true, 'short-context'],
+    ['L6d', { enabled: true, isFirstTurn: false, floors, text }, false, 'context-unknown'],
     ['L6e', { enabled: true, isFirstTurn: true, floors, text }, true, 'first-turn'],
+    ['L6f', { enabled: true, contextChars: short, floors: [], text }, false, 'no-floors'],
+    ['L6g', { enabled: true, contextChars: short, floors, text: '' }, false, 'empty-render'],
   ]
   for (const [id, input, wantInject, wantReason] of rows) {
     const got = decideInject(input)
     check(id, `${wantReason} ⇒ inject=${wantInject}`, got.inject === wantInject && got.reason === wantReason, JSON.stringify(got))
   }
-  check('L6f', '★ 反证：undefined 输入不抛且判不注入', (() => {
+  check('L6h', '★ 反证：undefined 输入不抛且判不注入', (() => {
     const g = decideInject(undefined)
     return g.inject === false && g.reason === 'switch-off'
   })())
-  check('L6g', '★ 反证：有真历史时**任何**情形都不注入', (() => {
-    for (const enabled of [true, false]) {
-      for (const t of ['', 'X']) {
-        if (decideInject({ enabled, isFirstTurn: false, floors, text: t }).inject) return false
-      }
+  check('L6i', '★ 边界反证：4999 注、5000 不注、5001 不注（"少于"不含等于）', (() => {
+    const q = (n) => decideInject({ enabled: true, contextChars: n, floors, text })
+    return q(short).inject === true && q(full).inject === false && q(full + 1).inject === false
+  })())
+  check('L6j', '★ 分水岭反证（与旧口径的区别）：上下文短 ⇒ **不是首轮也注**；上下文长 ⇒ **首轮也不注**', (() => {
+    const a = decideInject({ enabled: true, contextChars: short, isFirstTurn: false, floors, text })
+    const b = decideInject({ enabled: true, contextChars: full, isFirstTurn: true, floors, text })
+    return a.inject === true && a.reason === 'short-context' && b.inject === false && b.reason === 'context-full'
+  })())
+  check('L6k', '★ 反证：字数算不出（undefined/null/NaN/负数/字符串/对象）且不是首轮 ⇒ 一律不注（fail-closed）', (() => {
+    for (const v of [undefined, null, NaN, Infinity, -1, '100', {}]) {
+      const g = decideInject({ enabled: true, contextChars: v, isFirstTurn: false, floors, text })
+      if (g.inject !== false || g.reason !== 'context-unknown') return false
     }
     return true
+  })())
+}
+
+// ───────────────────────────── L6b 前置门 contextIsShort ─────────────────────────────
+console.log('\nL6b contextIsShort（段 provider 用的那个门）')
+{
+  check('L6b-1', '字数已知且 < 阈值 ⇒ true', contextIsShort({ contextChars: 4999 }) === true)
+  check('L6b-2', '★ 边界：等于阈值 ⇒ false（"少于"不含等于）', contextIsShort({ contextChars: 5000 }) === false)
+  check('L6b-3', '字数 0（全新会话）⇒ true', contextIsShort({ contextChars: 0 }) === true)
+  check('L6b-4', '字数很长 ⇒ false', contextIsShort({ contextChars: 999999 }) === false)
+  check('L6b-5', '★ 回退：字数算不出 + 首轮 ⇒ true', contextIsShort({ contextChars: undefined, isFirstTurn: true }) === true)
+  check('L6b-6', '★ 回退：字数算不出 + 非首轮 ⇒ false（判不出就不注）', contextIsShort({ contextChars: undefined, isFirstTurn: false }) === false)
+  check('L6b-7', '★ 反证：坏形状不抛（null/NaN/Infinity/负数/字符串/对象/undefined）', (() => {
+    for (const v of [null, NaN, Infinity, -1, '100', {}]) {
+      if (contextIsShort({ contextChars: v, isFirstTurn: false }) !== false) return false
+    }
+    return contextIsShort(undefined) === false
   })())
 }
 
@@ -183,15 +215,15 @@ console.log('\nL8 端到端：readSwitch → pick → render → decide')
   const floors = mk(10)
   const picked = pickRecentFloors(floors, sw.count)
   const text = renderRecentFloors(picked, { maxChars: sw.maxChars })
-  const d = decideInject({ enabled: sw.enabled, isFirstTurn: true, floors, text })
-  check('L8a', '整链通：注入且拿到 3 楼', d.inject === true && picked.length === 3, JSON.stringify({ d, n: picked.length }))
-  check('L8b', '★ 反证：同一套配置把 isFirstTurn 翻成 false ⇒ 一个字都不注', (() => {
-    const d2 = decideInject({ enabled: sw.enabled, isFirstTurn: false, floors, text })
-    return d2.inject === false
+  const d = decideInject({ enabled: sw.enabled, contextChars: 100, floors, text })
+  check('L8a', '整链通：上下文 100 字 ⇒ 注入且拿到 3 楼', d.inject === true && d.reason === 'short-context' && picked.length === 3, JSON.stringify({ d, n: picked.length }))
+  check('L8b', '★ 反证：同一套配置把上下文换成"够长"（5000 字）⇒ 一个字都不注', (() => {
+    const d2 = decideInject({ enabled: sw.enabled, contextChars: LAST_FLOORS_CONTEXT_CHARS, floors, text })
+    return d2.inject === false && d2.reason === 'context-full'
   })())
   check('L8c', '★ 反证：开关关 ⇒ 一个字都不注', (() => {
     const off = readSwitch({ lastFloors: { enabled: false, count: 3 } })
-    return decideInject({ enabled: off.enabled, isFirstTurn: true, floors, text }).inject === false
+    return decideInject({ enabled: off.enabled, contextChars: 100, floors, text }).inject === false
   })())
 }
 

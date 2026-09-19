@@ -330,8 +330,10 @@ const PACK_GOOD = PACK_LINES.join('\n')
     check('HTTP 缺 id：200 + ok:false BAD_REQUEST', noid.status === 200 && noid.json.error.code === 'BAD_REQUEST')
     const post = await call('POST', '/dsh-memory-archive/api/agent/cards')
     check('HTTP 方法错：POST /agent/cards ⇒ 405（ENDPOINTS 口径）', post.status === 405)
-    const b = await call('GET', '/dsh-memory-archive/api/agent/backups?presetId=roleplay')
-    check('HTTP 既有 /agent/backups 不受影响：200 + ok:false（临时根没有该 preset，可读错误而非 500）',
+    // ★ 2026-09-19 预设线退役：原来这里探的是 /agent/backups（已删）。改探**保留的** /agent/cards，
+    //   本意不变 —— 「在别处乱探一下，保留的端点仍给出可读结果，而不是 500」。
+    const b = await call('GET', '/dsh-memory-archive/api/agent/cards')
+    check('HTTP 保留的 /agent/cards 不受影响：200 + ok 是布尔（可读结果而非 500）',
       b.status === 200 && typeof b.json.ok === 'boolean')
   } finally {
     server.closeAllConnections?.()
