@@ -291,7 +291,15 @@ await check('★ 收纳提示席（20260919）：注册在 shell.overlay、读 /
   const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
   const hits = codeOnly.match(/\/anima\/ingest-state/g) || []
   assert.equal(hits.length, 1, '该端点字面量应恰好出现 1 次（面板只该有一个读它的地方），实际 ' + hits.length)
-  assert.ok(src.includes("if (!running && !finishedRecently) return null"), '空闲时必须不渲染（不给界面留空壳）')
+  // ★ 2026-09-20：空闲不渲染之外，**"空跑"也不许渲染** —— 提示只对应**真的往库里写了东西**。
+  //   事故现场（用户原话「现在还是每一轮都弹记忆库收纳」）：`skipped:'no-dir'` 那种空跑
+  //   照样挂 6 秒「记忆库收纳完成：写入 0 条」⇒ 看起来就是每轮弹一次。
+  const showsCompletion = (s) => /if \(!running && \(!finishedRecently \|\| !didWrite\)\) return null/.test(s)
+  assert.ok(showsCompletion(src), '空闲时必须不渲染，且"空跑"也必须被 didWrite 卡住（不给界面留空壳）')
+  assert.ok(/const didWrite = [\s\S]{0,220}?inserted > 0[\s\S]{0,140}?failed > 0/.test(src),
+    'didWrite 必须**同时**看写成功与写失败（只看成功数 ⇒ 写失败时反而静默）')
+  assert.equal(showsCompletion(src.replace('(!finishedRecently || !didWrite)', '!finishedRecently')), false,
+    '反证：把 didWrite 从条件里拿掉 ⇒ 同一判据必红（证明它真会咬人，不是形状断言）')
   assert.ok(src.includes('clearInterval(timer)'), '卸载必须停轮询（⛔ 不许留着定时器）')
   assert.ok(src.includes('INGEST_TOAST_POLL_MS = 5000'), '轮询间隔应为 5s（低频；这是个提示条，不值得更勤）')
 })
