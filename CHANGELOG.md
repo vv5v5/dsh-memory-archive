@@ -26,6 +26,55 @@
 - **Fixed｜压缩后端不许用哈希私有成员**（真机事故）：cordis 把服务对象包成可追踪 Proxy，而 ES 私有成员
   （`#x`）过不了 Proxy ⇒ 每次 `/compact` 都在 1 毫秒内抛 `Receiver must be an instance of class …`，
   现象是"压缩按钮没反应"。→ 私有方法挪成模块级函数；自检台新增第 8 节**守真机挂载的那份副本**（含与仓库生成物逐字节比对）。
+- **Fixed｜会话同时属于两个周目时判错（真机：`for-session` 解析到了别的角色）**：口径改成
+  **「根会话」归属优先** —— 「这个会话是某周目的 `rootSessionId`」比「它只是被某条 timeline 引用
+  （继续 / 分支 / QA variant）」硬得多 ⇒ 根**顺序无关、永远赢**；两个都不是根时才按 catalog 顺序（先到者胜）。
+  `conflicts` 照旧如实列出。真机事故：一条会话是**影子·12周目**的 root、又在 **Rika·1周目** 的 timeline 里
+  当 variant 切片 ⇒ 旧的"先到者胜"判给了 catalog 里更靠前的 Rika·1周目 ⇒ 面板跟着绑过去、笔记目录/归档楼层/
+  检索**全指到一个空周目**（用户看到的就是"怎么还是没用 roleplay-memory"）。两侧索引一起改
+  （`dsh-memory-archive` 与 `dsh-anima-rag` 各一份 `session-playthrough.js`）。
+- **Changed｜落点统一：`<memoryHome>` 同时给出「能提前放」的那一处**（用户口径「先统一落点」）：段里除了
+  **本会话周目的笔记目录**（唯一可写处），还会列出**跨周目共用的预置资料**目录（= 工作区根下的
+  `.roleplay-memory/`，**只读**，开局参考用）。为什么只能提到这儿：周目目录名带**新建时才有的 UUID**
+  ⇒ 建立前唯一能放东西的地方就是工作区根。⛔ 那份**不进 `memory_write`**（否则各周目写串味）；
+  ⛔ 目录不存在时**不写进段**（不报不存在的路径）。配套预设三处文案同步（§一 段说明 / §四 放置原则 /
+  §五-4 新会话开始），并加了"两处都读、只写周目目录"的规矩。
+- **Changed｜「哪个周目」收成一条口径：会话优先，认不出来的会话当新会话**（用户口径原话，真机事故触发）：
+  事故是**开一条新对话，它绑的是上一轮的 `.roleplay-memory`，还把上一轮的归档楼层注进了提示词**。根因是「哪个周目」
+  在全局只有一处真相 = 面板绑定 `config.root`（**不按会话存**），而解析它有**两套兜底口径**：
+  `memoryHomeFor()` 会话优先→回落 config；`rootPlaythroughDir()/rootFloorsDir()/echoArchiveSource()` 只看 config。
+  ⇒ 一条**还没被 Tavern 的 catalog/timeline 认领**的新会话（`for-session` 回 `source:'none'`）就被当成"上一轮"：
+  `mt:memoryHome` 把**上一轮的笔记目录**写进提示词、`memory_write` 会**静默写进上一轮的周目**、最近几楼/回响的语料
+  读的是 config 那个周目、anima 的检索与入库也按面板绑定走。
+  现在：**会话能在 catalog/timeline 里认出周目 ⇒ 用它；认不出 ⇒ 没有周目**（注入停、写盘停，全都如实说）。
+  `config.root` 降级为**面板的视图选择**（手动选根看别的周目照旧），⛔ 不再给任何注入/写盘路径当兜底。
+  落点：`sessionPlaythroughOf()`（新，全局唯一入口）+ `sessionPlaythroughDir()`（新）；`memoryHomeFor` 去掉兜底；
+  `rootFloorsDir`/`echoArchiveSource` 收 `sessionId`（语料跟会话）；最近几楼的**门**也换成会话判据
+  （旧门是 `catalog ∪ config.root.sessionId`，会与语料指两个周目）；`dma:echo` 补"认不出 ⇒ 清空缓存不回响"；
+  `memory_write` 认不出时**拒写**并给可读原因（⛔ 不替它落到上一轮）。面板：顶栏新增一行**本会话周目态**
+  （认得出给真名 / 认不出红字「本会话：未归入周目 ⇒ 注入与笔记停用」），「向量」档未归入时也有一条自己的红字。
+  配套（`dsh-anima-rag`）：`isolationPlan` 与入库目标解析的兜底传空串 ⇒ 认不出**不检索、不入库、不注最近总结**
+  （fail-closed），删掉已无调用方的 `boundPlaythroughId()`。
+  自检：`_selftest-session-playthrough.mjs` 新增第 ⑤ 节（10 条，含"换回 `rootPlaythroughDir()` 必红"的反证）、
+  `_selftest-ingest-kick.mjs` K3c–K3e、`_selftest-playthrough-isolate.mjs` 第 ⑦ 节、`_selftest-client.mjs` 顶栏两相 + 反证。
+- **Changed｜「向量检索 API」卡拆成两套完整接口**（用户口径「两个模型都要有接口」）：向量与重排**各**一套
+  「接口地址 / 模型名 / 密钥」—— 两个模型可以落在**不同服务商**上，那正是拆开的原因。`retrieval` 新增
+  `rerankUrl` / `rerankKey`（`publicConfig` 另给 `rerankKeySet`/`rerankKeyHint`/`rerankKeyInherited`；
+  ⛔ 两组密钥都只写不读）。**向后兼容**：`rerankUrl` 空 ⇒ 沿用 `url`、`rerankKey` 空 ⇒ 沿用 `key`
+  —— 老配置一字不用改、行为一字不变。地址推导：向量 = `url` + `/embeddings`；重排 = `rerankUrl` + `/rerank`
+  （已经以 `/rerank` 结尾就不再拼 —— 拼两次会变成"重排永远不通"，那类静默失败最难查）。
+  `POST /retrieval/test` 随之**两个模型各测一次**、分别如实各报一行（⛔ 不再"只说测试成功却只覆盖向量那一半"）；
+  两个都没配全仍是 400 且**一个请求都不发**。消费端 `dsh-anima-rag` 的 `applyRetrievalConfig` 同步改口径
+  （且只改 `url` 时**不覆盖**显式填的 `rerankUrl`）。自检：两侧各加一节（宿主侧用**两个独立假端点**证"各打各的"，
+  外加兼容 / 去重 / 不发请求三条反证）。全量门 **64/0**。
+- **Fixed｜工作区根（角色 / 周目）下拉「切不动」（真机）**：两个下拉的显示值取自 `disc`（**自动发现挑的那个**），
+  而不是**已保存的绑定** ⇒ ① 打开面板时显示的就跟真实绑定不是一回事（逐条实测：绑定 `70a0502d…/…0256fcac`，
+  下拉却显示 `5c04213e…` 的周目）；② 每次保存后 `reload()` 会 bump tick ⇒ 发现结果重算 ⇒ 显示值被重置回自动挑的那个
+  —— 用户看到的就是「切了又弹回去」。修正：显示值一律**优先取绑定**（`config.root`，与「根会话」下拉同一口径），
+  没绑定时才退回自动发现；绑定指向的 id 若已不在工作区 ⇒ **照样列出来并标「⚠ 不在工作区」**（⛔ 不再静默显示成别的项
+  —— 那正是这次误会的来源）；「无归档」徽标改为跟着**显示的那一行**走（`discoverWorkspaces` 新增逐行 `archiveMap`）；
+  另加一道「本面板手动选过就不再自动跟随」的闸（跟随只在挂载时问一次会话归属，手动选择必须赢过它）。
+  自检：`_selftest-client.mjs` 新增两条渲染断言（含"绑定不在工作区"与"徽标跟显示行走"的反证）。
 - **Changed｜摘要输入只看对话**（用户口径：只传玩家发言 + AI 最终正文）：摘要后端不再原样转发重放前缀
   （`input.messages[0]` 就是整个系统提示词，含注入的近场原文 ⇒ 摘要会变成"原文的二次摘要"），
   改走过滤：思维链、工具调用/结果、系统提示词、插件注入一律摘除；正文包进 `<text_to_summarize>`、

@@ -21,7 +21,8 @@ DSH 的[上下文压缩](https://github.com/deepseek-ai/deepseek-harness)（`com
 |---|---|
 | **记忆库面板**：摘要 / 原文 / 剧情大纲 / **向量** 四档 + 设置 | ✅ |
 | **提示词查看器**：每次模型请求**真正发出**的全文（system 段地图、段级偏移、点开看该段正文、消息流） | ✅ |
-| **剧情笔记写入**：`memory_write` 工具，写进本会话周目的 `.roleplay-memory/` | ✅ |
+| **剧情笔记写入**：`memory_write` 工具，写进本会话周目的 `.roleplay-memory/`（⛔ 只写周目目录） | ✅ |
+| **预部署资料**：把要预置的文件放进**工作区根** `.roleplay-memory/` ⇒ 新周目开局就**读得到**（只读、所有周目共享；见下） | ✅ |
 | **每轮注入**：`mt:memoryProtocol` · `mt:memoryHome` · `rp:firstRound` · `mt:lastFloors` | ✅ |
 | **角色卡后处理指令**（PHI）：从 system 段挪成「玩家消息之后」的一条 user 消息（默认开） | ✅ |
 | **RP 压缩后端**：中文归档指令（`mt-compaction-rp.js`，由本仓库生成、挂进预设目录） | ✅ |
@@ -98,7 +99,7 @@ node <profile>/node_modules/dsh-memory-archive/preset/install.mjs --apply  # 真
 - **原文** —— 按需懒加载：每条的 `surface` 如实标记（`current` / **`shadowed`** / `log-only`），未发给模型的楼层如实标注；
 - **剧情大纲** —— 本会话周目 `.roleplay-memory/` 里的笔记（`index.md` / `state.md` / `characters.md` / `world.md` …），**内容需手动确认才展开**，另有一个「打开文件夹」按钮；
 - **向量** —— 本库（`dsh-memory`）的体检行 + 两行库（向量 / BM25，各带 `⚠缺失` / 重建 / 删除）+ 一个「参与检索」开关；动作走一张**请求单**，由 `dsh-anima-rag` 在该周目会话的下一轮开始前执行，回执写回来（`lib/vector-panel.js`）；
-- **设置** —— 根模式与根选择、**向量检索 API**（接口地址 / 向量模型 / 重排模型 / 密钥，密钥只写不读）、提示词模板（压缩指令 / 收纳占位）、各项开关。
+- **设置** —— 根模式与根选择、**向量检索 API**（向量模型与重排模型**各一套**「接口地址 / 模型名 / 密钥」，两个密钥都只写不读、可各自清空）、提示词模板（压缩指令 / 收纳占位）、各项开关。
 
 会话、周目、角色都显示**真名**而不是 id；三级回退（`title` → 周目反查 → 8 位截断 id）各级**如实标注来源**，
 **任何情况下都不显示完整 UUID**。
@@ -111,6 +112,18 @@ node <profile>/node_modules/dsh-memory-archive/preset/install.mjs --apply  # 真
 ---
 
 ## 每轮往提示词里注了什么（RP）
+
+★ **口径：会话优先，认不出来的会话当新会话**（2026-09-20）。「哪个周目」按**这个会话**在 Tavern
+`catalog.json`/`timeline.json` 里归入的那个算；**认不出**（新开的会话还没被 Tavern 认领 / 不是 Tavern 的会话）
+⇒ **没有周目**：下面凡是要"某个周目"的，一律**不注入**，`memory_write` 也**直接报错**。
+会话若同时被两个周目引用 ⇒ 判给**它是 `rootSessionId` 的那个**（顺序无关）；两个都不是根才按 catalog 顺序。
+面板里那个「工作区根」只是**查看用的视图**（手动选根看别的周目照旧），⛔ 不决定注入写哪儿。
+顶栏会并排显示两件事：`当前根：…`（视图）+ `本会话：…`（生效；未归入时是红字）。
+
+★ **预部署（新周目开局就带上下文）**：把要预置的文件（角色设定 / 世界书 / 写作规矩一类）放进
+**工作区根**下的 `<工作区根>/.roleplay-memory/` —— `<memoryHome>` 段会把它列出来（**只读**），
+模型开局就读得到；⛔ 它不是写的地方（各周目的笔记仍只写自己周目目录，免得串味）。
+为什么只能提前放到这儿：周目目录名里带**新建时才知道的 UUID**（`playthrough-<uuid>`）。
 
 | 段名 | 作用 | 开关（插件 `config.json`） |
 |---|---|---|
@@ -135,7 +148,7 @@ node <profile>/node_modules/dsh-memory-archive/preset/install.mjs --apply  # 真
 **权限 0600**（里面有 API 密钥）、**原子写**（临时文件 + `rename`）、**读坏不崩**（回落默认值并如实报错）。
 密钥**只在本机**：不进 git、不进日志、不经任何响应体回显（宿主只回 `keySet` 与末 4 位提示）。
 
-主要键：`rootMode` · `root` · `retrieval{url,model,rerankModel,key,chatEnabled}` · `prompts{compaction,placeholder,compactionJailbreak}`
+主要键：`rootMode` · `root` · `retrieval{url,model,key,rerankUrl,rerankModel,rerankKey,chatEnabled}` · `prompts{compaction,placeholder,compactionJailbreak}`
 · `keepFirstRound` · `echo` · `lastFloors` · `memoryWrite` · `phiAsMessage` · `autoCollect` · `summarize` · `v3`。
 
 ---
@@ -146,7 +159,7 @@ node <profile>/node_modules/dsh-memory-archive/preset/install.mjs --apply  # 真
 
 | 前缀 | 内容 |
 |---|---|
-| `/dsh-memory-archive/api` | 配置读写、会话精确读、`/templates`（提示词模板）、`/sessions`、`/session/events`、`/collect/*`（收纳）、`/playthrough/*`（周目目录与打开文件夹）、`/vector/state` + `/vector/action`（向量页签）、`/retrieval/test`（真发一次最小请求）、`/agent` + `/agent/card(s)`（装配只读检视与角色卡阅读）、`/sections*`（段表与正文） |
+| `/dsh-memory-archive/api` | 配置读写、会话精确读、`/templates`（提示词模板）、`/sessions`、`/session/events`、`/collect/*`（收纳）、`/playthrough/*`（周目目录与打开文件夹）、`/vector/state` + `/vector/action`（向量页签）、`/retrieval/test`（向量与重排**各**发一次最小请求）、`/agent` + `/agent/card(s)`（装配只读检视与角色卡阅读）、`/sections*`（段表与正文） |
 | `/dsh-memory-archive/prompt` | 提示词查看器的数据面：`/health`、`/api/sessions`、`/api/session`、`/api/part` |
 
 拿不到的服务一律**降级并说明**（`ok:false` + 可读 `code`），⛔ 不抛、⛔ 不 500、面板不白屏。
@@ -174,6 +187,7 @@ node <profile>/node_modules/dsh-memory-archive/preset/install.mjs --apply  # 真
 | 4 | 「压缩指令」保存的是**文本** | 它由**预设目录里的**压缩后端读取（`mt-compaction-rp.js`，用 `_materialize-preset-modules.mjs` 铺盘） |
 | 5 | 状态不再有独立子系统 | 由周目笔记 `state.md` 承载，模型自己维护；⛔ 没有优先级更高的"状态工具" |
 | 6 | 向量库的写入动作要等一轮 | 面板点动作 = 写一张请求单，由 `dsh-anima-rag` 在**下一次装配**执行（面板会显示进度与回执） |
+| 7 | **未归入周目的会话什么都拿不到** | 口径如此（⛔ 不继承上一轮的绑定）：笔记路径、最近几楼、回响、检索、最近总结全停，`memory_write` 报可读错。**先在 Tavern 里给它开/选一个周目**（经 Tavern「与 X 新开周目」开的会话从一开始就有周目）。顶栏与「向量」档都会如实标出来 |
 
 ---
 

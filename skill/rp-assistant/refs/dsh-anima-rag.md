@@ -30,9 +30,22 @@
 
 ## 配置从哪来
 
-**密钥与端点不读环境变量**，只来自记忆库的设置（`<DSH_HOME>/dsh-memory-archive/config.json` 的 `retrieval` 段）：
-接口地址 / 向量模型 / 重排模型 / 密钥 / 是否参与检索（`chatEnabled`）。
+**密钥与端点不读环境变量**，只来自记忆库的设置（`<DSH_HOME>/dsh-memory-archive/config.json` 的 `retrieval` 段）。
+**两个模型各一套接口**（2026-09-20 起）—— 可以落在不同服务商上：
+
+| | 向量模型 | 重排模型 |
+|---|---|---|
+| 接口地址（baseURL） | `url` | `rerankUrl`（**空 ⇒ 沿用 `url`**） |
+| 模型名 | `model` | `rerankModel` |
+| 密钥 | `key` | `rerankKey`（**空 ⇒ 沿用 `key`**） |
+
+端点由 baseURL 推导：向量 = `url` + `/embeddings`；重排 = `rerankUrl` + `/rerank`
+（已经以 `/rerank` 结尾就不再拼）。另有 `chatEnabled` = 是否参与检索。
+⚠️ 重排那两项留空 ⇒ **逐条退回**改版前的行为（同一把 key、`url` + `/rerank`），老配置一字不用改。
 读不到就回落本插件的默认值（**不吞环境凭据**）。
+
+★ **「哪个周目」是会话优先，认不出来的会话当新会话**（2026-09-20，与记忆库同一条口径，见 `dsh-internals.md` §13.3.1）：
+检索的隔离闸与自动入库的目标按**这个会话**归入的周目算；**认不出 ⇒ 不检索、不入库、不注「最近 N 条总结」**（fail-closed）。
 
 数据根默认**指向 ST 侧现役 Anima 的数据**（`vectors/` + `data/bm25_indexes/` + `data/sessions/`）——
 即「继承现有库」而不是新建一套；本插件自己的落点只有三个文件：

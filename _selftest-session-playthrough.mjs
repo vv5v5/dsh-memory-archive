@@ -195,6 +195,127 @@ const check = (label, cond, extra = '') => {
   }
 }
 
+// —— ⑤ 与 ⑥ 共用的静态读源 + 抠函数工具 ——
+const SRC_INDEX = readFileSync(resolve('lib', 'index.js'), 'utf8')
+/** 抠某个顶层函数的函数体（大括号配对；先跨过参数表，签名里有默认值时才不会被参数里那个 `{}` 骗到）。 */
+function bodyOf(name) {
+  const at = SRC_INDEX.indexOf(`function ${name}(`)
+  if (at < 0) return null
+  const po = SRC_INDEX.indexOf('(', at)
+  let d = 0
+  let pc = -1
+  for (let i = po; i < SRC_INDEX.length; i += 1) {
+    if (SRC_INDEX[i] === '(') d += 1
+    else if (SRC_INDEX[i] === ')') { d -= 1; if (d === 0) { pc = i; break } }
+  }
+  if (pc < 0) return null
+  const open = SRC_INDEX.indexOf('{', pc)
+  if (open < 0) return null
+  let depth = 0
+  for (let i = open; i < SRC_INDEX.length; i += 1) {
+    if (SRC_INDEX[i] === '{') depth += 1
+    else if (SRC_INDEX[i] === '}') { depth -= 1; if (depth === 0) return SRC_INDEX.slice(open, i + 1) }
+  }
+  return null
+}
+const has = (body, s) => body !== null && body.includes(s)
+/** 反证：把 a 换成 b 之后，同一条判据必须**不再成立**。 */
+const bites = (body, a, b, s) => has(body, s) && !has(body.replace(a, b), s)
+
+// ───────── ⑤ 2026-09-20 口径：注入/写盘**会话优先、认不出当新会话**（⛔ 不给 config 兜底） ─────────
+//   用户原话：「认不出来的会话默认为新会话。会话优先」。
+//   为什么必须钉在**接线**上：这几处的 bug 都不是纯函数的 bug，而是"走错了那条解析链"——
+//   真机事故正是一条新会话拿到**上一轮**的笔记目录/归档楼层/检索结果。
+{
+  const src = SRC_INDEX
+
+  const spOf = bodyOf('sessionPlaythroughOf')
+  check('⑤ sessionPlaythroughOf 走会话索引（resolveForSession），⛔ 不碰 rootPlaythroughDir',
+    has(spOf, 'resolveForSession') && !has(spOf, 'rootPlaythroughDir'), String(spOf).slice(0, 120))
+
+  const home = bodyOf('memoryHomeFor')
+  check('⑤★ memoryHomeFor 用 sessionPlaythroughOf（会话优先），**不许回落 rootPlaythroughDir**',
+    has(home, 'sessionPlaythroughOf(sessionId)') && !has(home, 'rootPlaythroughDir'), String(home).slice(0, 160))
+  check('⑤★ 反证：把它换成 rootPlaythroughDir()（= 旧的 config 兜底）⇒ 同一句判据必红',
+    bites(home, 'sessionPlaythroughOf(sessionId)', 'rootPlaythroughDir()', 'sessionPlaythroughOf(sessionId)'), '')
+
+  const sdir = bodyOf('sessionPlaythroughDir')
+  check('⑤ sessionPlaythroughDir 由 sessionPlaythroughOf 拼出（会话优先）',
+    has(sdir, 'sessionPlaythroughOf(sessionId)') && !has(sdir, 'rootPlaythroughDir'), '')
+
+  const floors = bodyOf('rootFloorsDir')
+  check('⑤★ rootFloorsDir 走 sessionPlaythroughDir(sessionId)（语料跟会话），⛔ 不碰 rootPlaythroughDir',
+    has(floors, 'sessionPlaythroughDir(sessionId)') && !has(floors, 'rootPlaythroughDir'), String(floors).slice(0, 120))
+  check('⑤★ 反证：把它换成 rootPlaythroughDir() ⇒ 同一句判据必红',
+    bites(floors, 'sessionPlaythroughDir(sessionId)', 'rootPlaythroughDir()', 'sessionPlaythroughDir(sessionId)'), '')
+
+  const echo = bodyOf('echoRefreshSync')
+  check('⑤★ 回响语料按会话（echoArchiveSource(sessionId)），且**认不出 ⇒ 清空缓存**（不回响上一轮）',
+    has(echo, 'echoArchiveSource(sessionId)') && has(echo, 'arc.source === null') && has(echo, 'clear()'), String(echo).slice(0, 160))
+
+  check('⑤★ 最近几楼段：语料传 sid（rootFloorsDir(sid)），门也用会话判据（sessionHasPlaythrough(sid)）',
+    src.includes('rootFloorsDir(sid)') && src.includes('sessionHasPlaythrough(sid)'), '')
+  check('⑤★ 反证：把 rootFloorsDir(sid) 改回不传参 ⇒ 判据必红',
+    !src.replace('rootFloorsDir(sid)', 'rootFloorsDir()').includes('rootFloorsDir(sid)'), '')
+  check('⑤ 旧那道按 config 判"算不算本局"的门（boundSessions）已不存在（剥注释后零命中）',
+    !src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '').includes('boundSessions'), '')
+}
+
+// ───────── ⑥ 2026-09-20：会话同时属于两个周目 ⇒ **rootSessionId 归属优先** ─────────
+//   真机形状（就是这条逼出来的）：一条会话同时是**影子·12周目**的 rootSessionId、又在
+//   **Rika·1周目** 的 timeline 里当一条 variant 切片（事件 15–25）。旧的"catalog 顺序先到者胜"
+//   把它判给了 catalog 里更靠前的 Rika·1周目 ⇒ 面板跟着绑过去、笔记/归档楼层/检索**全指到一个空周目**。
+{
+  const mk = (pt, char, root, sess) => ({
+    entry: { id: pt, path: `${char}/${pt}/timeline.json`, ext: { pmpDshTavern: { characterId: char, rootSessionId: root } } },
+    timeline: { nodes: sess.map((s) => ({ variants: [{ sessionId: s }] })) },
+  })
+  const S = 'session-shared-0001'
+  const rika = mk('playthrough-rika', 'char-rika', 'session-rika-root', [S])   // 只把 S 当 variant 引用的那个
+  const shadow = mk('playthrough-shadow', 'char-shadow', S, [S])               // S 是它的**根会话**
+  for (const [name, rows] of [['variant 行在前', [rika, shadow]], ['root 行在前', [shadow, rika]]]) {
+    const idx = buildSessionIndex(rows)
+    check(`⑥ ★ ${name} ⇒ 都判给 root 那个周目（判定与行序无关）`,
+      idx.map.get(S) === 'playthrough-shadow', `map.get(S)=${idx.map.get(S)}`)
+  }
+  check('⑥ ★ 冲突仍**如实列出来**（⛔ 不静默丢）', buildSessionIndex([rika, shadow]).conflicts.includes(S))
+  check('⑥ 两个都不是 root 时仍按行序（先到者胜）', (() => {
+    const idx = buildSessionIndex([mk('pt-a', 'ca', 'root-a', ['X']), mk('pt-b', 'cb', 'root-b', ['X'])])
+    return idx.map.get('X') === 'pt-a' && idx.conflicts.includes('X')
+  })(), '')
+  // ★ 反证：把新规则换回旧的"先到者胜" ⇒ 在这份真机形状上**确实判错**（证明新判据不是白加的）
+  const oldWay = (list) => {
+    const map = new Map()
+    for (const row of list) {
+      const pt = row.entry.id
+      const ids = new Set(row.timeline.nodes.flatMap((n) => n.variants.map((v) => v.sessionId)))
+      const root = row.entry.ext.pmpDshTavern.rootSessionId
+      if (root !== '') ids.add(root)
+      for (const id of ids) if (!map.has(id)) map.set(id, pt)
+    }
+    return map
+  }
+  check('⑥ ★ 反证：旧的"先到者胜"在这份真机形状上判给了 Rika（错的那个）', oldWay([rika, shadow]).get(S) === 'playthrough-rika', '')
+}
+
+// ───────── ⑦ 2026-09-20：落点统一 —— 工作区根那份是「能提前放」的那处（只读） ─────────
+//   用户口径「先统一落点」：周目目录名带**新建时才知道的 UUID** ⇒ 建立前唯一能放东西的地方是**工作区根**。
+{
+  const shared = bodyOf('sharedRpMemoryDir')
+  check('⑦★ 共用预置目录 = <工作区根>/.roleplay-memory，且**只有真的在**才返回（⛔ 不报不存在的路径）',
+    has(shared, 'tavernRootPath()') && has(shared, 'RP_MEMORY_DIR_NAME') && has(shared, 'isDirectorySafe(dir)'),
+    String(shared).slice(0, 140))
+  check('⑦★ 反证：把 `isDirectorySafe(dir)` 那层去掉（无条件返回）⇒ 判据必红',
+    bites(shared, 'return isDirectorySafe(dir) ? { dir } : null', 'return { dir }', 'isDirectorySafe(dir)'), '')
+  const sec = bodyOf('registerMemoryHome')
+  check('⑦★ 段里**两处都写**：本会话周目目录（写） + 共用预置（只读）',
+    has(sec, '本会话的剧情笔记目录：') && has(sec, '跨周目共用的预置资料') && has(sec, 'sharedRpMemoryDir()'), '')
+  // ★ 共用那份**只准给段用**：活代码里恰好 2 次（定义 + 段里那次）。写路径要是碰了它，这里就红。
+  const code = SRC_INDEX.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  const n = (code.match(/sharedRpMemoryDir/g) || []).length
+  check('⑦★ 共用那份**只被 memoryHome 段用**（活代码里恰好 2 次 = 定义 + 段）；⛔ 写路径不碰它', n === 2, `出现 ${n} 次`)
+}
+
 rmSync(HOME, { recursive: true, force: true })
 rmSync(WS, { recursive: true, force: true })
 

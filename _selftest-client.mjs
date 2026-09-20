@@ -223,13 +223,37 @@ await check('★ D 单 + 20260919：apply(fakeCtx) 不抛；inject 恰好 ["slot
 await check('★ 面板跟随（20260919）：查到会话的周目才改绑定；查不到一个字不改；本次打开不重复写；读的端点只此一处', () => {
   assert.ok(src.includes('function ArchivePanel({ onClose, sessions }) {'), '面板要收 sessions prop（跟随要知道当前会话）')
   assert.ok(src.includes('sessions: ctx.sessions'), '挂载面板时要把 ctx.sessions 传进去')
-  assert.ok(src.includes("data.source !== 'session') return"), '⛔ 只有在 source===\'session\' 时才许动（查不到保持原绑定）')
+  assert.ok(src.includes("data.source === 'session' && char0 !== '' && play0 !== ''"), '⛔ 只有 source===\'session\' 且拿得到角色/周目才许动')
+  assert.ok(src.includes('if (!mapped) return'), '⛔ 认不出周目 ⇒ 一个字都不改绑定（保持原绑定）')
   assert.ok(src.includes('followRef.current === key'), '本次打开跟过就不再写（reload 会让 effect 再跑一遍，⛔ 不许来回写）')
   assert.ok(src.includes("{ root: { characterId: char, playthroughId: play } }"), '改的是**绑定**（config.root），不是只改显示')
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
   const hits = code.match(/\/playthrough\/for-session/g) || []
   assert.equal(hits.length, 1, '该端点字面量应恰好出现 1 次（面板只该有一个地方问它），实际 ' + hits.length)
   assert.ok(src.includes('mutateJson(HOST_API_BASE + \'/config\', \'PUT\''), '改绑定走既有的 /config PUT（⛔ 不另开写口）')
+})
+
+await check('★★ 顶栏「本会话周目态」+ 向量档未归入那条（20260920 口径「认不出来的会话默认为新会话」）', () => {
+  // 为什么要有：未归入的会话**一个字都不改绑定**，但注入/笔记/检索全停 —— 面板必须**说出来**，
+  // 否则顶栏显示着绑定那个周目、实际什么都没发生，又是一处"看着像骗人"。
+  assert.ok(src.includes("'data-sess-unmapped': '1'"), '缺「未归入」那支的标记（红字要能被抓住）')
+  assert.ok(src.includes('本会话：未归入周目 ⇒ 注入与笔记停用'), '缺「未归入 ⇒ 注入与笔记停用」这句人话')
+  assert.ok(src.includes("'data-sess-pt': '1'"), '缺「认得出」那支的标记')
+  assert.ok(src.includes("'本会话：' + labelPlaythrough(sessPt.playthroughId, nameIdx, { short: true })"), '认得出时没给周目真名')
+  // ★ 反证：把"未归入"那句文案挖掉 ⇒ 同一句判据必红（证明它会咬人，不是永远绿的形状断言）
+  assert.equal(src.replace('本会话：未归入周目 ⇒ 注入与笔记停用', '').includes('本会话：未归入周目 ⇒ 注入与笔记停用'),
+    false, '反证失败：挖掉文案后仍能命中')
+  // ★ 展示态必须在「认不出就早退」**之前**记录 —— 否则未归入时永远停在 loading，那条红字永远不出现
+  const iSet = src.indexOf("setSessPt({ status: 'ready'")
+  const iBail = src.indexOf('if (!mapped) return')
+  assert.ok(iSet > 0 && iBail > iSet, '展示态得先在早退之前记录')
+  // ★ 显示与改绑定解耦：展示态那一段里⛔ 不许出现 PUT /config（改绑定只归跟随那一段）
+  const block = src.slice(iSet, iBail)
+  assert.equal(/mutateJson\(/.test(block), false, '展示态里不许有写盘动作')
+  // ★ 向量档：未归入要有自己的红字（⛔ 不许只显示成"绑定周目：（空）"）
+  assert.ok(src.includes("id: 'dma-vector-unmapped'"), '向量档缺「本会话未归入周目」那条红字')
+  assert.ok(src.includes('本会话还没归入任何周目 ⇒ 这一档不参与检索'), '向量档缺未归入的说明句')
+  assert.ok(src.includes("iso.blocked === 'no-bound-playthrough'"), '向量档没认 anima 那条 fail-closed 的机器码')
 })
 
 await check('★ 席位契约（20260918 F 单 2→3；20260919 加 OOC 前缀席 3→4、收纳提示席 4→5）：恰好 5 个席位 = sidebar ×2（原样未动）+ conversation.input.right ×2 + shell.overlay ×1', () => {
@@ -817,8 +841,14 @@ await check('设置视图（工作区）：返回阅读 + 根模式/工作区根
     healthError: '', configStatus: 'ready',
     config: {
       ok: true, rootMode: 'workspace', api: { url: 'https://example.invalid/v1', model: 'test-model' }, keySet: true, keyHint: '…abcd',
-      // ★ 假 config：retrieval 四项齐全（密钥只有 keySet/keyHint 投影 —— 投影侧反证在 _selftest-retrieval-config.mjs）
-      retrieval: { url: 'https://api.example.invalid/v1', model: 'emb-model-x', rerankModel: 'rerank-model-x', keySet: true, keyHint: '…ef01' },
+      // ★ 假 config：retrieval 两套三件套齐全（密钥只有 keySet/keyHint 一族投影 —— 投影侧反证在 _selftest-retrieval-config.mjs）
+      //   重排**没有自己的密钥**（rerankKeyInherited=true）⇒ 面板必须如实说"沿用向量那把"
+      retrieval: {
+        url: 'https://api.example.invalid/v1', model: 'emb-model-x',
+        rerankUrl: 'https://rerank.example.invalid/v1', rerankModel: 'rerank-model-x',
+        keySet: true, keyHint: '…ef01',
+        rerankKeySet: true, rerankKeyHint: '…ef01', rerankKeyInherited: true,
+      },
       storageDir: '/tmp/x', configPath: '/tmp/x/config.json', configError: null,
     },
     configError: '',
@@ -834,37 +864,150 @@ await check('设置视图（工作区）：返回阅读 + 根模式/工作区根
     assert.ok(text.includes('示例角色'), '角色下拉没有真名')
     assert.ok(text.includes('1周目'), '周目下拉没有真名')
     assert.equal(FULL_UUID_RE.test(text), false, '设置视图可见文本泄漏完整 id')
-    // ── 验收 1：恰好 4 个输入框（地址/向量模型/重排模型/密钥），密钥框 password 且初值恒空 ──
+    // ── 验收 1（★ 20260920 拆成两套三件套）：恰好 **6** 个输入框
+    //    = 向量（地址/模型/密钥）+ 重排（地址/模型/密钥）；两个密钥框 password 且初值恒空 ──
     const inputs = []
     collectNodes(tree, (n) => n.props && typeof n.props.id === 'string' && n.props.id.startsWith('dma-retrieval-'), inputs)
-    assert.equal(inputs.length, 4, '向量检索卡应当恰好 4 个输入框（实有 ' + inputs.map((n) => n.props.id).join(',') + '）')
+    assert.equal(inputs.length, 6, '向量检索卡应当恰好 6 个输入框（实有 ' + inputs.map((n) => n.props.id).join(',') + '）')
     const byId = Object.fromEntries(inputs.map((n) => [n.props.id, n]))
-    for (const id of ['dma-retrieval-url', 'dma-retrieval-model', 'dma-retrieval-rerank-model', 'dma-retrieval-key']) {
+    for (const id of ['dma-retrieval-url', 'dma-retrieval-model', 'dma-retrieval-key',
+      'dma-retrieval-rerank-url', 'dma-retrieval-rerank-model', 'dma-retrieval-rerank-key']) {
       assert.ok(byId[id], '缺输入框: ' + id)
     }
-    // 密钥框初值**恒**为空（不回显）；其余三框回显已保存值（喂的是假 config 的非空值）
-    assert.equal(byId['dma-retrieval-key'].props.value, '', '★ 密钥框初值必须为空（不回显）')
-    assert.equal(byId['dma-retrieval-url'].props.value, 'https://api.example.invalid/v1', '地址框应回显已保存值')
+    // 两个密钥框初值**恒**为空（不回显）；其余四框回显已保存值（喂的是假 config 的非空值）
+    assert.equal(byId['dma-retrieval-key'].props.value, '', '★ 向量密钥框初值必须为空（不回显）')
+    assert.equal(byId['dma-retrieval-rerank-key'].props.value, '', '★ 重排密钥框初值必须为空（不回显）')
+    assert.equal(byId['dma-retrieval-url'].props.value, 'https://api.example.invalid/v1', '向量地址框应回显已保存值')
     assert.equal(byId['dma-retrieval-model'].props.value, 'emb-model-x', '向量模型框应回显已保存值')
+    assert.equal(byId['dma-retrieval-rerank-url'].props.value, 'https://rerank.example.invalid/v1', '★ 重排地址框应回显**自己**那个地址')
     assert.equal(byId['dma-retrieval-rerank-model'].props.value, 'rerank-model-x', '重排模型框应回显已保存值')
-    assert.equal(byId['dma-retrieval-key'].props.type, 'password', '密钥框必须 type=password')
-    for (const id of ['dma-retrieval-url', 'dma-retrieval-model', 'dma-retrieval-rerank-model']) {
+    assert.equal(byId['dma-retrieval-key'].props.type, 'password', '向量密钥框必须 type=password')
+    assert.equal(byId['dma-retrieval-rerank-key'].props.type, 'password', '重排密钥框必须 type=password')
+    for (const id of ['dma-retrieval-url', 'dma-retrieval-model', 'dma-retrieval-rerank-url', 'dma-retrieval-rerank-model']) {
       assert.notEqual(byId[id].props.type, 'password', '非密钥框不许是 password: ' + id)
     }
-    assert.ok(s.includes('已保存（…ef01）· 留空则不修改'), '密钥 placeholder 没用 retrieval.keyHint')
+    assert.ok(s.includes('已保存（…ef01）· 留空则不修改'), '向量密钥 placeholder 没用 retrieval.keyHint')
+    // ★★ 重排密钥"没单独设置、正在沿用向量那把"必须**如实说出来**（⛔ 不许显示成"已单独保存"）
+    assert.ok(s.includes('未单独设置 —— 现在用向量模型那把（…ef01）；只有填了才只给重排用'),
+      '重排密钥 placeholder 没按 rerankKeyInherited 如实说明"沿用"')
+    assert.ok(s.includes('未单独设置（沿用向量那把）'), '重排密钥状态行没如实显示"沿用向量那把"')
+    // 两个各自的「清除」按钮（向量那把 keySet=true ⇒ 可用；重排那把也是 true ⇒ 可用）
+    assert.ok(s.includes('清除向量密钥') && s.includes('清除重排密钥'), '缺两个密钥的清空按钮')
+    // 测试连接说明两个模型各测一次（⛔ 不再假装"一次测试就全通"）
+    assert.ok(s.includes('测试连接（两个模型各测一次）'), '测试按钮没写明覆盖两个模型')
     assert.equal(inputs.some((n) => n.props.id === 'dma-api-key' || n.props.id === 'dma-api-url' || n.props.id === 'dma-api-model'), false, '旧 dma-api-* 输入框应已移除')
-    // 灰字说明（两条都是任务书要求的）
+    // 灰字说明
     assert.ok(s.includes('整库重算') && s.includes('_reembed-anima-vectors.mjs'), '缺「换向量模型必须整库重算」灰字')
     assert.ok(s.includes('唯一真相就是本配置文件'), '缺「唯一真相是配置文件」灰字')
-    // 另喂一份全空 config：四个输入框初值都是空（没有已存值可回显；密钥框任何情况下都恒空）
+    assert.ok(s.includes('两个模型可以不在同一个服务商上'), '缺「两个模型可不同服务商」的说明')
+    // 另喂一份全空 config：六个输入框初值都是空（没有已存值可回显；两个密钥框任何情况下都恒空）
     const emptyHost = JSON.parse(JSON.stringify(readyHost))
-    emptyHost.config.retrieval = { url: '', model: '', rerankModel: '', keySet: false, keyHint: null }
+    emptyHost.config.retrieval = {
+      url: '', model: '', rerankUrl: '', rerankModel: '',
+      keySet: false, keyHint: null, rerankKeySet: false, rerankKeyHint: null, rerankKeyInherited: false,
+    }
     fakeReact.__setPreset(basePreset('settings', emptyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }))
     const tree2 = fakeReact.createElement(comp, { wide: true })
     const inputs2 = []
     collectNodes(tree2, (n) => n.props && typeof n.props.id === 'string' && n.props.id.startsWith('dma-retrieval-'), inputs2)
-    assert.equal(inputs2.length, 4, '空 config 下仍应恰好 4 个输入框')
+    assert.equal(inputs2.length, 6, '空 config 下仍应恰好 6 个输入框')
     for (const n of inputs2) assert.equal(n.props.value, '', '空 config 下初值应为空: ' + n.props.id)
+    // 两个清除按钮都要**禁用**（没密钥可清）
+    const txt2 = visibleText(tree2)
+    assert.ok(txt2.includes('未设置'), '空 config 下密钥状态行应显示「未设置」')
+    const btns2 = []
+    collectNodes(tree2, (n) => n.props && n.props.children === '清除向量密钥' && n.$$element === 'button', btns2)
+    assert.equal(btns2.length, 1, '空 config 下也要有「清除向量密钥」按钮')
+    assert.equal(btns2[0].props.disabled, true, '★ 没有密钥时「清除向量密钥」必须禁用')
+  } finally { fakeReact.__setPreset(null) }
+})
+
+await check('★★ 工作区根两个下拉显示的是**已保存的绑定**（config.root），不是自动发现挑的那个（20260920 真机："角色/周目切不动"）', () => {
+  // 真机形状（逐条查过）：绑定 = `70a0502d…/playthrough-0256fcac…`；而 `discoverWorkspaces` 的
+  //   `found[0]` 是**另一个**角色（`5c04213e…`）⇒ 旧代码两个下拉显示的是自动挑的那个：
+  //   ① 打开面板时显示的就跟真实绑定不是一回事；② 保存后 `reload()` ⇒ tick++ ⇒ 发现重算 ⇒
+  //   显示值被重置回自动挑的那个，用户看到的就是「切了又弹回去」。⇒ 显示值必须优先取绑定。
+  const CHAR_B = '33333333-3333-4333-8333-333333333333'
+  const PLAY_B = 'playthrough-44444444-4444-4444-8444-444444444444'
+  const host = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: {
+      ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null,
+      root: { sessionId: null, characterId: CHAR_ID, playthroughId: PLAY_ID },   // ★ 绑定 = A
+      retrieval: { url: '', model: '', rerankModel: '', keySet: false, keyHint: null },
+    },
+    configError: '',
+  }
+  const discAuto = {
+    status: 'ready', error: '',
+    found: [{ charId: CHAR_B, plays: [PLAY_B] }, { charId: CHAR_ID, plays: [PLAY_ID] }],
+    characterId: CHAR_B, playthroughId: PLAY_B,   // ← 自动发现挑的那个（与绑定**不同**）
+    emptyArchive: true,                           // 自动那个没归档 ⇒ 旧口径据此给"显示的那一行"标错
+    archiveMap: { [CHAR_B + '/' + PLAY_B]: false, [CHAR_ID + '/' + PLAY_ID]: true },
+  }
+  fakeReact.__setPreset(basePreset('settings', host, { 4: discAuto, 5: catalogReady, 6: 0, 7: '' }))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const all = []
+    collectNodes(tree, () => true, all)
+    const byId = {}
+    for (const n of all) if (n.props && typeof n.props.id === 'string') byId[n.props.id] = n
+    const ch = byId['dma-character-select']
+    const pt = byId['dma-playthrough-select']
+    assert.ok(ch, '缺角色下拉')
+    assert.ok(pt, '缺周目下拉')
+    assert.equal(ch.props.value, CHAR_ID, '★ 角色下拉必须显示**绑定**，不是自动发现挑的那个')
+    assert.equal(pt.props.value, PLAY_ID, '★ 周目下拉必须显示**绑定**，不是自动发现挑的那个')
+    const chOpts = []
+    collectNodes(ch, (n) => n.$$element === 'option', chOpts)
+    assert.ok(chOpts.some((o) => o.props.value === CHAR_ID), '绑定那个角色不在选项里（选了也回不去）')
+    // 「无归档」徽标跟着**显示的那一行**走：绑定那个有 archive/ ⇒ 不许标
+    //（旧口径拿自动那个的 emptyArchive=true ⇒ 会把别人的状态标到这一行上）
+    // ⚠️ 判据必须精确到**徽标本身**（`children === '无归档'`）—— 卡片说明那段话里也有「无归档」三个字，
+    //   用 `includes` 会永远绿/永远红（本台子第一版就踩了：误报成"徽标还在"）。
+    const badges = []
+    collectNodes(tree, (n) => n.props && n.props.children === '无归档', badges)
+    assert.equal(badges.length, 0, '★ 显示的那一行有 archive/ ⇒ 不许出现「无归档」徽标')
+    // 反证：把 archiveMap 里显示的**那一行**改判成没有 archive/ ⇒ 徽标必须出现
+    const discNoArc = Object.assign({}, discAuto, { archiveMap: Object.assign({}, discAuto.archiveMap, { [CHAR_ID + '/' + PLAY_ID]: false }) })
+    fakeReact.__setPreset(basePreset('settings', host, { 4: discNoArc, 5: catalogReady, 6: 0, 7: '' }))
+    const tree2 = fakeReact.createElement(comp, { wide: true })
+    const badges2 = []
+    collectNodes(tree2, (n) => n.props && n.props.children === '无归档', badges2)
+    assert.equal(badges2.length, 1, '★ 反证：显示的那一行没有 archive/ ⇒ 徽标必须出现（否则这条判据是假的）')
+    fakeReact.__setPreset(basePreset('settings', host, { 4: discAuto, 5: catalogReady, 6: 0, 7: '' }))
+  } finally { fakeReact.__setPreset(null) }
+})
+
+await check('★ 工作区根下拉：绑定指向的 id 不在发现结果里 ⇒ **照样列出来并标 ⚠**（⛔ 不许静默显示成别的项）', () => {
+  // 这是这次误会的根：下拉显示 A、实际绑着 B，两边都不说话。宁可列一条"不在工作区"的项，也不许装作没这回事。
+  const GONE = 'playthrough-55555555-5555-4555-8555-555555555555'
+  const host = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: {
+      ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null,
+      root: { sessionId: null, characterId: CHAR_ID, playthroughId: GONE },   // ★ 绑定指向一个已不在工作区的周目
+      retrieval: { url: '', model: '', rerankModel: '', keySet: false, keyHint: null },
+    },
+    configError: '',
+  }
+  const disc = { status: 'ready', error: '', found: [{ charId: CHAR_ID, plays: [PLAY_ID] }], characterId: CHAR_ID, playthroughId: PLAY_ID, archiveMap: { [CHAR_ID + '/' + PLAY_ID]: true } }
+  fakeReact.__setPreset(basePreset('settings', host, { 4: disc, 5: catalogReady, 6: 0, 7: '' }))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const all = []
+    collectNodes(tree, () => true, all)
+    const pt = all.find((n) => n.props && n.props.id === 'dma-playthrough-select')
+    assert.ok(pt, '缺周目下拉')
+    assert.equal(pt.props.value, GONE, '★ 绑定那个周目必须被选中（⛔ 不许换成工作区里有的别的）')
+    const opts = []
+    collectNodes(pt, (n) => n.$$element === 'option', opts)
+    assert.ok(opts.some((o) => o.props.value === GONE), '绑定那个周目必须出现在选项里')
+    assert.ok(visibleText(tree).includes('⚠ 不在工作区'), '缺「⚠ 不在工作区」标注')
   } finally { fakeReact.__setPreset(null) }
 })
 
