@@ -90,5 +90,32 @@ pin('P6 ★ 笔记那条：不许把自己想象的玩家设定写进去',
     i4 > 0 && persona.slice(i4).includes('替玩家改了设定'), '')
 }
 
+// ── P9 ★★ 读侧的周目边界（2026-09-20 真机：新周目开局跑去 glob 了别的周目）──────
+//   事故：19周目开局，本局目录里还没有 `state.md` ⇒ 它 `glob **/state.md`，`path` 写的是**周目目录的上一层**
+//   （角色目录）⇒ 结果列出 **5 个别的周目** ⇒ 它读了 17周目那份，并照它把本局的 `state.md` 建了出来。
+//   用户口径（选了"只改提示词"这一档）：**读也只在本局周目目录里**，本局没有就是"还没有"⇒ 新建，⛔ 不是去别处找。
+pin('P9 ★ 读也只在本局周目目录里（第零节）', ['只在本局周目目录里读', '不许去别处找一份来用'])
+pin('P9 ★ 读也只在本局周目目录里（工具清单那一条）',
+  ['但只能在本局周目目录里用', '不许写成周目目录的上一层', '立刻停手'])
+pin('P9 ★ 读也只在本局周目目录里（笔记放置原则那一段）',
+  ['读也一样', '每个周目是独立的一局', '按下面的清单新建'])
+{
+  /** 某个 `## ` 小节内是否含有某句（小节 = 该标题到下一个 `## ` 之间）。 */
+  const inSec = (head, s) => {
+    const a = persona.indexOf(head)
+    if (a < 0) return false
+    const b = persona.indexOf('## ', a + head.length)
+    return persona.slice(a, b > a ? b : undefined).includes(s)
+  }
+  check('P10 ★ 三处分别在零 / 三 / 四节里（⛔ 不许只写在一处 —— 一处丢了另两处还能兜住）',
+    inSec('## 零、', '只在本局周目目录里读')
+    && inSec('## 三、', '但只能在本局周目目录里用')
+    && inSec('## 四、', '读也一样'), '')
+  check('P10 ★ 反证：把第零节那句剪掉 ⇒ 同一判据必红', !(() => {
+    const a = persona.indexOf('## 零、'); const b = persona.indexOf('## 一、')
+    return persona.slice(a, b > a ? b : undefined).replace('只在本局周目目录里读', '').includes('只在本局周目目录里读')
+  })(), '')
+}
+
 console.log(`\n── ${pass} 通过 / ${fail} 失败 ──`)
 process.exitCode = fail === 0 ? 0 : 1
