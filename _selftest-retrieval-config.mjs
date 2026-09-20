@@ -127,9 +127,15 @@ try {
       && typeof r.json.configError === 'string' && r.json.configError.includes('retrieval'),
       String(r.json.configError).slice(0, 200))
     const retKeys = Object.keys((JSON.parse(r.text)).retrieval || {})
-    check('④ 未知键（keep）不进投影（sanitize 只认已知字段；投影恰好 5 键）',
-      JSON.stringify(retKeys) === JSON.stringify(['url', 'model', 'rerankModel', 'keySet', 'keyHint']),
+    // ★ 2026-09-20：「向量」页签的「参与检索」开关要读当前态 ⇒ 投影多一维 `chatEnabled`
+    //   （5 键 → 6 键）。本条的**本意**是"未知键不许漏进投影"（keep 仍在下面被排除），不是钉死 5 这个数。
+    check('④ 未知键（keep）不进投影（sanitize 只认已知字段；投影恰好 6 键 = 2026-09-20 加 chatEnabled）',
+      JSON.stringify(retKeys) === JSON.stringify(['url', 'model', 'rerankModel', 'keySet', 'keyHint', 'chatEnabled']),
       JSON.stringify(retKeys))
+    // 开关必须是**布尔**（面板拿它渲染开关状态，⛔ 不包对象、不给三态）
+    check('④ chatEnabled 投影为布尔（缺省配置 ⇒ true）',
+      typeof ret.chatEnabled === 'boolean' && ret.chatEnabled === true,
+      String(ret.chatEnabled))
     writeFileSync(CONFIG_FILE, JSON.stringify({ schemaVersion: 1, retrieval: ['not', 'an', 'object'] }), 'utf8')
     const r2 = await call('GET', '/config')
     check('④ retrieval 整个不是对象 ⇒ 回落默认 + issue',

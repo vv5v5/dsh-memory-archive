@@ -2,75 +2,42 @@
 
 > **不发明记忆，只把 DSH 已经压掉的东西重新变得「取得到」。**
 
-> English: [README.en.md](README.en.md)
+DSH 的[上下文压缩](https://github.com/deepseek-ai/deepseek-harness)（`compaction-basic`）本来就在把旧内容折叠出模型可见面。
+本插件**不重写压缩、不重写摘要、不建第二份存储、不改 DSH 本体一行**，只补三件事：
 
-DSH 的[上下文压缩机制](https://github.com/)（`compaction-basic`）本来就在把旧内容折叠出模型可见面。
-本插件**不重写压缩、不重写摘要、不建第二份存储**，只补原生没做的三件事：
+1. **取用** —— 被折叠的内容**一直都在会话日志里**，缺的是一个够得着的入口（面板 / 检索 / 每轮注入）；
+2. **如实标注** —— 每条内容标明它此刻是 `current`（还在模型可见面）/ `shadowed`（**已被压出上下文**）/ `log-only`（本来就不上面）；
+3. **RP 的那一小套** —— 剧情笔记写入、最近几楼、第一轮保留、角色卡后处理指令、RP 专用压缩后端与压缩后收纳。
 
-1. **索引取用** —— 被折叠的内容**其实一直在会话日志里、也一直在检索索引里**，缺的是一个够得着它的入口；
-2. **如实标注** —— 检索/浏览结果标明每条内容当前是 `current`（还在模型可见面）/ `shadowed`（**已被压缩出上下文**）/ `log-only`（本来就不上面）；
-3. **可配置的入口** —— 一个属于它自己的面板：根模式切换、用户自配 API、诊断。
-
-v4 起还包含：**并入的提示词查看器**（看每次模型请求真正发出的全文）、**阅读优先界面**
-（连续滚动读摘要与原文 + 全屏）、**真名解析**（周目 / 角色 / 会话显示真名而非 id）、
-**提示词面板**（压缩指令 / 收纳占位，可编辑落盘）。
+配套的两个独立插件（都是**可选**的，本仓库**不含**它们的代码）：
+[`pmp-dsh-tavern`](https://github.com/Player-MINEPIG/dsh-tavern)（角色卡 / 世界书 / 周目 / ST 预设）与
+[`dsh-anima-rag`](https://github.com/vv5v5/dsh-anima-rag)（向量 + BM25 检索、回响、向量面板那半边）。
 
 ---
 
-## 设计思路
+## 它现在能干什么（如实标注）
 
-三句话，说清它想要什么、不要什么。
-
-### 1 能用原生机制就用原生机制，不污染原生编程架构
-
-「无限上下文」与「提示词查看器」都建立在 DSH **已经有**的东西上：压缩机制照旧负责折叠、会话日志照旧是
-唯一真相源、检索与装配走的都是官方扩展点。**不重写压缩、不重写摘要、不建第二份存储、不 fork 任何官方包** ——
-插件卸载后，原生编程环境原样还在（会话、工具面、模型选择都不受它影响）。
-
-### 2 RP 是一个「模式」，不是把编程环境改造成 RP
-
-本插件参与的 RP 组装，与编程模式**工具注册表互不透明**：RP 那一侧只挂它需要的能力，编程模式的工具
-既不出现在它的工具目录里、也不占它的上下文预算。搭配上游
-[Player-MINEPIG 的 dsh-tavern](https://github.com/Player-MINEPIG/dsh-tavern)（「dsht」），
-可以做成一站式的「**agent 酒馆**」与「**酒馆 agent**」管理 ——
-酒馆那一侧管角色卡、世界书、周目与 ST 预设；agent 这一侧管组装、工具面、记忆与归档。
-两边只通过官方扩展点打交道，谁也不替谁做决定。
-
-### 3 对 DSH 本体做了什么修改：**一行都没改**
-
-我们只做两件事 —— **写插件**、以及**按你的显式操作生成预设目录**。用到的全是官方扩展点，逐条列清（都可以自己核）：
-
-| 用的官方扩展点 | 用来做什么 |
+| 能力 | 状态 |
 |---|---|
-| `ctx.effect` 生命周期 + `webServer.register` 两条**同源 prefix 路由** | 记忆库与查看器的数据面：`/dsh-memory-archive/api`、`/dsh-memory-archive/prompt` |
-| `sessionQuery` 精确读会话事件 | 把「已经被压缩出上下文」的内容读回来；⛔ 不触发索引重建 |
-| `system-prompt/assemble` 瀑布 | 每轮装配的**元数据**捕获（段名 / 顺序 / 字数 / 偏移 / 哈希 / 可变性）—— ⛔ **不落正文** |
-| `systemPrompt.section()` | 只读呈现已注册的段；RP 预设里的两段由**预设目录里的插件**注册 |
-| `compaction` 服务子类 | 中文 RP 归档指令的压缩后端（只覆盖 `summarize`，其余参数照官方默认） |
-| `skills.register()` | 两个 skill：RP 助手 / 配置知识库 |
-| 客户端 `slots` | 侧边栏两个入口（记忆库、提示词查看器） |
-| **agent preset（realm）** | RP 模式：工具面收窄、段注入、与编程模式互不透明 —— 靠**生成预设目录**实现，不改核心 |
-
-几条一直守着的纪律：改预设目录前**先干跑给你看**、写入后**逐字节回读**、不一致**自动回滚**；
-⛔ 不覆盖已存在的文件、⛔ 不写死绝对路径（跟配置放一起的相对位置）、⛔ 不动你的 `~/.dsh` 里的 profile 配置。
-
-### 现在的完成度（如实标注）
-
-| | 状态 |
-|---|---|
-| **提示词查看器** | ✅ 配置好环境后可用：装配地图、段级偏移、点开看该段**真实正文**、注册表导出、读不出时的诊断 |
-| **记忆库**（阅读 / 检索 / 真名解析 / 提示词面板） | ✅ 可用 |
-| 收纳落库（把被压缩的区间写进周目归档）与聊天导入适配器 | ⚠️ **不在本次发布里** —— 它们在独立的一单上，做完再进 |
+| **记忆库面板**：摘要 / 原文 / 剧情大纲 / **向量** 四档 + 设置 | ✅ |
+| **提示词查看器**：每次模型请求**真正发出**的全文（system 段地图、段级偏移、点开看该段正文、消息流） | ✅ |
+| **剧情笔记写入**：`memory_write` 工具，写进本会话周目的 `.roleplay-memory/` | ✅ |
+| **每轮注入**：`mt:memoryProtocol` · `mt:memoryHome` · `rp:firstRound` · `mt:lastFloors` | ✅ |
+| **角色卡后处理指令**（PHI）：从 system 段挪成「玩家消息之后」的一条 user 消息（默认开） | ✅ |
+| **RP 压缩后端**：中文归档指令（`mt-compaction-rp.js`，由本仓库生成、挂进预设目录） | ✅ |
+| **压缩后自动收纳** + 孤儿清理（摘要进库、账本防重、被删切片的对账与隔离） | ✅ |
+| **OOC 两席**：输入栏的「OOC」前缀按钮 + 划词「质疑」 | ✅ |
+| **一个 skill**：`rp-assistant`（带三份可查资料，见下） | ✅ |
+| **两种根**：会话模式（**零依赖**）/ 工作区模式（需 `pmp-dsh-tavern`） | ✅ |
+| **预设生成 / 写入面**（detect · apply · rollback · provision · backups · pack） | ⛔ **已退役**（2026-09-19 用户口径：「不用保持了」）—— 预设目录现在**自己维护**，本插件不再替你改 |
+| **状态子系统**（`state-bridge` 子包 + `state:card` 段 + 5 个状态工具） | ⛔ **已剥离**（2026-09-20）—— 状态改由**周目笔记 `state.md`** 承载，模型按文件开头写的要求自己维护 |
 
 ---
 
 ## 安装
 
 ```sh
-# 从 npm（发布后）
-dsh plugin --profile <你的 profile 名> add dsh-memory-archive
-
-# 或直接从 GitHub
+# 从 GitHub
 dsh plugin --profile <你的 profile 名> add github:vv5v5/dsh-memory-archive
 
 # 或本地目录（开发用）
@@ -81,100 +48,68 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 
 > 本包**没有构建步骤** —— `lib/` 里就是可直接运行的 JS（`react` 由 DSH 平台的模块 seed 表提供）。
 
-## 依赖
+### 依赖
 
 | 功能 | 依赖 |
 |---|---|
-| **会话模式**（默认） | **零依赖** —— 原版 DSH 纯净环境即可用 |
-| **工作区模式** | 需要已安装 [`pmp-dsh-tavern`](https://github.com/)（**可选**，未安装时该模式自动置灰并说明原因） |
+| 记忆库（会话模式）/ 提示词查看器 / 工具与注入 | **零依赖** —— 原版 DSH 纯净环境即可用 |
+| 工作区模式、剧情笔记目录、剧情大纲、向量页签的体检行 | 需要 [`pmp-dsh-tavern`](https://github.com/Player-MINEPIG/dsh-tavern)（**可选**，未装时相关入口置灰并说明原因） |
+| 检索注入（`anima:memory`）、回响、向量页签的动作 | 需要 [`dsh-anima-rag`](https://github.com/vv5v5/dsh-anima-rag)（**可选**） |
 
-`pmp-dsh-tavern` 在 `package.json` 里被声明为 **optional peer**，不会被强制安装。
+两者在 `package.json` 里都是 **optional peer**，不会被强制安装。
 
 ---
 
 ## 两种根模式
 
-记忆库要能在两种环境里用，而它们的「根」根本不是同一种东西 —— 所以**根是一个可切换的模式**，不是一个硬编码路径：
+记忆库要能在两种环境里用，而它们的「根」根本不是同一种东西 —— 所以**根是一个可切换的模式**：
 
 | | **会话模式**（默认） | **工作区模式** |
 |---|---|---|
 | 根 | 一条**手动选定**的 DSH 会话 | Tavern 工作区里某个周目的 `archive/` |
-| 数据来源 | DSH 自己的会话事件日志（**精确读**，不触发索引重建） | 归档文件（`floors/` `summaries/` `state/`） |
-| 能看到 | 该会话的**全部**事件，含**已被压缩出上下文**的那些 | 归档契约覆盖的三样：原文 / 摘要 / 状态 |
+| 数据来源 | DSH 自己的会话事件日志（**精确读**，不触发索引重建） | 归档文件（`floors/` `summaries/` `.roleplay-memory/`） |
+| 能看到 | 该会话的**全部**事件，含**已被压缩出上下文**的那些 | 归档契约覆盖的那些：原文 / 摘要 / 剧情笔记 |
 | 依赖 | 无 | `pmp-dsh-tavern` |
-| 典型场景 | 原版 DSH 里做角色扮演，会话本身就是记忆 | 在 Tavern 环境里，记忆另有归档目录 |
 
 **「手动选择」是刻意的** —— 「哪条会话算记忆」是用户的语义判断，不做自动推断。
 
 ---
 
-## 控制面板
+## 面板
 
-侧边栏底部有一个**齿轮按钮**，点开就是记忆库自己的面板（**不占用 DSH 设置页**）。
-面板顶部一条状态行（当前根模式 + 宿主 API 连通状态），下面是三块：**阅读 / 提示词 / 设置** ——
-**设置是次级视图**（带「返回阅读」），顶栏不再常驻根模式切换。
+侧边栏底部两个入口：**记忆库**（齿轮）与 **Agent 编辑器**（只读检视组装）。输入栏里还有两席（OOC）。
 
-### 阅读
-
-阅读优先的**连续滚动**界面，支持**全屏**与**键盘翻页**：
+### 记忆库 → 四档 + 设置
 
 - **摘要** —— 按楼序拼接成长文，从头读到尾；
-- **原文** —— 按需顺序懒加载：未发给模型的楼层（`sent === false`）**如实标注**；
-  会话事件按 200 条一页自动追加；每条的 `surface` 如实标记
-  （`current` 还在模型可见面 / `shadowed` 明确标出「已被移出上下文」/ `log-only` 本来就不上面）。
+- **原文** —— 按需懒加载：每条的 `surface` 如实标记（`current` / **`shadowed`** / `log-only`），未发给模型的楼层如实标注；
+- **剧情大纲** —— 本会话周目 `.roleplay-memory/` 里的笔记（`index.md` / `state.md` / `characters.md` / `world.md` …），**内容需手动确认才展开**，另有一个「打开文件夹」按钮；
+- **向量** —— 本库（`dsh-memory`）的体检行 + 两行库（向量 / BM25，各带 `⚠缺失` / 重建 / 删除）+ 一个「参与检索」开关；动作走一张**请求单**，由 `dsh-anima-rag` 在该周目会话的下一轮开始前执行，回执写回来（`lib/vector-panel.js`）；
+- **设置** —— 根模式与根选择、**向量检索 API**（接口地址 / 向量模型 / 重排模型 / 密钥，密钥只写不读）、提示词模板（压缩指令 / 收纳占位）、各项开关。
 
-会话、周目、角色都显示**真名**而不是 id（数据来源与回退链见下节）。
+会话、周目、角色都显示**真名**而不是 id；三级回退（`title` → 周目反查 → 8 位截断 id）各级**如实标注来源**，
+**任何情况下都不显示完整 UUID**。
 
-### 真名解析
+### Agent 编辑器（只读）
 
-| 数据 | 来源 |
-|---|---|
-| 周目名 / 角色名 | 工作区根的 `catalog.json`：`playthroughs[].title` / `.ext.pmpDshTavern.characterName` |
-| 周目 ↔ 会话映射 | `catalog.json` 的 `rootSessionId`；Tavern 不可达时用归档 `manifest.json` 的 `target.rootSessionId` 兜底 |
-| 会话名 | 宿主 `readTitle`（显式请求 `?titles=1` —— `/sessions` 默认走快路径、标题为 `null`） |
+当前会话所用 preset 的段 / 插件 / order 清单（每项一句「谁注入 · order · 作用」）、段级偏移、
+**「面板值 vs preset 实际值是否一致」**（不一致就明说「面板改了也不会生效」）。v5 起**零写入**，连备份目录都不建。
 
-会话名按**三级回退**：`title` → 周目反查（显示如「某角色 · 1周目」）→ **8 位截断 id**。
-每一级都**如实标注来源**；拿不到真名时显示 8 位截断 id 并注明来源，**任何情况下都不显示完整 UUID**。
+---
 
-### 提示词
+## 每轮往提示词里注了什么（RP）
 
-三个子页：
+| 段名 | 作用 | 开关（插件 `config.json`） |
+|---|---|---|
+| `mt:memoryProtocol` | 告诉模型**什么时候**该主动去检索历史 | 常开 |
+| `mt:memoryHome` | 告诉模型剧情笔记**写在哪个目录** | 常开 |
+| `rp:firstRound` | 把**第一轮原文**钉住（每轮在场、永不进可压区间） | `keepFirstRound.enabled` |
+| `mt:lastFloors` | 本会话上下文还短时，把**本档案最近几楼的原文**当历史喂进去 | `lastFloors.enabled` · `count` · `maxChars` |
+| `anima:memory` | 检索到的历史（`<recalledMemories>` + `<immediateHistory>`）—— **由 `dsh-anima-rag` 填** | 见那个插件 |
+| （PHI） | 角色卡的**后处理指令**：从 system 段挪成玩家消息之后的 user 消息 | `phiAsMessage.enabled`，默认**开** |
 
-- **每次请求** —— 并入的提示词查看器：看**每次模型请求真正发出的全文**；
-- **压缩指令** —— 压缩时给摘要调用下达的指令；可编辑、可恢复默认（`null`/空串 = 恢复内置默认），页内附**作用解释**；
-- **收纳占位** —— 被收纳段落在原位留下的占位前言；同样可编辑、可恢复默认，页内附**作用解释**。
-
-★ **两条诚实说明**：
-
-1. 这里保存的「压缩指令」**只是文本** —— 要真正生效，需要把它填进对应 preset 的 `customInstruction`；
-2. 本插件**尚未实现收纳执行器**：「收纳占位」目前是**待用的配置位**，保存它**不改变任何 DSH 行为**。
-
-### Agent 编辑器（侧边栏第二个入口，v5 起只读）
-
-侧边栏底部的「Agent 编辑器」（窄屏显示「词」）与记忆库分工：**记忆库管内容，编辑器管 agent**。面板分三块 + 两区：
-
-- **组成** —— 当前会话所用 preset 的段/插件/order 清单，每项一句「谁注入 · order · 作用」注释；
-- **每次请求** —— 上文并入的提示词查看器整体搬入（工作区分组的会话列表 → 请求 → `system/tools/inventory/消息流/完整`）；
-- **可写项** —— 4 类 knob 的当前值（压缩指令 / 收纳占位 / 注入 order·上限 / 记忆·状态开关）与
-  ★ **「面板值 vs preset 实际值是否一致」**（不一致就明说「面板改了也不会生效」）。
-  「预览差异 / 应用 / 回滚」按钮**渲染但禁用**（写入面是后续版本；当前版本**零写入**，连备份目录都不建）；
-- **Skill 区** —— 「启用 RP agent 优化」开关只改本界面状态（刷新后需重新勾选），随包提供
-  [`skill/RP-AGENT-OPTIMIZATION.md`](skill/RP-AGENT-OPTIMIZATION.md) 作为 AI 助手日后执行优化时的原则文档；
-- **生成 / 修复 RP agent（检测与预览）** —— 只读检测：有没有用户自带（`trust === 'user'`）的 RP preset、
-  记忆库根是否配好、缺什么，以及官方 `agentPresets.copy('standard', …)` 生成路线的逐条事实预览。**不落盘**。
-
-数据来自宿主只读接口 `GET /dsh-memory-archive/api/agent` 与 `/agent/detect`（优先 `agentPresets` 服务，
-退回扫描 `~/.dsh/.agent-presets/`；路径由 `DSH_HOME`/`homedir()` 推导）。拿不到的服务一律如实显示
-「未知」，绝不猜测。
-
-### 设置（次级视图）
-
-- **根模式** —— 会话 / 工作区；工作区需 Tavern 可达，否则置灰并给出原因。
-- **根选择** —— 会话模式给会话下拉；工作区模式自动发现角色与周目（**不写死 id**）。
-- **API 设置** —— 用户自配的 `接口地址` / `模型` / `密钥`：
-  - **密钥永不回显**：已保存时输入框留空并提示「已保存（…末 4 位）·留空则不修改」；
-  - `保存` 写盘并**回读校验**；`测试连接` 真发一次最小请求；`清除密钥` 单独一个动作。
-- **诊断** —— 宿主 API / 会话读取服务 / 配置目录可写 / Tavern 可达，以及配置文件落点。
+★ PHI 是唯一一处**故意写进会话历史**的注入（其余全走「不写历史」的缝）：因为 DSH 的 system 段无法实现文末注入，
+只能拿 user 消息模拟。代价是它在每轮之间会积累 ⇒ 提示词查看器里**标红显示**、**不计楼层**，记忆库**不收录**它。
 
 ---
 
@@ -184,51 +119,48 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 <DSH_HOME 或 ~/.dsh>/dsh-memory-archive/config.json
 ```
 
-- **权限 0600**（里面有 API 密钥），**原子写**（临时文件 + `rename`），**读坏不崩**（回落默认值并如实报错）。
-- 密钥**只在本机**：不进 git、不进日志、不经任何响应体回显（宿主只回 `keySet` 与末 4 位提示）。
-- 可选段 `prompts: { compaction, placeholder }` —— 压缩指令与收纳占位的自定义文本：
-  缺省 = 用内置默认；值为 `null`/空串 = 恢复内置默认（老配置兼容）。
+**权限 0600**（里面有 API 密钥）、**原子写**（临时文件 + `rename`）、**读坏不崩**（回落默认值并如实报错）。
+密钥**只在本机**：不进 git、不进日志、不经任何响应体回显（宿主只回 `keySet` 与末 4 位提示）。
+
+主要键：`rootMode` · `root` · `retrieval{url,model,rerankModel,key,chatEnabled}` · `prompts{compaction,placeholder,compactionJailbreak}`
+· `keepFirstRound` · `echo` · `lastFloors` · `memoryWrite` · `phiAsMessage` · `autoCollect` · `summarize` · `v3`。
 
 ---
 
 ## 宿主接口
 
-全部为同源 HTTP 接口，两条路由在宿主启动时**同步注册**：
+全部为**同源 HTTP**，两条前缀路由在宿主启动时同步注册（`ctx.effect` 管生命周期，热重载不留野路由）：
 
-| 前缀 | 内容 | 降级行为 |
-|---|---|---|
-| `/dsh-memory-archive/api` | 配置读写、会话精确读，`GET/PUT /api/templates`（提示词模板读写），以及 `GET /api/agent`、`GET /api/agent/detect`（Agent 编辑器只读数据面） | 模板缺省或值为 `null`/空串时**回落内置默认**（配置段 `prompts` 缺失同理，老配置兼容）；agent 两端点**零写入**，服务拿不到时返回 `ok:false` + 可读 `code`，绝不抛、绝不 500 |
-| `/dsh-memory-archive/prompt` | 并入查看器的数据面：`/health`、`/api/sessions`、`/api/sessions/resolve`、`/api/session`、`/api/part` | 读取出错时**不崩溃**：HTTP 200，错误信息放响应体（`ok:false` + `error`） |
+| 前缀 | 内容 |
+|---|---|
+| `/dsh-memory-archive/api` | 配置读写、会话精确读、`/templates`（提示词模板）、`/sessions`、`/session/events`、`/collect/*`（收纳）、`/playthrough/*`（周目目录与打开文件夹）、`/vector/state` + `/vector/action`（向量页签）、`/retrieval/test`（真发一次最小请求）、`/agent` + `/agent/card(s)`（装配只读检视与角色卡阅读）、`/sections*`（段表与正文） |
+| `/dsh-memory-archive/prompt` | 提示词查看器的数据面：`/health`、`/api/sessions`、`/api/session`、`/api/part` |
 
-宿主 API 整体不可用时面板不白屏：浏览区退回工作区模式。
-
----
-
-## 设计说明
-
-完整的**思路与实现逻辑**见 [`docs/DESIGN.zh.md`](docs/DESIGN.zh.md)。三条要点：
-
-1. **复用 DSH 自己的压缩机制** —— 「隐藏旧楼层」= surface `replace` 遮蔽（DSH 源码原话：
-   *"Used by compaction; any surface-replacing producer may use it"*），**不需要自研**；
-   而 append-only 事件日志是真相源 ⇒ **任何遮蔽都可逆**。
-2. **不建第二份存储** —— 压缩只是把内容移出**模型可见面**，并没有把它从日志或检索索引里删掉。
-   实测：某个会话里已有 **752 篇 / 152 万字**标记为 `shadowed`，**全都搜得到**。
-   缺的从来不是存储，是**取用**。
-3. **注入只走「不写历史」的缝** —— 只使用 `systemPrompt.section()` 与 `system-prompt/assemble`；
-   绝不使用 `systemPrompt.context()` 或 `agent/pre-step`（后两者会把内容**写进会话历史**，长对话里等于每轮追加一条）。
+拿不到的服务一律**降级并说明**（`ok:false` + 可读 `code`），⛔ 不抛、⛔ 不 500、面板不白屏。
 
 ---
 
-## 已知限制
+## 设计要点
+
+完整思路见 [`docs/DESIGN.zh.md`](docs/DESIGN.zh.md)。四条：
+
+1. **能用原生机制就用原生机制** —— 「隐藏旧楼层」= surface `replace` 遮蔽，而 append-only 事件日志是真相源 ⇒ **任何遮蔽都可逆**；
+2. **不建第二份存储** —— 压缩只是把内容移出**模型可见面**，没从日志或索引里删掉。缺的从来不是存储，是**取用**；
+3. **注入只走「不写历史」的缝** —— 只用 `systemPrompt.section()` 与 `system-prompt/assemble` 瀑布；⛔ 不用 `systemPrompt.context()`（它是 durable user-role 快照，长对话里等于每轮追加一条）；
+4. **一件事只有一个写者** —— 向量库归 `dsh-anima-rag`（面板只读状态 + 写请求单）；预设目录归用户（本插件已退役写入面）；剧情笔记归模型（走 `memory_write`）。
+
+---
+
+## 已知限制（如实）
 
 | # | 限制 | 说明 |
 |---|---|---|
-| 1 | `surface` 可能为 `null` | 平台版本不同或读取路径降级时**如实填 null**，**绝不猜测**（不从事件类型推断） |
-| 2 | 工作区模式依赖 `pmp-dsh-tavern` | 未安装时该模式**置灰并说明**，不会崩溃 |
-| 3 | 宿主 API 不可用时**自动降级** | 面板不会白屏；浏览区退回工作区模式 |
-| 4 | 本插件**不做**摘要生成 | 它只读。摘要能力（若需要）由用户自配的 API 与后续版本承担 |
-| 5 | 「压缩指令」保存的只是**文本** | 要真正生效，需把它填进对应 preset 的 `customInstruction`；本插件不代替你修改 preset |
-| 6 | 「收纳占位」**暂不生效** | 本插件尚未实现收纳执行器；它目前是待用的配置位，保存后不改变任何 DSH 行为 |
+| 1 | `surface` 可能为 `null` | 平台版本不同或读取路径降级时**如实填 null**，**绝不猜测** |
+| 2 | 工作区模式依赖 `pmp-dsh-tavern` | 未安装时相关入口**置灰并说明**，不会崩溃 |
+| 3 | 本插件**不生成摘要** | 摘要由**压缩**产出（RP 压缩后端写 `compaction/summary`），本插件只把它收进库 |
+| 4 | 「压缩指令」保存的是**文本** | 它由**预设目录里的**压缩后端读取（`mt-compaction-rp.js`，用 `_materialize-preset-modules.mjs` 铺盘） |
+| 5 | 状态不再有独立子系统 | 由周目笔记 `state.md` 承载，模型自己维护；⛔ 没有优先级更高的"状态工具" |
+| 6 | 向量库的写入动作要等一轮 | 面板点动作 = 写一张请求单，由 `dsh-anima-rag` 在**下一次装配**执行（面板会显示进度与回执） |
 
 ---
 
@@ -238,10 +170,14 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 npm run check   # node --check lib/index.js && node --check lib/client.js
 ```
 
-- `lib/index.js` —— **宿主半侧**：配置存储 + 同源 HTTP API（前缀路由 `/dsh-memory-archive/api`
-  与 `/dsh-memory-archive/prompt`）+ 会话精确读。
-- `lib/prompt-viewer.js` —— 并入的提示词查看器宿主半侧：解析 DSH 会话存储供「每次请求」取数，零交叉依赖。
-- `lib/client.js` —— **浏览器半侧**：工厂形式 CJS，只 `require('react')`，**无 JSX、无需构建**。
+- `lib/index.js` —— **宿主半侧**：配置存储 + 同源 HTTP API + 每轮注入 + 自动收纳 + skill 注册；
+- `lib/client.js` —— **浏览器半侧**：工厂形式 CJS，只 `require('react')`，**无 JSX、无需构建**；
+- `lib/prompt-viewer.js` —— 提示词查看器宿主半侧；
+- `lib/vector-panel.js` —— 向量页签宿主半侧（读状态快照 / 写请求单）；
+- `preset-modules/` —— 挂进预设目录的那几个模块的**源**（含由生成器产出的压缩后端）；
+- `skill/rp-assistant/` —— 那一个 skill 的正文与资料。
+
+改完记得：`_sync-plugin-deploy.mjs --apply`（同步到部署副本）→ 换进程重启 → 自检台全量跑一遍。
 
 ## 许可与署名
 
@@ -271,5 +207,5 @@ npm run check   # node --check lib/index.js && node --check lib/client.js
   —— MIT，Copyright (c) 2026 DeepSeek；本作品中该部分**保留原始 MIT 声明**。
 - **移植/派生自**：[`anima-rag`](https://github.com/Ellinav/anima-rag)（作者 Ellinav）
   —— CC BY-NC 4.0；本作品随之整体以 CC BY-NC 4.0 授权。
-- **互操作/致谢**（⛔ 是互操作，**不是**派生）：`dsh-anima-rag`、`dsh-state-bridge`、`pmp-dsh-tavern`
+- **互操作/致谢**（⛔ 是互操作，**不是**派生）：`pmp-dsh-tavern`、`dsh-anima-rag`
   —— 均为 MIT；本作品**不包含**它们的任何代码，只与其配合工作。

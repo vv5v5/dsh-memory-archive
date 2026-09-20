@@ -118,6 +118,30 @@ try {
   check('4a', 'startFloor=6 喂 3 楼 ⇒ 楼号 6,7,8', m4.floors.map((f) => f.floor).join(',') === '6,7,8', m4.floors.map((f) => f.floor).join(','))
   check('4b', 'nextFloor=9', m4.nextFloor === 9, `得到 ${m4.nextFloor}`)
 
+  // ═══ 4′. 清洗②（2026-09-20 用户口径：「也不被记忆库收录」）═══════════════════
+  //   插件注入的 user 消息（本插件的后处理提示词、官方运行上下文快照）**不是对话** ⇒
+  //   ⛔ 既不成楼、也不并进前一条楼（它的正文不该进归档，更不该进摘要与向量库）。
+  const r5 = {
+    regionId: 'r5',
+    fromSeq: 0,
+    toSeq: 4,
+    docs: [
+      { seq: 0, surface: 'shadowed', text: '玩家说', type: 'user/message', sourceKind: 'user' },
+      { seq: 1, surface: 'shadowed', text: '角色答', type: 'assistant/message', sourceKind: null },
+      { seq: 2, surface: 'shadowed', text: '【角色卡的后处理指令 · 由插件注入，不是玩家发言】破甲词', type: 'user/message', sourceKind: 'plugin' },
+      { seq: 3, surface: 'shadowed', text: '工具结果', type: 'tool/result', sourceKind: 'tool' },
+      { seq: 4, surface: 'shadowed', text: '玩家又说', type: 'user/message', sourceKind: 'user' },
+    ],
+  }
+  const m5 = mapRegionToFloors(r5, 0)
+  check('4c', '★ 插件注入的 user 消息**不是楼**', m5.floors.length === 3, `楼数 ${m5.floors.length}（期望 3：玩家/角色/玩家）`)
+  check('4d', '★ 它的正文**不许并进前一条楼**', m5.floors.every((f) => !f.text.includes('破甲词')), JSON.stringify(m5.floors.map((f) => f.text)))
+  check('4e', '工具结果照旧并进前一条楼（那条规则不动）', m5.floors[1].text === '角色答' + '\n' + '工具结果', JSON.stringify(m5.floors[1].text))
+  check('4f', '楼号连续、只数真楼', m5.floors.map((f) => f.floor).join(',') === '0,1,2' && m5.nextFloor === 3, m5.floors.map((f) => f.floor).join(',') + ' / next=' + m5.nextFloor)
+  // ★ 反证：kind 缺失（老日志）⇒ **照旧当楼**（那可能是真玩家消息，⛔ 不许因为"认不出"就丢掉）
+  const r5b = { regionId: 'r5b', fromSeq: 0, toSeq: 0, docs: [{ seq: 0, surface: 'shadowed', text: '老的玩家消息', type: 'user/message' }] }
+  check('4g', '★ 反证：kind 缺失 ⇒ 照旧成楼（不静默丢真消息）', mapRegionToFloors(r5b, 0).floors.length === 1, '')
+
   // ═══ 5. 幂等（核心）═══════════════════════════════════════════════════
   function makeFakeCollect() {
     const calls = { planCollect: 0, applyCollect: 0 }

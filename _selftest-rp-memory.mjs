@@ -276,6 +276,27 @@ try {
     const dispatch = (src.match(/rest === '\/playthrough\/rp-memory'/g) || []).length
     check('T15 接线唯一：ENDPOINTS 条目 1 处、分发行 1 处', table === 1 && dispatch === 1, `table=${table} dispatch=${dispatch}`)
   }
+
+  // ── T17「打开文件夹」（2026-09-20，用户口径：「给剧情大纲面板加一个打开文件夹的按钮」）─────
+  // ⛔ 本台子**绝不真的拉起文件管理器**（它跑在用户机器上，会当场弹一个窗口出来）
+  //    ⇒ 只钉"形状"四条：路由是 POST 且唯一、处理函数拿不到客户端可控路径、目录解析复用同一份、spawn 不经 shell。
+  {
+    const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
+    const table = (src.match(/'\/playthrough\/reveal': \['POST'\]/g) || []).length
+    const dispatch = (src.match(/rest === '\/playthrough\/reveal'/g) || []).length
+    check('T17a 接线唯一：ENDPOINTS 条目 1 处（POST）、分发行 1 处', table === 1 && dispatch === 1, `table=${table} dispatch=${dispatch}`)
+    // ★ 关键安全性质：处理函数签名只有 (send, log) —— 它**连请求体/查询串都拿不到**，
+    //   所以"客户端塞一个路径过来"这个入口**在类型上就不存在**。
+    check('T17b ★ handler 只收 (send, log)：⛔ 客户端可控路径进不来',
+      /async function handleRevealRpMemory\(send, log\)/.test(src), '')
+    check('T17c ★ 目录解析复用 resolveRpMemoryDir（与 /playthrough/rp-memory 同一条候选链，⛔ 不许两处各写一遍）',
+      (src.match(/resolveRpMemoryDir\(\)/g) || []).length >= 2, '两处（rp-memory 与 reveal）都该用它')
+    // ⚠️ 判据只看**这个函数自己的函数体** —— 仓库别处本来就有 `shell: true`（与本次无关），
+    //   拿全文当判据会误报（第一版就是这么红的）。
+    const fnBody = /function openDirInFileManager\(dir\) \{([\s\S]*?)\n\}/.exec(src)
+    check('T17d ★ 拉起文件管理器那段不带 shell（⛔ 路径里的字符不参与命令解析）',
+      fnBody !== null && /spawn\(/.test(fnBody[1]) && !/shell\s*:/.test(fnBody[1]), fnBody === null ? '没找到 openDirInFileManager' : '')
+  }
 } finally {
   await new Promise((r) => server.close(r))
   rmSync(HOME, { recursive: true, force: true })

@@ -25,6 +25,9 @@ import {
   resolveSectionText,
   sliceSectionByHeader,
   handleSectionsTextGet,
+  pickVerifiedSystemText,
+  recordCredentials,
+  resolveSectionsSystemText,
   storageDir,
   PLUGIN_DIR_NAME,
   LEGACY_DIR_NAMES,
@@ -858,6 +861,52 @@ await t('★ 宿主重启后（内存空）⇒ 从**会话日志的 surface** �
   assert.equal(rec2.finalized, false)
   assert.equal(rec2.finalizeReason, 'waiting-final-text', '★ 日志里那份是空的 ⇒ 等于没有，如实留白')
   assert.deepEqual(rec2.sections.map((s) => s.offset), [null, null, null, null])
+})
+
+// ---------- 2026-09-20：底本必须是"捕获认过的那一份"（/sections/system） ----------
+// 用户报障（原文）：「以上是没抓到的字段。很抽象，都是些字段碎片。我觉得算bug」。
+// 真机根因：面板把**捕获的 offset** 切在**另一条路取来的** system 上（该楼 header 那一刻的正文），
+//   而捕获定稿用的是同一楼另一条 `system/message` ⇒ 两份同长不同文，补集全是错位的渣。
+await t('SYS1 pickVerifiedSystemText：两道验（长度 + sha256）都对得上才认；⛔ 长度相同内容不同 ⇒ 不认', () => {
+  const h = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16)
+  const a = 'x'.repeat(100)
+  const b = 'y'.repeat(100)
+  assert.equal(pickVerifiedSystemText([a], 100, h(a)), a, '凭据对得上就该认')
+  // ★ 反证（真机就是这个坑）：两份**长度相等、内容不同** —— 只认凭据对得上的那一份
+  assert.equal(pickVerifiedSystemText([b, a], 100, h(a)), a, '同长不同文时必须挑凭据对的那份')
+  assert.equal(pickVerifiedSystemText([b], 100, h(a)), null, '⛔ 同长但内容不符 ⇒ 不认（就是这一条挡住了错位切片）')
+  assert.equal(pickVerifiedSystemText([a], 100, ''), null, '没凭据 ⇒ 不认')
+  assert.equal(pickVerifiedSystemText([a], 0, h(a)), null, '凭据长度非法 ⇒ 不认')
+  assert.equal(pickVerifiedSystemText('not-an-array', 100, h(a)), null, '畸形输入 ⇒ 不认、不抛')
+})
+
+await t('SYS2 recordCredentials：只认"非空段 + 带整段凭据"的那一条（⛔ 0 字段/缺凭据都不算）', () => {
+  assert.equal(recordCredentials({ sections: [{ chars: 0, renderedChars: 100, renderedHash: 'h' }] }), null, '0 字段不占位 ⇒ 不能当凭据来源')
+  assert.equal(recordCredentials({ sections: [{ chars: 5 }] }), null, '只有字数没有整段凭据 ⇒ 不算')
+  assert.deepEqual(
+    recordCredentials({ sections: [{ chars: 5 }, { chars: 7, renderedChars: 100, renderedHash: 'ab' }] }),
+    { renderedChars: 100, renderedHash: 'ab' },
+  )
+  assert.equal(recordCredentials({}), null)
+  assert.equal(recordCredentials(null), null)
+})
+
+await t('SYS3 resolveSectionsSystemText：三种"拿不到"各报各的（⛔ 不端半份、不近似）', async () => {
+  const r1 = await resolveSectionsSystemText({}, 'session-sys-nope', 1, { dir })
+  assert.equal(r1.ok, true)
+  assert.equal(r1.unavailable, 'no-capture-record')
+  assert.equal(r1.text, null)
+  const sid = 'session-sys'
+  const base = { turn: 1, capturedAt: 'x', sections: [{ name: 'a', chars: 5, renderedChars: 100, renderedHash: 'h' }] }
+  compactWrite(join(dir, `${sid}.jsonl`), [{ ...base, finalized: false, finalizeReason: 'waiting-final-text' }], 10)
+  const r2 = await resolveSectionsSystemText({}, sid, 1, { dir })
+  assert.equal(r2.unavailable, 'not-finalized', '没定稿 ⇒ 段上根本没有可信 offset，底本无从谈起')
+  assert.equal(r2.text, null)
+  compactWrite(join(dir, `${sid}.jsonl`), [{ ...base, finalized: true, finalizeBasis: 'own' }], 10)
+  const r3 = await resolveSectionsSystemText({}, sid, 1, { dir })
+  assert.equal(r3.unavailable, 'session-query-unavailable', '定稿了但读不到日志 ⇒ 如实说，⛔ 不拿别的正文凑')
+  assert.equal(r3.text, null)
+  assert.equal(r3.renderedChars, 100, '拿不到也要把凭据带出来（界面据此说清"差在哪儿"）')
 })
 
 console.log(`PASS ${PASS.length}: ${PASS.join(' | ')}`)

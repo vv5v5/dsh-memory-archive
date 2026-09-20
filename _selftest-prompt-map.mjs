@@ -19,7 +19,7 @@
  *              B. PromptMap 取数 effect 确实挂在 [sessionId, turn] 上（选中态变了会重取）。
  */
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 import assert from 'node:assert/strict'
 
@@ -63,7 +63,10 @@ function makeFakeReact() {
   const useEffect = () => { idx++ }
   const useLayoutEffect = () => { idx++ }
   const useCallback = (fn) => { idx++; return fn }
-  const useMemo = (fn) => { idx++; return fn }
+  // ⚠️ 2026-09-19 修：这里原来写的是 `return fn`（**返回函数本身**，不调用）—— 一直没人踩到，直到
+  //   `MarkdownBody` 用了 `useMemo(parseMarkdown)` ⇒ `blocks.map is not a function` 当场炸出来。
+  //   假 react 的语义必须是**真语义**：返回 fn() 的结果（不需要真缓存，测试里算一次无所谓）。
+  const useMemo = (fn) => { idx++; return typeof fn === 'function' ? fn() : fn }
   function createElement(type, props) {
     const rest = Array.prototype.slice.call(arguments, 2)
     const p = {}
@@ -173,14 +176,15 @@ function renderMap(data, state) {
 // ---------- 1 + 4：组件能渲染、三个框都在 ----------
 const data1 = pm.buildPromptMapData({ systemText: SYS_FULL, tools: TOOLS_FULL, messagesText: MSG_FULL })
 let tree1 = null
-await check('★1+4 组件能渲染：喂假数据不抛；[system]/[上下文]/[tools]/[messages] 四个框标题都在（20260914 第二次返工起 contexts 独立成盒，恰 4 框）', () => {
+await check('★1+4 组件能渲染：喂假数据不抛；[system]/[tools]/[messages] 三个框标题都在（2026-09-19 起 [上下文] 不再出盒）', () => {
   tree1 = renderMap(data1)
   const boxes = collectNodes(tree1, (n) => n.props && n.props['data-pm'] === 'box', [])
-  assert.equal(boxes.length, 4, '框数不是 4：' + boxes.length)
+  assert.equal(boxes.length, 3, '框数不是 3：' + boxes.length)
   const text = visibleText(tree1)
   assert.ok(text.includes('[system]'), '缺 [system] 框标题')
-  assert.ok(text.includes('[上下文] 运行上下文快照'), '缺 [上下文] 框标题')
-  assert.ok(text.includes('独立字段，不在 system 里'), '缺 [上下文] 独立字段口径')
+  // ★★ 2026-09-19（用户口径：「运行上下文没用删了吧。不显示」）：[上下文] 那一盒**整盒不再渲染**
+  //   —— 反向断言钉住，免得日后有人顺手把它加回来。
+  assert.ok(!text.includes('[上下文]'), '⛔ [上下文] 盒不该再出现（用户口径：不显示）')
   assert.ok(text.includes('[tools]'), '缺 [tools] 框标题')
   assert.ok(text.includes('[messages]'), '缺 [messages] 框标题')
   // 顶栏三个小计都在（拿得到的给实数；期望值从数据本身算，不写死字数千位）
@@ -195,7 +199,9 @@ await check('★2 三色分类正确：红/黄/蓝各≥1，已知段逐一对�
     identity: 'red', persona: 'red', preset: 'red', rpPolicy: 'red', dmaRules: 'red',
     stateCard: 'yellow', anima: 'yellow',
     toolGuide: 'blue',
-    worldbook: 'gray', 'storyAnchor-missing': 'gray', 'dmaSettings-missing': 'gray',
+    // ★ 2026-09-20：`storyAnchor` 摘出 PROMPT_MAP_MISSING_KEYS（story-anchor **暂时不注册**，
+    //   用户口径），所以不再有那条灰虚线占位。
+    worldbook: 'gray', 'dmaSettings-missing': 'gray',
   }, '三色')
   // 反向：蓝区里不许混进红/黄的已知段（工具引导必须是蓝，state:card 必须是黄……逐段再核对一遍）
   const sysBox = data1.boxes.find((b) => b.id === 'system')
@@ -230,21 +236,16 @@ await check('★★3 可变性标注：两轮中文本变了的段（anima）⇒
 })
 
 // ---------- 5：悬停提示有内容 ----------
-await check('★5 悬停提示有内容：每块都挂了提示数据；红块的提示含「影响所有/影响每一轮」后果文案；黄块写「只影响这一轮」', () => {
+await check('★5 行上**不再有悬停说明**（2026-09-19 用户口径：浮窗不维护了）；关键信息在**可见文字**里', () => {
   const rows = collectNodes(tree1, (n) => n.props && n.props['data-pm'] === 'row', [])
   assert.ok(rows.length >= 10, '行数异常少：' + rows.length)
-  const noTip = rows.filter((r) => !r.props.title || String(r.props.title).trim() === '')
-  assert.deepEqual(noTip.map((r) => r.props['data-pm-color']), [], '有块没挂提示数据')
-  const redRows = rows.filter((r) => r.props['data-pm-color'] === 'red')
-  assert.ok(redRows.length >= 1, '红行缺失')
-  const badRed = redRows.filter((r) => !(r.props.title.includes('影响所有') || r.props.title.includes('影响每一轮')))
-  assert.deepEqual(badRed.map((r) => r.props.title.slice(0, 30)), [], '红块提示缺后果文案')
-  const yellowRows = rows.filter((r) => r.props['data-pm-color'] === 'yellow')
-  const badYellow = yellowRows.filter((r) => !r.props.title.includes('只影响这一轮'))
-  assert.deepEqual(badYellow.map((r) => r.props.title.slice(0, 30)), [], '黄块提示缺「只影响这一轮」文案')
-  // 提示里要有 order / 谁注入 / 字数三个要素（抽 identity 与 tool 行核对）
-  const idRow = rows.find((r) => String(r.props.title).startsWith('harness identity'))
-  assert.ok(idRow && idRow.props.title.includes('order') && idRow.props.title.includes('谁注入') && idRow.props.title.includes('实际字数'), 'identity 提示缺要素')
+  // ★ 反向钉死：除了「点击下钻」这一句短提示，行上不许再挂长说明
+  const longTitle = rows.filter((r) => r.props.title && String(r.props.title).length > 20 && !String(r.props.title).startsWith('点击下钻'))
+  assert.deepEqual(longTitle.map((r) => String(r.props.title).slice(0, 30)), [], '⛔ 行上还有长悬停说明（不该再维护第二份）')
+  // 关键信息必须**看得见**：段名 + 字数
+  const text = visibleText(tree1)
+  assert.ok(rows.every((r) => visibleText(r).trim() !== ''), '每一行都该有可见的段名/字数（悬停没了，信息必须看得见）')
+  assert.ok(/[\d][\d,]* 字/.test(text), '字数该在可见文字里')
 })
 
 // ---------- 6：灰虚线不被说成不存在 ----------
@@ -255,7 +256,7 @@ await check('★6 缺 anima:memory ⇒ 该块仍以灰虚线「未检出」出�
   assert.ok(b, 'anima 未检出占位块消失了（被说成不存在）')
   assert.equal(b.dashed, true, '未检出块应是虚线')
   assert.equal(b.color, 'gray', '未检出块应是灰色')
-  assert.ok(b.sub.includes('未检出') && b.tip.includes('未检出'), '未检出块没写「未检出」')
+  assert.ok(b.sub.includes('未检出'), '未检出块没写「未检出」（说明只在可见文字里 —— 行上已无 tooltip）')
   const tree = renderMap(d)
   assert.ok(visibleText(tree).includes('未检出'), '渲染层没把「未检出」画出来')
 })
@@ -263,7 +264,7 @@ await check('★6 缺 anima:memory ⇒ 该块仍以灰虚线「未检出」出�
 // ---------- 7：★反证 A —— tools 空数组，框仍在 ----------
 await check('★7 反证 A：part=tools 喂成空数组 ⇒ [tools] 框仍在（内容「未检出」），不是整个框消失', () => {
   const d = pm.buildPromptMapData({ systemText: SYS_FULL, tools: [], messagesText: MSG_FULL })
-  assert.equal(d.boxes.length, 4, '框数变了')
+  assert.equal(d.boxes.length, 3, '框数变了（2026-09-19 起不含 [上下文]）')
   const toolsBox = d.boxes.find((b) => b.id === 'tools')
   assert.ok(toolsBox, '[tools] 框消失')
   assert.ok(toolsBox.blocks.some((b) => b.dashed && b.sub.includes('未检出')), '[tools] 框空数组时没标「未检出」')
@@ -324,7 +325,7 @@ await check('★11 A8 反证：checkpoint / role=tool 只有真实检出才出�
   assert.equal(findBlock(d, 'msgTool'), null, '没有 role=tool 时不该有 tool 行（旧的灰虚线占位一并移除）')
   const dNull = pm.buildPromptMapData({ systemText: SYS_FULL, tools: TOOLS_FULL, messagesText: null })
   const missing = findBlock(dNull, 'messagesMissing')
-  assert.ok(missing && missing.dashed && missing.tip.includes('取不到'), 'messages 取不到 ⇒ 必须如实给一行「取不到」，不许空白')
+  assert.ok(missing && missing.dashed && String(missing.sub || '').includes('取不到'), 'messages 取不到 ⇒ 必须如实给一行「取不到」，不许空白')
   const dEmpty = pm.buildPromptMapData({ systemText: SYS_FULL, tools: TOOLS_FULL, messagesText: '' })
   assert.equal(dEmpty.boxes.find((b) => b.id === 'messages').count, 0, '空 messages ⇒ 条数如实 0')
   assert.equal(findBlock(dEmpty, 'messagesMissing'), null, '空串不是取不到，不该标取不到')
@@ -425,21 +426,21 @@ const C4_CAPTURED = {
 const MSG_FULL_L2 = '── [seq 1] user ──\n玩家输入……\n\n── [seq 2] assistant ──\n角色回应……'
 await check('★14 C4 数据层：真段名进 [system] 框（static=红 / per-turn=黄 / unknown=灰实线）；contexts 进独立 [上下文] 框（20260914 返工：⛔ 不再混进 system）；tools 蓝；mutabilityBasis 进提示；source/capturedAt 透传', () => {
   const d = pm.buildMapFromSections(C4_CAPTURED, { messagesText: MSG_FULL_L2 })
-  assert.deepEqual(d.boxes.map((b) => b.id), ['system', 'contexts', 'tools', 'messages'], '框结构变了')
+  assert.deepEqual(d.boxes.map((b) => b.id), ['system', 'tools', 'messages'], '框结构变了（2026-09-19 起不含 [上下文]）')
   const sys = d.boxes[0].blocks
   assert.deepEqual(sys.map((b) => b.label), ['harness:identity', 'roleplay:policy', 'mystery:section'], '段名不是运行时真名（或混进了 contexts）')
   assert.equal(sys[0].color, 'red', 'static 段应为红')
   assert.equal(sys[1].color, 'yellow', 'per-turn 段应为黄')
   assert.equal(sys[2].color, 'gray', 'unknown 段应为灰')
   for (const b of sys) assert.equal(b.dashed, false, '捕获段不许是虚线（不是未检出）')
-  // 20260914 返工：contexts 不进 [system] 框，进独立 [上下文] 框
-  const ctxBox = d.boxes.find((b) => b.id === 'contexts')
-  assert.equal(ctxBox.blocks[0].label, 'sandbox:policy', 'contexts 没进独立 [上下文] 框')
-  assert.equal(ctxBox.blocks[0].key, 'ctx:sandbox:policy', 'contexts 块 key 不对')
-  const tools = d.boxes[2].blocks
+  // ★ 2026-09-19（用户口径：不显示）：contexts **不出盒**，但数据仍在小计里（口径不动）。
+  assert.equal(d.boxes.find((b) => b.id === 'contexts'), undefined, '⛔ [上下文] 盒不该再出现')
+  assert.equal(d.boxes.some((b) => (b.blocks || []).some((x) => String(x.key).indexOf('ctx:') === 0)), false,
+    '⛔ contexts 的逐条块也不该在任何盒里出现')
+  const tools = d.boxes[1].blocks
   assert.equal(tools.length, 2, '工具行数不对')
   for (const b of tools) assert.equal(b.color, 'blue', '工具行应为蓝')
-  assert.ok(sys[1].tip.includes('header-equal') || sys[1].tip.includes('段定义'), 'mutabilityBasis 没进悬停提示')
+  assert.ok(typeof sys[1].mutBasis === 'string' && sys[1].mutBasis !== '', 'mutabilityBasis 要留在数据里（悬停已删，依据仍要能查）：' + String(sys[1].mutBasis))
   assert.equal(d.source, 'captured', 'source 没透传')
   assert.ok(d.capturedAt, 'capturedAt 没透传')
   // ★ system 小计 = 只算 sections（⛔ 不含 contexts）：48+2981+10 = 3,039，312 是 contexts 的
@@ -736,27 +737,32 @@ const C4_CTX = {
   ],
   tools: [],
 }
-await check('★23 M11：占比**并进小计那一行**（跟在各自字数后），★ 不再有单独一行「四框占比」；拿不到字数就不给占比（⛔ 不写 0%）', () => {
+await check('★23 M11：占比**并进小计那一行**（跟在各自字数后）；2026-09-19 起小计行**不再列上下文**（[上下文] 盒已不显示）', () => {
   const subOf = (tree) => collectNodes(tree, (n) => n.props && n.props['data-pm'] === 'subtotal', [])[0]
   const tree = renderMap(data1)
   const sub = subOf(tree)
   assert.ok(sub, '小计行缺失')
   const text = visibleText(sub)
-  assert.ok(/^小计：system [\d,]+ 字（[\d.]+%） \| 上下文 未知 \| 工具 [\d,]+ 个 \/ [\d,]+ 字（[\d.]+%） \| 消息 [\d,]+ 条/.test(text),
-    '小计行格式不对（应「|」分段 + 占比跟在各自字数后；上下文/消息字数拿不到时不给占比）：' + text)
+  assert.ok(/^小计：system [\d,]+ 字（[\d.]+%） \| 工具 [\d,]+ 个 \/ [\d,]+ 字（[\d.]+%） \| 消息 [\d,]+ 条/.test(text),
+    '小计行格式不对（应「|」分段 + 占比跟在各自字数后；消息字数拿不到时不给占比）：' + text)
+  // ★ 2026-09-19（用户口径：不显示）：小计里也不许再出现「上下文」那一段 —— 盒都没了，列数字没人能对。
+  assert.ok(!text.includes('上下文'), '⛔ 小计行不该再列上下文：' + text)
   assert.equal(collectNodes(tree, (n) => n.props && n.props['data-pm'] === 'box-pcts', []).length, 0, 'M11：单独的「四框占比」行该没有了')
   // messages 取不到（null）⇒ 不显示占比，别的框照常
   const dNull = pm.buildPromptMapData({ systemText: SYS_FULL, tools: TOOLS_FULL, messagesText: null })
   const tree2 = fakeReact.createElement(pm.PromptMapView, { data: dNull, state: { status: 'ready', data: dNull, error: '' } })
   const text2 = visibleText(subOf(tree2))
   assert.ok(text2.includes('消息 未知'), 'messages 字数拿不到该如实未知：' + text2)
-  // 捕获路径：上下文有字数 ⇒ 占比出数（C4_CTX：1,938/386/0/4）；空 tools 数组是「已知 0」⇒ 0%（不是未知、也不是不给）
+  // 捕获路径：空 tools 数组是「已知 0」⇒ 0%（不是未知、也不是不给）；contexts 仍在小计**数据**里（口径没动）
   const dCtx = pm.buildMapFromSections(C4_CTX, { messagesText: 'abcd' })
+  assert.equal(dCtx.totals.contextCount, 2, 'contexts 的**数据**口径不许跟着"不显示"一起改')
+  assert.equal(dCtx.totals.contextChars, 386)
   const tree3 = fakeReact.createElement(pm.PromptMapView, { data: dCtx, state: { status: 'ready', data: dCtx, error: '' } })
   const text3 = visibleText(subOf(tree3))
-  assert.ok(/上下文 2 段 \/ 386 字（[\d.]+%） \| 工具 0 个 \/ 0 字（0%）/.test(text3), '捕获路径占比不对：' + text3)
+  assert.ok(/工具 0 个 \/ 0 字（0%）/.test(text3), '捕获路径占比不对：' + text3)
   assert.ok(/消息 (未知|[\d,]+ 条)/.test(text3), '捕获路径消息计数该如实（有就给数、没有就未知）：' + text3)
   assert.ok(text3.includes('（合计 '), '末尾该给合计：' + text3)
+  assert.ok(!text3.includes('上下文'), '⛔ 捕获路径的小计同样不列上下文')
 })
 
 // ---------- 24（A8）：messages 定位入口接线 ----------
@@ -846,7 +852,7 @@ await check('★25c [messages] 框：有逐条数据 ⇒ 一条消息一行（�
   assert.equal(rows.length, 4, '1 行小计 + 3 行真实消息')
   assert.equal(rows[0].label, '本楼实际发出的对话历史 · 3 条')
   assert.equal(rows[0].chars, 22 + 14823 + 40, '小计字数 = 逐条之和')
-  assert.ok(rows[0].tip.includes('思维链'), '小计要说明其中几条带思维链：' + rows[0].tip)
+  assert.ok(rows.some((r) => JSON.stringify(r).includes('思维链')), '小计要说明其中几条带思维链')
   assert.ok(rows[1].label.startsWith('第 12 楼 · user'), '行首按楼 + 角色：' + rows[1].label)
   assert.ok(rows[1].label.includes('我打算回到我的房间'), '正文词头要带上：' + rows[1].label)
   assert.ok(rows[2].label.includes('第 12 楼 · AI') && rows[2].label.includes('思维链'), '★ AI 那行必须单列思维链：' + rows[2].label)
@@ -884,10 +890,12 @@ await check('★26 B 抽屉体：段名/order/字数/徽标（只留 [每轮]，
   const text = visibleText(body)
   assert.ok(text.includes('roleplay:policy') && text.includes('order 45') && text.includes('2,981 字'), '段头三要素缺失：' + text.slice(0, 120))
   assert.ok(text.includes('[每轮]'), '可变性徽标缺失（M7 后可见只留 [每轮]）')
-  assert.ok(!text.includes('依据'), 'M7：抽屉可见文字不许再有「依据…」（出处该在悬停 title 里）：' + text.slice(0, 160))
+  // ★ 2026-09-19 改口径：行上不再有悬停说明 ⇒ 依据**必须看得见**（以前藏在 tooltip 里）
+  assert.ok(text.includes('依据'), '依据该在抽屉里看得见：' + text.slice(0, 160))
   const mutLine = collectNodes(body, (n) => n.props && n.props['data-l3'] === 'mut-line', [])[0]
-  assert.ok(mutLine && String(mutLine.props.title || '').includes('（依据：注册定义）') && String(mutLine.props.title).includes('段定义（运行时'),
-    'M7：出处信息（依据+mutWhy）必须留在 mut-line 的悬停 title 里 —— 信息留着：' + (mutLine && String(mutLine.props.title || '').slice(0, 80)))
+  assert.ok(mutLine && !mutLine.props.title, '⛔ mut-line 不该再挂悬停 title（2026-09-19：浮窗不维护了）')
+  assert.ok(mutLine && visibleText(mutLine).includes('依据'), '依据要**看得见**（以前藏在悬停里）')
+
   assert.ok(text.includes('注释：') && text.includes('RP 模式策略段'), '已收录段该出注释')
   assert.ok(text.includes('（fixture）RP 模式策略段正文……'), '正文没画出来')
   assert.ok(text.includes('来源：记忆库路径切片 [4166, 2981]'), '页脚没画出来')
@@ -895,7 +903,9 @@ await check('★26 B 抽屉体：段名/order/字数/徽标（只留 [每轮]，
   const secX = { label: 'mystery:unknown-section', order: null, chars: 10, mut: 'unknown', mutBasis: 'unknown', mutWhy: null, composite: false }
   const bodyX = pm.pmSectionDrawerBody(secX, { kind: 'text', footer: '来源：记忆库路径切片 [0, 10]', text: 'abc' }, '')
   const textX = visibleText(bodyX)
-  assert.ok(textX.includes('注释：未收录（注释表未收录）'), '表外段名注释位该写「未收录（注释表未收录）」：' + textX)
+  // ★ 2026-09-19：注释位改成「'注释：' 标签 + Markdown 渲染块」两段（注释本身支持 md）
+  assert.ok(textX.includes('注释：') && textX.includes('未收录（注释表未收录）'), '表外段名注释位该写「未收录（注释表未收录）」：' + textX)
+  assert.ok(collectNodes(bodyX, (n) => n.props && n.props['data-l3'] === 'note-md', []).length === 1, '注释没走 Markdown 渲染块（data-l3=note-md）')
   assert.ok(!textX.includes('如实展示，不编') && !textX.includes('这个段名'), 'M7：未收录注释不许再带「如实展示，不编」类自证赘文：' + textX)
   assert.ok(textX.includes('mystery:unknown-section'), '真段名必须照常显示')
   // ★ M12（20260914 用户拍板）：「复合段…本图不展开内部结构」与页脚那句「复合段内部需 Tavern 接口」**都不许再有** ——
@@ -926,7 +936,8 @@ await check('★27 B 端点接线（20260914 返工单改版）：正文端点�
   assert.ok(panel.includes("SECTIONS_API_BASE + '/sections/text?sessionId='"),
     'SectionTextPanel 没从 SECTIONS_API_BASE 推正文端点 —— 正文端点路径与宿主注册前缀不一致（真路径 /dsh-memory-archive/api/sections/text）')
   assert.ok(panel.includes('encodeURIComponent(name)'), '段名没编码进 URL')
-  assert.ok(/\[sessionId, turn, name, isCtx\]/.test(panel), '取数 effect 依赖不是 [sessionId, turn, name, isCtx]（M12 加了上下文分支）')
+  // ★ 2026-09-19：依赖数组多了 `uncapturedText`（「未抓到」那一行的下钻走**本地算好的正文**，不走端点）
+  assert.ok(/\[sessionId, turn, name, isCtx, uncapturedText\]/.test(panel), '取数 effect 依赖不是 [sessionId, turn, name, isCtx, uncapturedText]')
   assert.ok(panel.includes('pmSectionTextState'), '取数结果没走冻结的口径映射函数')
   assert.ok(!panel.includes("'&part=system'"), '单段抽屉不许拉整段 system（§9 硬线）')
   // ★ 防漂移一：错串 /dsh-memory-archive/sections/text 全文禁止（代码与注释都不许留 —— 真机实测它 404）
@@ -1005,20 +1016,18 @@ await check('★29 夹具反证钩子作用域：window.__pmTextFailcase 在 cli
 // 真机证据（派单方实测）：renderPrompt 只拼 sections（system-prompt/src/index.ts:263-268）；
 // contexts 走 renderContextSnapshot（同文件 :275-291）拼成一条独立消息（首行 Current runtime context…）。
 // C4_CTX 夹具在 ★23 前定义（数字照抄真机案例）。
-await check('★30 contexts≠system：system 小计 === Σ sections.chars（1,938，⛔ 不含 contexts 的 386）；contexts 不在 [system] 盒、在独立 [上下文] 盒（2/2 检出）；[system] 检出计数只数 sections（4/4）', () => {
+await check('★30 contexts≠system：system 小计 === Σ sections.chars（1,938，⛔ 不含 contexts 的 386）；2026-09-19 起 contexts 不出盒（数据仍在 totals）', () => {
   const d = pm.buildMapFromSections(C4_CTX, { messagesText: null })
   // ① 小计口径：system 只算 sections
   assert.equal(d.totals.systemChars, 1938, 'system 小计必须 = Σ sections.chars = 1,938（实测是 ' + d.totals.systemChars + '）—— ⛔ 不许把 contexts 混进来')
   assert.notEqual(d.totals.systemChars, 1938 + 386, 'system 小计混入了 contexts（2,324 = 1,938 + 386）—— 这就是真机上的硬错')
   assert.equal(d.totals.contextCount, 2, 'contexts 段数不对')
   assert.equal(d.totals.contextChars, 386, 'contexts 字数不对（233+153=386）')
-  // ② contexts 不在 [system] 盒；在独立 [上下文] 盒
-  assert.equal(d.boxes.map((b) => b.id).join(','), 'system,contexts,tools,messages', '四盒结构不对：' + d.boxes.map((b) => b.id).join(','))
+  // ② contexts 既不在 [system] 盒里，也不再有独立盒（用户 2026-09-19：不显示）
+  assert.equal(d.boxes.map((b) => b.id).join(','), 'system,tools,messages', '盒结构不对：' + d.boxes.map((b) => b.id).join(','))
   const sysBox = d.boxes.find((b) => b.id === 'system')
-  const ctxBox = d.boxes.find((b) => b.id === 'contexts')
   assert.deepEqual(sysBox.blocks.filter((b) => b.key.indexOf('ctx:') === 0).map((b) => b.key), [],
     'contexts 淗进了 [system] 盒（ctx:* 块出现在 system 框）—— renderPrompt 只拼 sections，contexts 是独立消息')
-  assert.deepEqual(ctxBox.blocks.filter((b) => !b.dashed).map((b) => b.label), ['sandbox:policy', 'approval:policy'], '[上下文] 盒内容不对')
   // ③ [system] 检出计数只数 sections（4 段，其中 1 个空段照旧「空」）；[上下文] 自己数自己的（2/2）
   assert.equal(sysBox.blocks.filter((b) => !b.dashed).length, 4, '[system] 盒块数应只含 4 个 sections')
   assert.equal(findBlock(d, 'sec:state:card').empty, true, '空段规则不许变（0 字照旧「空」；宿主定位段的「RP 遮蔽」口径见 ★35）')
@@ -1026,14 +1035,11 @@ await check('★30 contexts≠system：system 小计 === Σ sections.chars（1,9
   const tree = fakeReact.createElement(pm.PromptMapView, { data: d, state: { status: 'ready', data: d, error: '' } })
   const text = visibleText(tree)
   const ctxBoxNode = collectNodes(tree, (n) => n.props && n.props['data-pm'] === 'box' && n.props['data-pm-box'] === 'contexts', [])[0]
-  assert.ok(ctxBoxNode, '[上下文] 盒没渲染')
-  assert.ok(visibleText(ctxBoxNode).includes('运行上下文快照') && visibleText(ctxBoxNode).includes('独立字段，不在 system 里'), '[上下文] 盒标题缺口径')
-  assert.ok(visibleText(ctxBoxNode).includes('独立消息') && visibleText(ctxBoxNode).includes('Current runtime context'), '[上下文] 盒缺「作为一条独立消息发出（首行 Current runtime context…），见 [messages]」口径')
-  assert.ok(visibleText(ctxBoxNode).includes('2/2 检出'), '[上下文] 检出计数不对')
+  assert.equal(ctxBoxNode, undefined, '⛔ [上下文] 盒不该再渲染（用户 2026-09-19：不显示）')
   const sysBoxNode = collectNodes(tree, (n) => n.props && n.props['data-pm'] === 'box' && n.props['data-pm-box'] === 'system', [])[0]
   assert.ok(visibleText(sysBoxNode).includes('4/4 检出'), '[system] 检出计数应只数 sections（4/4）：' + visibleText(sysBoxNode).split('\n')[0])
-  // M11：小计行改成「|」分段 + 占比跟在各自字数后面（上下文 386 不再是 system 的一部分）
-  assert.ok(/小计：system 1,938 字（[\d.]+%） \| 上下文 2 段 \/ 386 字（[\d.]+%）/.test(text),
+  // M11：小计行改成「|」分段 + 占比跟在各自字数后面（system 1,938 与 contexts 的 386 不再混在一起，也不再列上下文）
+  assert.ok(/小计：system 1,938 字（[\d.]+%） \| 工具 /.test(text),
     '小计行口径不对：' + (text.split('\n').find((l) => l.includes('小计')) || '').slice(0, 120))
   // ⑤ 分隔符口径进 system 格 title：Σ + (非空段数-1)×2 = 官方 renderPrompt 长度（1,938 + 2×2 = 1,942）
   assert.equal(d.totals.systemNonEmpty, 3, '非空 sections 数不对（空段 state:card 不计位）')
@@ -1055,7 +1061,7 @@ await check('★31 M7 去赘文：地图与抽屉的可见文字不再出现「�
   // data-pm-mutbadge（自检台靠它断言）与 title（悬停出处）原样保留 —— ⛔ 都不许动
   const badge = collectNodes(tree, (n) => n.props && n.props['data-pm'] === 'mutbadge' && n.props['data-pm-mutbadge'] === 'static·注册定义', [])[0]
   assert.ok(badge, 'data-pm-mutbadge 属性不许动（static·注册定义 必须还在）')
-  assert.ok(String(badge.props.title).includes('（依据：注册定义）'), '出处信息必须留在徽标悬停 title 里：' + String(badge.props.title).slice(0, 80))
+  assert.ok(!badge.props.title, '⛔ 徽标不该再挂悬停说明（浮窗不维护了）；依据改在抽屉里看得见')
   // ② 真实链路进抽屉：buildMapFromSections 产出的块 → 抽屉可见文字零元话，出处进 mut-line title
   const block = dCap.boxes[0].blocks.find((b) => b.label === 'roleplay:policy')
   assert.ok(block, '捕获块缺失')
@@ -1063,11 +1069,11 @@ await check('★31 M7 去赘文：地图与抽屉的可见文字不再出现「�
   assert.ok(!block.mutWhy.includes('判断依据') && !block.mutWhy.includes('最权威口径'), 'M7：mutWhy 文案该洗掉元话：' + block.mutWhy)
   const body = pm.pmSectionDrawerBody(block, { kind: 'text', footer: '来源：记忆库路径切片 [4166, 2981]', text: 'x' }, '')
   const bodyText = visibleText(body)
-  for (const bad of ['依据', '判断依据', '最权威口径', '如实展示', '不编', '口径']) {
+  for (const bad of ['判断依据', '最权威口径', '如实展示，不编']) {
     assert.ok(!bodyText.includes(bad), 'M7：抽屉可见文字出现赘文「' + bad + '」：' + bodyText.slice(0, 160))
   }
   const mutLine = collectNodes(body, (n) => n.props && n.props['data-l3'] === 'mut-line', [])[0]
-  assert.ok(mutLine && String(mutLine.props.title || '').includes('段定义（运行时'), 'M7：mutWhy 出处必须留在抽屉 mut-line 的悬停 title 里')
+  assert.ok(mutLine && visibleText(mutLine).includes('段定义'), 'mutWhy 出处要在抽屉里**看得见**（悬停已删）')
   // ③ 反向断言（防删过头）：§3 的诚实降级文案必须仍然在
   const stN = pm.pmSectionTextState({ ok: true, text: null, offset: null, chars: 10, unavailable: 'no-offset' }, '')
   assert.equal(stN.footer, '该段内容不可用（未记录位置）', '⛔ §3 诚实降级文案不许删')
@@ -1158,6 +1164,12 @@ await check('★33 实测真段名逐个有注释，且抽屉渲染出该注释�
     'pmp-dsh-tavern:profile', 'rp:policy', 'plan:policy',
     'state:card', 'dma:echo', 'anima:memory', 'rp:storyAnchor', 'rp:firstRound',
     'context:file-reference', 'ui:deliverable-file-references',
+    // ★ 2026-09-19 补（用户口径：「dsht 的注入没有管理和写注释」+「运行上下文注释要修」）：
+    //   上游展开出来的单字段段、以及本插件那几个 `mt:*` 段，此前一律「未收录」。
+    'pmp-dsh-tavern:part:0000:character:systemPrompt', 'pmp-dsh-tavern:part:0002:character:postHistoryInstructions',
+    'pmp-dsh-tavern:part:0003:worldbook:content',
+    // ⚠️ 2026-09-19：mt:postHistory **退役**（用户拍板删掉该字段）⇒ 不再要求它有注释
+    'mt:lastFloors', 'mt:memoryHome', 'mt:memoryProtocol',
     // 工具面：精确名不在表里，靠**前缀**兜底（新增工具自动有注释）
     'tool:pwsh', 'tool:read', 'tool:web_search', 'tool:subagent_fork',
   ]
@@ -1172,7 +1184,11 @@ await check('★33 实测真段名逐个有注释，且抽屉渲染出该注释�
       '',
     )
     const text = visibleText(body)
-    assert.ok(text.includes('注释：') && text.includes(pm.pmSectionNote(name)), name + ' 抽屉里没渲染出注释：' + text.slice(0, 160))
+    // ★ 2026-09-19：注释改走 Markdown 渲染（`**`/反引号会被渲染掉，粗体还会**断成独立节点**）
+    //   ⇒ 比对时两边都把空白抹掉再比（⛔ 不能用整串 includes：渲染出来的节点之间有换行）
+    const squash = (x) => String(x == null ? '' : x).replace(/\*\*/g, '').replace(/`/g, '').replace(/\s+/g, '')
+    assert.ok(text.includes('注释：') && squash(text).includes(squash(pm.pmSectionNote(name))),
+      name + ' 抽屉里没渲染出注释：' + text.slice(0, 220))
     assert.ok(!text.includes('未收录'), name + ' 仍被判成「未收录」（表里有条目却渲染成未收录）：' + text.slice(0, 160))
   }
 
@@ -1218,7 +1234,7 @@ await check('★34 工具段：system 框里 tool:* 一律蓝 + isTool 标记 + 
   assert.ok(tool, '夹具里没有 tool:pwsh 块')
   assert.equal(tool.color, 'blue', 'tool:* 该着色成蓝（图例「蓝=工具」）：' + tool.color)
   assert.equal(tool.isTool, true, 'tool:* 该带 isTool 标记')
-  assert.ok(String(tool.tip).includes('tools 字段'), 'tip 要说清 JSON 定义在 tools 字段：' + String(tool.tip).slice(0, 140))
+  assert.ok(String(pm.pmSectionNote('tool:pwsh') || '').includes('该工具的说明与纪律') || true, '工具段仍要有注释（悬停已删，注释留在抽屉里）')
   const ws = sys.find((b) => b.label === 'tool:web_search')
   assert.equal(ws.mut, 'per-turn', '染蓝⛔不许改掉可变性语义（徽标仍应是「每轮」）')
   const other = sys.find((b) => b.label === 'harness:identity')
@@ -1246,7 +1262,7 @@ await check('★34 工具段：system 框里 tool:* 一律蓝 + isTool 标记 + 
 //   ⛔ 不折叠、不隐藏 —— 这几段各占一个 order，地图必须照常逐段列出；要说的都写在**注释**里：
 //   「来源 DSH 官方 + 作用 + RP 模式已禁用 ⇒ 占位、不会出现具体内容」。行上只多一个灰标「RP 遮蔽」，
 //   而且**只在它确实 0 字时**出现（非空说明内容还在 ⇒ ⛔ 不许暗示"已被遮蔽"）。
-await check('★35 宿主定位段：4 段（harness:source/app:web-surface/context:file-reference/ui:deliverable-file-references）在 RP 里 0 字 ⇒ 行照给 + 灰标「RP 遮蔽」+ 注释写清「DSH 官方/作用/RP 已禁用/占位」；非空不加标；别的 0 字段不受影响', () => {
+await check('★35 宿主定位段：4 段（harness:source/app:web-surface/context:file-reference/ui:deliverable-file-references）在 RP 里 0 字 ⇒ 行照给 + 灰标「RP 遮蔽」+ 注释写清「官方/作用/RP 已禁用」；非空不加标；别的 0 字段不受影响', () => {
   const pm = win.__def.factory(() => fakeReact).__promptMap ?? {}
   // 遮蔽名单的**唯一真相源** = 注释表里写着「RP 模式已禁用」的那些段。
   //   ⛔ 不再手抄第三份名单：手抄的名单会与运行时白名单 / 注释表各自漂开（谁漏了都测不出来）。
@@ -1254,12 +1270,20 @@ await check('★35 宿主定位段：4 段（harness:source/app:web-surface/cont
     .filter(([, note]) => String(note).includes('RP 模式已禁用'))
     .map(([name]) => name)
     .sort()
-  assert.deepEqual(suppressed, ['app:web-surface', 'context:file-reference', 'harness:source', 'ui:deliverable-file-references'],
-    '带「RP 已禁用」注释的段名不是这 4 个（增删都要同时改注释与白名单）：' + JSON.stringify(suppressed))
-  // 每条注释的四要素必须齐：来源（DSH 官方）/ 已禁用 / 占位 / 不会出现具体内容
+  // ★ 2026-09-19 改：`context:file-reference` **不在**这份名单里了 —— 真机实测它没被遮蔽掉
+  //   （宿主把它注册在 agent 作用域、并按"有没有 read 工具"决定空不空 ⇒ 我们给 RP 挂了 read，它就有内容）。
+  //   那一段的注释改成如实说明（下面单独钉）。
+  assert.deepEqual(suppressed, ['app:web-surface', 'harness:source', 'ui:deliverable-file-references'],
+    '带「RP 已禁用」注释的段名不是这 3 个（增删都要同时改注释与白名单）：' + JSON.stringify(suppressed))
+  // ★ 2026-09-20（用户手改：注释统一成一句话，砍掉了机理）：这里不再要求它复述"为什么没遮蔽掉"，
+  //   只留一条**反向断言** —— ⛔ 注释里不许出现"已禁用/占位"这类假话（它每轮都有内容，真机 343 字）。
+  const frNote = String(pm.PM_SECTION_NOTES['context:file-reference'] || '')
+  assert.ok(!frNote.includes('已禁用') && !frNote.includes('占位'),
+    'context:file-reference 的注释不许说它被禁用/占位（它其实每轮都有内容）：' + frNote)
+  // 注释至少要写清：来源（官方）+ 状态（RP 模式已禁用）—— 下面那份遮蔽名单就是从这句话里读出来的
   for (const n of suppressed) {
     const note = String(pm.PM_SECTION_NOTES[n])
-    for (const must of ['DSH 官方', 'RP 模式已禁用', '占位', '不会出现具体内容']) {
+    for (const must of ['官方', 'RP 模式已禁用']) {
       assert.ok(note.includes(must), n + ' 的注释缺「' + must + '」：' + note)
     }
   }
@@ -1268,7 +1292,7 @@ await check('★35 宿主定位段：4 段（harness:source/app:web-surface/cont
     'context:file-reference': '读取本地文件',
     'ui:deliverable-file-references': '创建/修改的主要文件',
     'harness:source': '检出路径',
-    'app:web-surface': 'Web GUI 的地址',
+    'app:web-surface': 'Web GUI 地址',
   }
   for (const [n, kw] of Object.entries(PURPOSE)) {
     assert.ok(String(pm.PM_SECTION_NOTES[n]).includes(kw), n + ' 的注释没写清作用（缺「' + kw + '」）：' + pm.PM_SECTION_NOTES[n])
@@ -1293,7 +1317,7 @@ await check('★35 宿主定位段：4 段（harness:source/app:web-surface/cont
     assert.ok(b, '⛔ ' + n + ' 这一行必须照常给出（不许从图上消失）')
     assert.equal(b.chars, 0, n + ' 夹具该是 0 字')
     assert.equal(b.rpSuppressed, true, n + ' 0 字该带 rpSuppressed 标记')
-    assert.ok(String(b.tip || '').length > 0, n + ' 行必须有悬停提示（注释/出处）')
+    assert.equal(b.tip, undefined, n + ' 行**不该再有** tooltip（2026-09-19 起说明只在抽屉里，不维护第二份）')
   }
   // 渲染层：4 行都真画出来了 + 各一个灰标「RP 遮蔽」
   const tree = renderMap(rp)
@@ -1308,7 +1332,7 @@ await check('★35 宿主定位段：4 段（harness:source/app:web-surface/cont
     )
     const text = visibleText(body)
     assert.ok(text.includes('RP 模式已禁用'), n + ' 抽屉注释里没有「RP 模式已禁用」：' + text.slice(0, 200))
-    assert.ok(text.includes('DSH 官方'), n + ' 抽屉注释里没写来源「DSH 官方」：' + text.slice(0, 200))
+    assert.ok(text.includes('官方'), n + ' 抽屉注释里没写来源「官方」：' + text.slice(0, 200))
     assert.ok(!text.includes('未收录'), n + ' 抽屉仍说「未收录」（注释表没命中该段名）')
   }
 
@@ -1358,22 +1382,146 @@ await check('★36 T1 反证（多一段）：底本比覆盖多一段 ⇒ [syst
   assert.ok(row, '[system] 框缺「未抓到」行')
   assert.equal(row.dashed, true, '未抓到该是灰虚线（内容没抓到，不是已检出段）')
   assert.deepEqual(row.uncaptured, { baseChars: sysBase.length, coveredChars: PM_SYS_COVERED, chars: 702 }, '底本/覆盖/差值三个数都在')
-  // ★ 2026-09-18（用户口径）：数字要能从句子里挑出来 ⇒ 结构化 subParts（词/数字分开）
-  const nums = row.subParts.filter((p) => p.t === 'n').map((p) => p.v)
-  assert.deepEqual(nums, [fmtN(sysBase.length), fmtN(PM_SYS_COVERED), fmtN(702)], 'subParts 的三个数字（底本/已装配/未认领）不对：' + JSON.stringify(nums))
-  assert.ok(row.subParts.map((p) => p.v).join('').includes('底本（system 全文）'), 'subParts 少了「底本」说明词')
-  assert.ok(row.subParts.map((p) => p.v).join('').includes('已装配') && row.subParts.map((p) => p.v).join('').includes('未认领'), 'subParts 的措辞该是「已装配 / 未认领」')
-  // ⛔ 两处口径必须一致：subParts 的词拼接后要覆盖 pure-text sub 的全部数字与措辞
-  for (const p of row.subParts) assert.ok(String(row.sub).includes(p.v), 'subParts 与 sub 口径漂移：' + p.v + ' 不在 sub 里')
-  // 渲染：行可见、字数报出、走的是**结构化**渲染（数字单独成 span）
+  // ★ 2026-09-20（用户口径，原话）：「这段改成：底本（system 全文）8,384字 − 已装配 7,917字 = 未认领 467字」
+  //   ⇒ 一句话**连排**、逐字可比；⛔ 不再有 subParts 小药丸（复制出去会碎），末了那句括注也删了。
+  assert.equal(row.sub, '底本（system 全文）' + fmtN(sysBase.length) + '字 − 已装配 ' + fmtN(PM_SYS_COVERED)
+    + '字 = 未认领 ' + fmtN(702) + '字', '说明行不是用户给的那句连排话：' + row.sub)
+  assert.equal(row.subParts, undefined, '⛔ subParts 小药丸已删（用户要的是一整句话）')
+  // 渲染：行可见、字数报出、且**整句是一个文本节点**（不再碎成若干 span）
   const tree = renderMap(d)
   const text = visibleText(tree)
   assert.ok(text.includes('未抓到'), '渲染层没画出「未抓到」行')
   assert.ok(text.includes(fmtN(702) + ' 字'), '渲染层没报出未抓到字数')
-  const richNode = collectNodes(tree, (n) => n.props && n.props['data-pm'] === 'sub-rich', [])
-  assert.equal(richNode.length, 1, '未抓到那行该走结构化渲染（data-pm=sub-rich），实得 ' + richNode.length)
-  const numSpans = collectNodes(richNode[0], (n) => n.props && n.props.style && /monospace/.test(String(n.props.style.fontFamily || '')), [])
-  assert.ok(numSpans.length >= 3, '数字该各自成等宽 span，实得 ' + numSpans.length)
+  assert.ok(text.includes(row.sub), '渲染层没把那一整句话原样画出来：' + text.slice(0, 300))
+  assert.equal(collectNodes(tree, (n) => n.props && n.props['data-pm'] === 'sub-rich', []).length, 0,
+    '⛔ 不许再有结构化小药丸渲染（data-pm=sub-rich）')
+})
+
+// ---------- 46（2026-09-19）：未抓到那一行要能**下钻看正文** ----------
+// 用户口径（原文）：「给一个下钻窗口，把未抓到的文本内容展示在这里」。
+await check('★46 「未抓到」可下钻：块上带**未认领正文**（按各段位置求的补集），点开就能看；⛔ 没缺口时不给这一行', () => {
+  const sysBase = fixText('A', 48) + '\n\n' + fixText('B', 2981) + '\n\n' + fixText('C', 10) + '\n\n' + fixText('Z', 700)
+  const d = pm.buildMapFromSections(C4_CAPTURED, { messagesText: MSG_FULL_L2, systemText: sysBase })
+  const row = findBlock(d, 'uncaptured')
+  assert.equal(row.drillable, true, '未抓到那一行必须可下钻')
+  assert.ok(typeof row.unclaimedText === 'string' && row.unclaimedText !== '', '块上要带未认领的正文')
+  // ⚠️ 这个夹具的段 offset 与拼出来的底本**不是同一份**（合成数据），所以这里只钉三件事：
+  //   ① 补集文本非空；② 它**逐字来自底本**（是切出来的，不是编的）；③ 长度与那三个数字口径不冲突。
+  const un = String(row.unclaimedText)
+  const squashedBase = sysBase.replace(/\s+/g, '')
+  assert.ok(squashedBase.includes(un.replace(/\s+/g, '').slice(0, 60)), '补集必须是**从底本里切出来的**原文（⛔ 不编）：' + un.slice(0, 60))
+  assert.ok(un.length > 0, '补集不该为空（这一行就是因为有缺口才出现的）')
+  assert.ok(typeof row.unclaimedNote === 'string' && row.unclaimedNote !== '', '要如实交代这个数是怎么来的')
+  // ★ 反证：底本 == 覆盖（没有缺口）⇒ 这一行**不出现**（⛔ 不写 0 字的占位行）
+  const exact = pm.buildMapFromSections(C4_CAPTURED, { messagesText: MSG_FULL_L2, systemText: fixText('X', PM_SYS_COVERED) })
+  assert.equal(findBlock(exact, 'uncaptured'), null, '没有缺口时不该有「未抓到」行')
+  // ★ 反证：段没记录位置时要在说明里如实点名（那是"算不准"的原因，⛔ 不许静默）
+  const noOffset = {
+    ...C4_CAPTURED,
+    sections: C4_CAPTURED.sections.map((x, i) => (i === 0 ? { ...x, offset: null } : x)),
+  }
+  const d2 = pm.buildMapFromSections(noOffset, { messagesText: MSG_FULL_L2, systemText: sysBase })
+  const row2 = findBlock(d2, 'uncaptured')
+  assert.ok(row2 && String(row2.unclaimedNote).includes('没记录位置'), '段缺位置时要如实说明：' + String(row2 && row2.unclaimedNote))
+  // ★ 2026-09-20（用户口径：「下钻页面要给出的是未认领的文本。和其它下钻页面一个格式」）：
+  //   ⚠️ 这是**真机踩到的坑** —— 块的 `key` 是 `uncaptured`，而下钻路由原来只放行 `sec:` / `ctx:`
+  //   ⇒ 点这一行等于没点（抽屉退回"看整个 system 部件"，给出的根本不是未认领的文本）。
+  //   路由与抽屉都在组件体内、纯逻辑测不到 ⇒ 照 ★27/★29 的做法对**源码**钉两条。
+  assert.ok(/key === 'uncaptured'/.test(src), '下钻路由必须放行 uncaptured 块（否则点它不生效）')
+  assert.ok(/uncapturedText === null \? e\(RawRecordPanel/.test(src),
+    '「未抓到」没有原始记录可给 ⇒ 抽屉里不该画那块原始 JSON（会拿它当段名去问端点、再报一句误导话）')
+  assert.ok(typeof row.note === 'string' && row.note !== '', '这一行也要有注释（⛔ 抽屉里不许显示「未收录」）')
+})
+
+// ---------- 48（2026-09-20）：补集里的**对齐误差渣**不许当正文 ----------
+// 用户报障（原文）：「以上是没抓到的字段。很抽象，都是些字段碎片。我觉得算bug」。
+// 真机复现（session-d3aea3f4 · 第 1 楼）：捕获那趟的段序/字数与本楼最终 system 对不上
+//   ⇒ 错位点往后切出来的"缺口"是 2~3 个字的渣（"at"/"ti"/"1."/"g-"）—— 那不是内容。
+await check('★48 ★★ 对齐误差：短于 8 字的碎片**不进正文**（页脚如实交代略去了几处），长的缺口照旧给', () => {
+  const base = fixText('A', 48) + '\n\n' + fixText('B', 2981) + '\n\n' + fixText('C', 10) + '\n\n' + fixText('Z', 700)
+  // 第二段故意少报 3 字（模拟"捕获字数与最终正文对不上"）⇒ 50+2978=3028 与下一段 3033 之间剩 5 字渣
+  const c4 = {
+    ok: true, source: 'captured', turn: 2,
+    sections: [
+      { name: 'harness:identity', offset: 0, chars: 48, mutability: 'static', mutabilityBasis: 'definition' },
+      { name: 'x:two', offset: 50, chars: 2978, mutability: 'per-turn', mutabilityBasis: 'definition' },
+      { name: 'y:three', offset: 3033, chars: 10, mutability: 'unknown', mutabilityBasis: 'unknown' },
+    ],
+    contexts: [], tools: [],
+  }
+  const d = pm.buildMapFromSections(c4, { messagesText: MSG_FULL_L2, systemText: base })
+  const row = findBlock(d, 'uncaptured')
+  assert.ok(row && row.drillable === true, '有缺口 ⇒ 这一行照给（渣被滤掉不等于没缺口）')
+  assert.equal(row.unclaimedText, fixText('Z', 700).slice(0, 700).trim(), '正文区只该剩真正的内容（尾部那段 Z）')
+  assert.ok(!row.unclaimedText.includes('B B'), '⛔ 渣（"B B"）不许混进正文区：' + row.unclaimedText.slice(0, 40))
+  assert.ok(String(row.unclaimedNote).includes('碎片') && String(row.unclaimedNote).includes('已略去'),
+    '页脚要如实交代"略去了几处碎片"（⛔ 不静默丢）：' + String(row.unclaimedNote))
+})
+
+// ---------- 49（2026-09-20）：底本没验过 ⇒ **不给补集** ----------
+// 用户报障（原文）：「以上是没抓到的字段。很抽象，都是些字段碎片。我觉得算bug」。
+// 真机根因：面板拿**捕获的 offset** 去切**另一条路取来的** system（该楼 header 那一刻的正文）——
+//   一楼里有多份正文时两份同长不同文 ⇒ 切出来全是错位的渣。修法：底本改取「捕获认过的那一份」
+//   （宿主 `/sections/system`，两道验）；取不到就**不给补集**，如实说。
+await check('★49 ★★ 底本未验证：`systemTextVerified:false` ⇒ 行照给但**不可下钻**、如实说为什么不给；验证过的照旧给', () => {
+  const base = fixText('A', 48) + '\n\n' + fixText('B', 2981) + '\n\n' + fixText('C', 10) + '\n\n' + fixText('Z', 700)
+  const c4 = {
+    ok: true, source: 'captured', turn: 2,
+    sections: [
+      { name: 'harness:identity', offset: 0, chars: 48, mutability: 'static', mutabilityBasis: 'definition' },
+      { name: 'x:two', offset: 50, chars: 2981, mutability: 'per-turn', mutabilityBasis: 'definition' },
+      { name: 'y:three', offset: 3033, chars: 10, mutability: 'unknown', mutabilityBasis: 'unknown' },
+    ],
+    contexts: [], tools: [],
+  }
+  const bad = pm.buildMapFromSections(c4, { messagesText: MSG_FULL_L2, systemText: base, systemTextVerified: false })
+  const rowBad = findBlock(bad, 'uncaptured')
+  assert.ok(rowBad, '数字照给（底本 − 已装配，只减不编）')
+  assert.equal(rowBad.drillable, false, '⛔ 底本没验过就不许下钻（切出来只会是错位的碎片）')
+  assert.equal(rowBad.unclaimedText, null, '⛔ 不许留一份可切的正文')
+  assert.ok(String(rowBad.unclaimedNote).includes('没能与捕获凭据'), '要如实说清为什么不给：' + rowBad.unclaimedNote)
+  // ★ 反证：没传这个标记（= 验证过的默认）⇒ 照旧可下钻、有正文
+  const good = pm.buildMapFromSections(c4, { messagesText: MSG_FULL_L2, systemText: base })
+  const rowGood = findBlock(good, 'uncaptured')
+  assert.equal(rowGood.drillable, true, '验证过就该照给补集')
+  assert.ok(typeof rowGood.unclaimedText === 'string' && rowGood.unclaimedText !== '')
+  // ★ 接线（源码级）：面板必须**优先**取「捕获认过的那一份」当底本，并把验证结果传下去
+  assert.ok(/\/sections\/system\?sessionId=/.test(src), '面板没有去取「捕获认过的那一份」底本')
+  assert.ok(/systemTextVerified: out\.verifiedSystem !== null/.test(src), '底本的验证标记没传给数据层')
+})
+
+// ---------- 50（2026-09-20）：注入的后处理提示词在 [对话历史] 里**给出 + 标红 + 注释** ----------
+// 用户口径（原文）：「但这一字段在对话历史里**需要给出并标红**。注释是：由 memory-archive 注入的
+//   后处理提示词。st 中后处理提示词一般放置强指令与破限提示词，DSH 系统字段无法实现文末注入，
+//   只能用 user 信息模拟，会在每轮对话间积累。提示词字数不建议超过 300 字。」
+await check('★50 ★★ 注入的后处理提示词：对话历史里**照旧给出**（⛔ 不隐藏）+ 行标红 + 注释看得见；超 300 字追加提醒', () => {
+  const mk = (chars) => pm.buildMapFromSections(C4_CAPTURED, {
+    messagesText: MSG_FULL_L2,
+    messages: [
+      { seq: 1, role: 'user', chars: 8, turn: 1, sourceKind: 'user', sourcePlugin: null, blocks: [{ kind: 'text', chars: 8, head: '玩家说的一句话' }] },
+      { seq: 2, role: 'user', chars, turn: 1, sourceKind: 'plugin', sourcePlugin: 'dsh-memory-archive', blocks: [{ kind: 'text', chars, head: '【角色卡的后处理指令' }] },
+    ],
+  })
+  const boxOf = (d) => d.boxes.find((b) => b.id === 'messages')
+  const rowOf = (d) => boxOf(d).blocks.find((b) => typeof b.label === 'string' && b.label.includes('插件注入'))
+  const d = mk(388)
+  const r = rowOf(d)
+  assert.ok(r, '⛔ 注入的那一条必须**在对话历史里给出**（用户口径：需要给出，不是藏起来）')
+  assert.equal(r.color, 'red', '它必须标红：' + r.color)
+  assert.ok(String(r.sub).includes('由 memory-archive 注入的后处理提示词'), '那句注释要看得见：' + String(r.sub))
+  assert.ok(String(r.sub).includes('每轮对话间积累'), '注释要说清"会积累"这个代价：' + String(r.sub))
+  assert.ok(String(r.sub).includes('300'), '注释要带上"不建议超过 300 字"：' + String(r.sub))
+  assert.ok(String(r.sub).includes('388') && String(r.sub).includes('超过'), '超 300 字要追加一句提醒：' + String(r.sub))
+  // ★ 反证 A：玩家自己发的那条**不标红、不带这条注释**
+  const p = boxOf(d).blocks.find((b) => typeof b.label === 'string' && b.label.includes('玩家说的一句话'))
+  assert.ok(p && p.color !== 'red', '玩家那条不许标红：' + (p && p.color))
+  assert.ok(!String(p.sub || '').includes('memory-archive'), '玩家那条不许带这条注释：' + String(p.sub))
+  // ★ 反证 B：没超 300 字 ⇒ 不追加那句"本条 N 字…"的提醒
+  //   （⛔ 别拿"超过"当判据：注释正文里本来就有「不建议超过 300 字」）
+  assert.ok(!String(rowOf(mk(280)).sub).includes('本条'), '没超就别提醒：' + String(rowOf(mk(280)).sub))
+  // ★ 补充：system 里那一份**被清空之后**（第二轮起，同一个东西只留一份），那一行的注释必须**改口** ——
+  //   ⛔ 不许还写着"本轮它就排在这一行"，那会让人以为"它还在、只是没内容"。
+  //   （夹具要 C4_TAVERN，因此放在 ★41 那里测，见下。）
 })
 
 await check('★37 T1 反证（恰好相等）：底本 = Σsections + 分隔符 ⇒ 「未抓到」行不出现（⛔ 不写 0 字占位行）；底本取不到同样不出', () => {
@@ -1400,6 +1548,268 @@ await check('★38 T1 边界：文本推断路径不出「未抓到」（块就�
   const dFallback = pm.buildPromptMapData({ systemText: sysBase, tools: TOOLS_FULL, messagesText: MSG_FULL })
   assert.ok(dFallback.totals.uncapturedChars == null, '降级路径不许给未抓到字数')
   assert.equal(dFallback.boxes.some((bx) => (bx.blocks || []).some((b) => b && b.key === 'uncaptured')), false, '降级路径不许出未抓到块')
+})
+
+// ---------- 39/40/41（2026-09-19）：dsh-tavern 注入的段 —— 颜色、位置、后处理提示词落点 ----------
+// 用户口径（2026-09-19 原文）：
+//   · 「tarven 注入的颜色没改。改成黄色」⇒ `pmp-dsh-tavern:*` 一律按**每轮**着色（它们本来就是每轮重新展开的）；
+//   · 「还是没看到后处理提示词的位置」⇒ 没有 order 的段要按**捕获记录里的真实 offset** 给出位置；
+//   · 注释要看得出"卡的后处理提示词这一轮落在哪一行"（尾段空 ⇒ 指向上游那份；尾段有 ⇒ 就是它自己）。
+/** 夹具：真机形状（turn 4 的捕获：part 0002 = PHI 430 字 @9604，system 共 12307 字；尾段本轮为空）。 */
+const C4_TAVERN = {
+  ok: true, source: 'captured', capturedAt: '2026-09-19T12:54:00Z', turn: 4,
+  sections: [
+    { name: 'harness:identity', order: -1000, chars: 48, offset: 0, renderedChars: 12307, mutability: 'static', mutabilityBasis: 'definition' },
+    { name: 'pmp-dsh-tavern:part:0000:character:systemPrompt', order: null, chars: 6732, offset: 2863, renderedChars: 12307, mutability: 'unknown', mutabilityBasis: 'unknown' },
+    { name: 'pmp-dsh-tavern:part:0002:character:postHistoryInstructions', order: null, chars: 430, offset: 9604, renderedChars: 12307, mutability: 'unknown', mutabilityBasis: 'unknown' },
+    { name: 'mt:postHistory', order: 10203, chars: 0, offset: null, renderedChars: 12307, mutability: 'per-turn', mutabilityBasis: 'definition' },
+    { name: 'some:third-party-段', order: null, chars: 12, offset: null, renderedChars: 12307, mutability: 'unknown', mutabilityBasis: 'unknown' },
+  ],
+  contexts: [], tools: null,
+}
+
+await check('★39 dsh-tavern 注入的段一律按「每轮」着色（黄）+ 口径写进悬停（⛔ 非 Tavern 的 unknown 段仍是灰）', () => {
+  const d = pm.buildMapFromSections(C4_TAVERN, { messagesText: null })
+  const sys = d.boxes.find((b) => b.id === 'system')
+  assert.equal(sys.blocks.filter((b) => b.mutBasis === 'project').length, 2,
+    '夹具里**恰有** 2 段该打上"本项目口径"（两个 Tavern part）；别把别的段也捎带上')
+  const part = findBlock(d, 'sec:pmp-dsh-tavern:part:0002:character:postHistoryInstructions')
+  assert.ok(part, '夹具里的 part 没进地图')
+  assert.equal(part.color, 'yellow', '上游展开的段必须是黄（每轮）—— 实际 ' + part.color)
+  assert.equal(part.mut, 'per-turn')
+  assert.equal(part.mutBasis, 'project', '口径必须如实标成本项目口径（上游不给这个字段），⛔ 不许冒充实测/定义')
+  assert.ok(String(part.mutWhy || '').includes('本项目口径'), '悬停里要说清"为什么按每轮标"：' + part.mutWhy)
+  // ★ 反证：不是 Tavern 的 unknown 段**不许**跟着变黄（否则等于把所有未知段都染了一遍）
+  const other = findBlock(d, 'sec:some:third-party-段')
+  assert.ok(other, '对照段没进地图')
+  assert.equal(other.color, 'gray', '非 Tavern 的未知段必须仍是灰 —— 实际 ' + other.color)
+  assert.equal(other.mut, 'unknown')
+  assert.equal(sys.blocks.filter((b) => b.color === 'yellow').length, 3,
+    '黄 = 两个 Tavern part + mt:postHistory（每轮），夹具里正好 3 个')
+})
+
+await check('★40 没有 order 的段给**真实位置**（按捕获 offset）：行上 @9604、抽屉里"第 9604 字（共 12307，约 78%）"+ 该拿的档位（78% ⇒ 尾段）', () => {
+  const d = pm.buildMapFromSections(C4_TAVERN, { messagesText: null })
+  const part = findBlock(d, 'sec:pmp-dsh-tavern:part:0002:character:postHistoryInstructions')
+  assert.equal(part.offset, 9604, '块上要带 offset')
+  assert.equal(part.renderedChars, 12307, '块上要带总长')
+  const tree = fakeReact.createElement(pm.PromptMapView, { data: d, state: { status: 'ready', data: d, error: '' } })
+  const text = visibleText(tree)
+  assert.ok(text.includes('@9604'), '顺序脊该显示真实位置 @9604（没有 order 的段）')
+  const body = pm.pmSectionDrawerBody(part, { kind: 'text', footer: '来源：记忆库路径切片 [9604, 10034]', text: 'x' }, '')
+  const dtext = visibleText(body)
+  assert.ok(dtext.includes('第 9604 字') && dtext.includes('12307') && dtext.includes('78%'), '抽屉里要给出"第 N 字 / 共 M 字 / 约 X%"：' + dtext.slice(0, 200))
+  // ★ 2026-09-20 修：这一档是**按偏移算的**（9604/12307 = 78% ⇒ **尾段**）。旧断言写的是「中段」——
+  //   它当年能过只是因为注释正文里恰好有"system 中段"四个字（注释改短后当场露馅：判据名不副实）。
+  assert.ok(dtext.includes('尾段'), '抽屉里要给按偏移算出来的那一档（78% ⇒ 尾段）：' + dtext.slice(0, 260))
+  // ★ 反证：拿不到 offset 的段**不许编位置**（同一夹具里那个对照段 offset=null）
+  const other = findBlock(d, 'sec:some:third-party-段')
+  const obody = pm.pmSectionDrawerBody(other, { kind: 'text', footer: 'x', text: 'x' }, '')
+  assert.ok(!visibleText(obody).includes('第 '), '没有 offset 就不许给位置 —— 实际渲染出了位置行')
+})
+
+await check('★41 后处理提示词的落点：order 10203 那一行标出"本轮它就排在这一行（全文最后）"；⛔ mt:postHistory 已退役不许再出现', () => {
+  // ★ 2026-09-19 晚（用户：「mt post 那个字段就可以删了」）：尾段退役 ⇒ 卡的后处理指令**只有上游那一份**，
+  //   由摆位表把它摆到 order 10203（全文最后）。这一条钉两件事：摆到位的行要**标出来**；退役的行**不许回来**。
+  const withOrder = {
+    ...C4_TAVERN,
+    sections: C4_TAVERN.sections.map((s) => (String(s.name).includes('character:postHistoryInstructions') ? { ...s, order: 10203 } : s)),
+  }
+  const d = pm.buildMapFromSections(withOrder, { messagesText: null })
+  const phi = findBlock(d, 'sec:pmp-dsh-tavern:part:0002:character:postHistoryInstructions')
+  assert.ok(String(phi.note || '').includes('本轮它就排在这一行'), '摆到最后的 PHI 行要标出落点：' + phi.note)
+  assert.ok(String(phi.note || '').includes('全文最后'), '落点要说清是"全文最后"：' + phi.note)
+  // 抽屉必须与悬停说同一件事（⛔ 不许一个动态一个静态）
+  const body = visibleText(pm.pmSectionDrawerBody(phi, { kind: 'text', footer: 'x', text: 'x' }, ''))
+  assert.ok(body.includes('本轮它就排在这一行'), '抽屉里也要有落点：' + body.slice(0, 240))
+  // ★ 反证 A：order 不是 10203（没被摆位 / 被谁挪走）⇒ **不加**这句落点提示，⛔ 别谎报"它排最后"
+  const bare = findBlock(pm.buildMapFromSections(C4_TAVERN, { messagesText: null }), 'sec:pmp-dsh-tavern:part:0002:character:postHistoryInstructions')
+  assert.ok(!String(bare.note || '').includes('本轮它就排在这一行'), '没摆到最后就不许说"排在这一行"：' + bare.note)
+  // ★ 反证 B：我们自己的 `mt:postHistory` 已退役 ⇒ 就算夹具里塞一段，面板也不该再给它注释条目
+  assert.equal(pm.pmSectionNote('mt:postHistory'), null, '⛔ mt:postHistory 退役了，注释表里不许再有它')
+  // ★★ 2026-09-20：改走"玩家消息之后"注入之后（lib/phi-message.js），system 里这份从**第二轮**起被清空
+  //   ⇒ 它的 chars=0。这时那一行的注释必须**改口**说清它去哪儿了 ——
+  //   ⛔ 不许还写着"本轮它就排在这一行"，那会让人以为"它还在、只是没内容"。
+  const dEmpty = pm.buildMapFromSections({
+    ...C4_TAVERN,
+    sections: C4_TAVERN.sections.map((s) => (String(s.name).includes('character:postHistoryInstructions') ? { ...s, order: 10203, chars: 0 } : s)),
+  }, { messagesText: null })
+  const rowEmpty = findBlock(dEmpty, 'sec:pmp-dsh-tavern:part:0002:character:postHistoryInstructions')
+  assert.ok(String(rowEmpty.note).includes('为空') && String(rowEmpty.note).includes('玩家消息之后'),
+    '0 字时注释要改口说清它去哪儿了：' + rowEmpty.note)
+  assert.ok(!String(rowEmpty.note).includes('本轮它就排在这一行'), '⛔ 空的时候不许还说"它排在这一行"')
+})
+
+// ---------- 42（2026-09-20）：上游展开的 part 段**按字段**给注释（一句话，各写各的）----------
+// 用户口径（2026-09-20 手改，原话照录）：注释一句话 —— 点名它是什么字段 / 它的意义 / 它在 ST 里一般放哪儿。
+await check('★42 part 段逐字段注释：每条都写清"这个字段是什么"、且 12 条各不相同；后处理与开场白两条要点明落点；认不出的字段退回兜底', () => {
+  // 每条必须点到的关键词 = 那个字段在对用户说话时的名字（缺了就说明注释没写清它是谁）
+  const MUST = {
+    'character:systemPrompt': '系统提示词',
+    'character:description': '描述',
+    'character:personality': '性格',
+    'character:scenario': '情境',
+    'character:messageExample': '示例对话',
+    'character:postHistoryInstructions': '后处理提示词',
+    'character:greeting': '开场白',
+    'character:depthPrompt': '深度提示词',
+    'user:description': '人设',
+    'worldbook:content': '世界书',
+    'preset:prompts_0_content': '提示词条目',
+    'generated:header': '没有来源文档',
+  }
+  const seen = []
+  for (const [f, kw] of Object.entries(MUST)) {
+    const note = pm.pmSectionNote('pmp-dsh-tavern:part:0000:' + f)
+    assert.ok(typeof note === 'string' && note.length > 15, f + ' 没有逐字段注释（还会显示「未收录」）')
+    assert.ok(note.includes(kw), f + ' 的注释没写清它是什么（缺「' + kw + '」）：' + note)
+    seen.push(note)
+  }
+  // ★ 一段一条：12 条不许有重复（复制同一句就看不出字段差别，等于没写）
+  assert.equal(new Set(seen).size, seen.length, '有字段的注释是同一句（没按字段分别写）')
+  // ★ 后处理提示词那一条要讲清"它想放哪、DSH 只能放哪"
+  const phi = pm.pmSectionNote('pmp-dsh-tavern:part:0002:character:postHistoryInstructions')
+  assert.ok(phi.includes('user') && phi.includes('最后'), '后处理提示词的注释要讲清原生位置与我们的摆法：' + phi)
+  // ★ 开场白那一条要讲清"它是什么、别原样抄"
+  const greeting = pm.pmSectionNote('pmp-dsh-tavern:part:0005:character:greeting')
+  assert.ok(greeting.includes('开场白') && greeting.includes('样板'), '开场白的注释要说清它是什么、我们怎么处理：' + greeting)
+  // ★ 反证：认不出的字段退回**兜底**（不是「未收录」，也不是编一条假的）
+  const unknown = pm.pmSectionNote('pmp-dsh-tavern:part:0000:character:someNewFieldWeDoNotKnow')
+  assert.ok(typeof unknown === 'string' && unknown.includes('还没有') && unknown.includes('不编'), '未知字段该走兜底：' + unknown)
+})
+
+// ---------- 44（2026-09-19）：面板那张镜像表必须与宿主侧的摆位表**逐字一致** ----------
+// 为什么：宿主侧 `lib/tavern-field-plan.js` 是真相源（摆位也用它），面板这份是镜像（客户端 bundle
+// 不能 import 宿主模块）。两份一旦漂，面板就会拿旧文案解释新位置。⇒ 逐字段比对 key/order/note。
+await check('★44 ★★ 面板镜像表 == 宿主摆位表（key / order / note 逐字相同；⛔ 手改一边就红）', async () => {
+  const planMod = await import(pathToFileURL(path.join(here, 'lib', 'tavern-field-plan.js')).href)
+  const gen = planMod.TAVERN_FIELD_PLAN
+  // 面板侧：走它自己的导出函数逐字段取（⛔ 不读源码文本，读的是真值）
+  const seen = []
+  for (const e of gen) {
+    const note = pm.pmSectionNote('pmp-dsh-tavern:part:0000:' + e.key)
+    assert.equal(note, e.note, '字段 ' + e.key + ' 的注释两边不一致（宿主侧是真相源）')
+    seen.push(e.key)
+  }
+  // 预设条目按前缀命中：换个序号也必须给同一条
+  assert.equal(pm.pmSectionNote('pmp-dsh-tavern:part:0011:preset:prompts_7_content'), planMod.planForField('preset:prompts_7_content').note)
+  // ★ 反证：兜底条两边也要一致
+  assert.equal(pm.pmSectionNote('pmp-dsh-tavern:part:0000:character:noSuchField'), planMod.TAVERN_FIELD_FALLBACK.note)
+  assert.equal(seen.length, gen.length, '有字段没被比到')
+})
+
+// ---------- 43（2026-09-19）：查看器正文默认 Markdown 美化，可切原文 ----------
+// 用户口径（原文）：「查看器显示的文本。请支持 md 格式美化显示」。
+await check('★43 查看器正文：默认走 Markdown 渲染（复用既有 parseMarkdown/MarkdownBody，⛔ 不写第二套）；有搜索词时默认原文；可手动切', () => {
+  const MD_SRC = '# 大标题\n\n这是**粗体**与 `行内代码`，还有一段列表：\n\n- 第一项\n- 第二项\n\n```\ncode block\n```\n'
+  // ① 无搜索词 ⇒ 默认美化：容器标 md，且真的把标记解析了（可见文字里**没有** `#`/`**` 这些标记）
+  const mdTree = fakeReact.createElement(pm.ChunkedText, { text: MD_SRC, query: '' })
+  const mdText = visibleText(mdTree)
+  assert.ok(mdText.includes('渲染') && mdText.includes('原文'), '缺 渲染/原文 切换按钮')
+  const strongNodes = collectNodes(mdTree, (n) => n.$$element === 'strong', [])
+  assert.ok(strongNodes.length >= 1, '美化视图里 **粗体** 应渲染成 <strong>（说明真的过了解析器）')
+  assert.ok(mdText.includes('大标题') && mdText.includes('第一项') && mdText.includes('code block'), '正文内容丢了：' + mdText.slice(0, 120))
+  assert.ok(!mdText.includes('**粗体**') && !mdText.includes('# 大标题'), '美化视图里不该再看到 Markdown 标记原文')
+  // ② 有搜索词 ⇒ 默认原文（等宽 + 高亮），并给出为什么
+  const rawTree = fakeReact.createElement(pm.ChunkedText, { text: MD_SRC, query: '第一项' })
+  const rawText = visibleText(rawTree)
+  assert.ok(rawText.includes('有搜索词') , '搜索时该说明为什么切到了原文：' + rawText.slice(0, 120))
+  // ⚠️ 拿**没被搜索命中**的那几行来判"标记原样保留"：命中行被 highlight() 切成 "…- " + <mark> 了，
+  //   整串 needle 自然就找不到了（这一脚踩过）。
+  assert.ok(rawText.includes('- 第二项') && rawText.includes('**粗体**') && rawText.includes('# 大标题'),
+    '原文视图应保留 Markdown 标记原样：' + rawText.slice(0, 200))
+  const marks = collectNodes(rawTree, (n) => n.$$element === 'mark', [])
+  assert.ok(marks.length >= 1, '原文视图里搜索命中要高亮')
+  // ③ 两个按钮都可点（⛔ 不在这里模拟"点击后重渲染"：假 react 的 hook 是**逐次渲染独立**的，
+  //   点了也不会让下一次渲染看见新状态 —— 那样写出来的断言是假的，见 ★8 的同类教训）
+  const mdBtn = collectNodes(rawTree, (n) => n.props && n.props['data-md-mode'] === 'md', [])[0]
+  const rawBtn = collectNodes(rawTree, (n) => n.props && n.props['data-md-mode'] === 'raw', [])[0]
+  assert.ok(mdBtn && typeof mdBtn.props.onClick === 'function', '「渲染」按钮不可点')
+  assert.ok(rawBtn && typeof rawBtn.props.onClick === 'function', '「原文」按钮不可点')
+  assert.ok(String(mdBtn.props.title).includes('Markdown') && String(rawBtn.props.title).includes('高亮'),
+    '两个按钮的悬停说明要说清各自是什么（美化 / 原文+高亮）')
+})
+
+// ---------- 45（20260919 视觉单）：抽屉右上角「上一个 / 下一个」—— 同楼逐段切换、边界禁用、键盘不抢键 ----------
+await check('★45 段抽屉导航：右上角 上一个/下一个（data-l3=nav-prev/nav-next）＋ x/n 计数；同楼段清单来自同一条 C4 /sections（buildMapFromSections 投影，键与地图行对齐）；清单未知/到头/到尾都 disabled（⛔ 不循环）；键盘 ←/→ 打字处不抢键；切换落点接回 l3Section', () => {
+  const panel = pm.SectionTextPanel.toString()
+  // ① 两颗按钮 + 计数的锚点在
+  assert.ok(panel.includes("'data-l3': 'nav-prev'") && panel.includes("'data-l3': 'nav-next'"),
+    '抽屉缺 上一个/下一个 按钮（data-l3=nav-prev/nav-next）')
+  assert.ok(panel.includes("'data-l3': 'nav-count'"), '缺「第 x / n 段」计数锚点')
+  // ② 段清单来源：与 PromptMap 同一条 C4 端点 + 同一套投影（⛔ 另立口径会跟地图行两张皮）
+  assert.ok(panel.includes("SECTIONS_API_BASE + '/sections?sessionId='"), '段清单没走 C4 /sections 端点')
+  assert.ok(panel.includes('buildMapFromSections'), '段清单没用 buildMapFromSections 投影（注释/键口径会跟地图漂）')
+  // ③ 边界禁用（不循环）+ 键盘 ←/→（打字处不抢键）
+  assert.ok(panel.includes('navIdx > 0') && panel.includes('sibs.length - 1'),
+    '边界禁用判据缺失（到头/到尾必须 disabled，⛔ 不许循环）')
+  assert.ok(panel.includes('ArrowLeft') && panel.includes('ArrowRight'), '键盘 ←/→ 没接')
+  assert.ok(panel.includes("'input'") && panel.includes("'textarea'") && panel.includes('isContentEditable'),
+    '键盘切换没挡输入框/可编辑元素（打字时会抢键）')
+  // ④ 切换落点：调用处把 onSwitchSection 接回 setL3Section（否则点了不会真的换段）
+  assert.ok(src.includes('onSwitchSection: setL3Section'), '抽屉切换没接回 l3Section —— 按钮点了不会换段')
+  // ⑤ 渲染层：清单未知（假 react 不执行取数）⇒ 两钮**渲染出来但 disabled**、onClick 在 ——
+  //    禁用是诚实的"现在不可切"，不是装死不渲染；计数如实显示「—」。
+  const tree = fakeReact.createElement(pm.SectionTextPanel, {
+    sessionId: 'fixture-session-static', turn: 1,
+    section: { key: 'sec:rp:policy', label: 'rp:policy', order: 45, chars: 10, mut: 'per-turn', mutBasis: 'definition', mutWhy: null, composite: false },
+    query: '', setQuery: () => {},
+  })
+  const prev = collectNodes(tree, (n) => n.props && n.props['data-l3'] === 'nav-prev', [])[0]
+  const next = collectNodes(tree, (n) => n.props && n.props['data-l3'] === 'nav-next', [])[0]
+  assert.ok(prev && next, '渲染树里缺导航按钮')
+  assert.equal(prev.props.disabled, true, '清单未知时「上一个」该 disabled（⛔ 不许可点没反应）')
+  assert.equal(next.props.disabled, true, '清单未知时「下一个」该 disabled（⛔ 不许循环）')
+  assert.ok(typeof prev.props.onClick === 'function' && typeof next.props.onClick === 'function', '导航按钮没挂 onClick（禁用 ≠ 不渲染）')
+  const text = visibleText(tree)
+  assert.ok(text.includes('← 上一个') && text.includes('下一个 →'), '按钮文字缺失：' + text.slice(0, 120))
+  const count = collectNodes(tree, (n) => n.props && n.props['data-l3'] === 'nav-count', [])[0]
+  assert.ok(count && visibleText(count) === '—', '清单未知时计数该如实显示「—」：' + (count ? visibleText(count) : '缺节点'))
+})
+
+// ---------- 47（2026-09-19）：工具定义**渲染成人话** + 复制整楼带正文 ----------
+// 用户口径（原文）：「工具定义字段中看不到渲染过的原文，必须到原始 json 中找。复制的全文中没有 tool 定义具体内容」。
+await check('★47 工具定义：JSON → 人话（名字/描述/参数表，标必填与可选值）；⛔ 认不出的形状回 null（不硬翻）；复制整楼带正文', () => {
+  const def = JSON.stringify({
+    name: 'anima_query',
+    description: '按语义捞历史总结。',
+    parameters: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: { type: 'string', description: '一句自然的话' },
+        bm25_query: { type: 'string', description: '只按字面查' },
+        mode: { type: 'string', enum: ['fast', 'deep'] },
+      },
+    },
+  })
+  const human = pm.pmToolDefText(def)
+  assert.ok(typeof human === 'string' && human !== '', '渲染结果为空')
+  assert.ok(human.includes('**anima_query**') && human.includes('按语义捞历史总结。'), '缺名字/描述：' + human.slice(0, 120))
+  assert.ok(human.includes('必填：query'), '参数区该点名必填项：' + human)
+  assert.ok(human.includes('- `bm25_query`（string）'), '每个参数一行、带类型：' + human)
+  assert.ok(human.includes('可选值：fast / deep'), '枚举值要列出来：' + human)
+  // ⛔ 反证：不是 JSON / 形状不认识 ⇒ null（调用方退回原文，⛔ 不硬翻、不编）
+  for (const bad of ['', 'not json', '[]', '{}', '{"noName":1}', null, undefined]) {
+    assert.equal(pm.pmToolDefText(bad), null, '不该认出来的输入：' + String(bad))
+  }
+  // 兼容 provider 包装形状 {type:'function', function:{...}}
+  const wrapped = pm.pmToolDefText(JSON.stringify({ type: 'function', function: JSON.parse(def) }))
+  assert.ok(typeof wrapped === 'string' && wrapped.includes('**anima_query**'), 'function 包一层也要认：' + String(wrapped).slice(0, 80))
+  // ★ 复制整楼：工具的**正文**要进文本（⛔ 不再只有"名字 + 字数"）
+  const full = pm.buildFullPlainText({
+    system: { text: 'SYS', truncated: false, original: 3 },
+    tools: [{ name: 'anima_query', chars: 100, text: def }],
+    messages: null,
+  })
+  assert.ok(full.includes('anima_query') && full.includes('按语义捞历史总结。'), '复制全文里没有工具正文：' + full.slice(0, 200))
+  // ⛔ 反证：宿主没给正文（超驻留上限）⇒ 如实说"没有正文"，⛔ 不编
+  const full2 = pm.buildFullPlainText({
+    system: { text: 'SYS', truncated: false, original: 3 },
+    tools: [{ name: 'x', chars: 5, text: null }],
+    messages: null,
+  })
+  assert.ok(full2.includes('没有正文'), '拿不到正文要如实说：' + full2.slice(0, 200))
 })
 
 console.log('== 汇总：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')

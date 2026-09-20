@@ -197,6 +197,53 @@ await check('参数卫兵：limit=0 / from=-1 / 缺 id ⇒ ok:false 且不抛', 
   })
 })
 
+/** 2026-09-20 清洗① 的夹具：一轮里夹着一条**插件注入的 user 消息**（本插件的后处理提示词）。 */
+function phiEvents() {
+  return [
+    ev('turn/start', 10, 1000, { turn: 1 }),
+    ev('user/message', 11, 1010, { content: '玩家真说的一句', source: { kind: 'user' } }),
+    ev('user/message', 12, 1020, { content: '【角色卡的后处理指令 · 由插件注入，不是玩家发言】\n破甲词在这里', source: { kind: 'plugin', plugin: 'dsh-memory-archive', form: 'phi' } }),
+    ev('assistant/message', 13, 1030, { message: { content: '角色回答' } }),
+    ev('tool/result', 14, 1040, { message: { content: '工具结果：ok' } }),
+    ev('turn/end', 15, 1050, { turn: 1, reason: { kind: 'completed' } }),
+  ]
+}
+
+await check('★ 2026-09-20：本插件注入的 user 消息**照旧在对话历史里**（用户口径：「需要给出并标红」），并逐行带出 sourcePlugin', async () => {
+  await withServer(fakeSource({ p: phiEvents }), async (base) => {
+    const list = (await getJson(base, '/api/messages?id=p')).body
+    assert.equal(list.ok, true)
+    assert.equal(list.total, 4, '注入的那条**照旧算一行**（total=4）：' + list.total)
+    assert.equal(list.skippedInjected, 0, '⛔ 不许再把它过滤掉')
+    const hit = list.messages.find((m) => m.sourcePlugin === 'dsh-memory-archive')
+    assert.ok(hit, '行列表里必须能认出它（sourcePlugin=dsh-memory-archive）—— 面板靠这个标红')
+    assert.equal(hit.playerTyped, false, '⛔ 不是玩家打的字（playerTyped 必须 false）')
+    assert.equal(hit.sourceKind, 'plugin')
+    assert.ok(String(hit.preview).includes('后处理指令'), '它的正文照旧给出来（要能看见）：' + hit.preview)
+    // 计数口径：它归 injected，⛔ 不归 player
+    assert.equal(list.counts.player, 1, 'player 只算玩家真发的那一条：' + JSON.stringify(list.counts))
+    assert.equal(list.counts.injected, 1, '它归 injected：' + JSON.stringify(list.counts))
+    // part=messages 的正文与行数组都带上它（面板的 [对话历史] 走这条）
+    const part = (await getJson(base, '/api/part?id=p&turn=1&part=messages')).body
+    assert.equal(part.ok, true)
+    assert.ok(String(part.text).includes('破甲词'), 'part=messages 的正文里要有它（要能看见）')
+    assert.ok(part.messages.some((m) => m.sourcePlugin === 'dsh-memory-archive'), 'part 的行数组也要带 sourcePlugin')
+  })
+})
+
+await check('★ 反证：source.kind 缺失（老日志）⇒ 逐行给 null，⛔ 不猜成"玩家发的"', async () => {
+  await withServer(fakeSource({ s: messyEvents }), async (base) => {
+    const list = (await getJson(base, '/api/messages?id=s')).body
+    assert.equal(list.skippedInjected, 0)
+    const row = list.messages.find((m) => m.preview.includes('三楼问题'))
+    assert.ok(row, '三楼那条（无 source）照旧在列表里')
+    assert.equal(row.sourceKind, null, '拿不到 kind ⇒ 如实 null')
+    // ⚠️ 现有实现把"user 角色但不是 kind==='user'"一律算 `false`（不是 null）——安全侧：
+    //   ⛔ 绝不把未知当成"玩家打的字"。这里只钉住那一层语义（true 才是玩家）。
+    assert.notEqual(row.playerTyped, true, '⛔ 不许当成"玩家打的字"')
+  })
+})
+
 console.log(`\nsummary: ${pass} passed, ${fails.length} failed :: _selftest-messages`)
 if (fails.length > 0) {
   console.log('failed: ' + fails.join(' | '))

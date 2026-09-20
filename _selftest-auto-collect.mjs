@@ -47,7 +47,7 @@ const { registerAutoCollect } = mod
 check('registerAutoCollect 已导出（自检注入面）', typeof registerAutoCollect === 'function')
 
 /** 假 cordis：抓下子 fiber 的 scope，并返回两个 session/event 监听器。 */
-function harness({ enabled = true, run } = {}) {
+function harness({ enabled = true, run, delay } = {}) {
   const calls = []
   const listeners = []
   const scope = {
@@ -60,9 +60,11 @@ function harness({ enabled = true, run } = {}) {
       if (run) return run(sc, sid)
       return Promise.resolve()
     },
+    // ③ 的延迟：生产 5 秒，自检台注入小值（真等 5 秒会拖慢全量门）。
+    ...delay === undefined ? {} : { compactEndDelayMs: delay },
   })
   const fire = (type, sid, data) => { for (const fn of listeners) fn({ id: sid }, { type, data: data ?? {} }) }
-  return { calls, fire, listeners }
+  return { calls, fire, listeners, enabled }
 }
 
 const statusOf = () => {
@@ -114,6 +116,43 @@ const statusOf = () => {
   h2.fire('compaction/summary', 'sid-on')
   h2.fire('turn/end', 'sid-on')
   check('4b 打开后恢复', h2.calls.length === 1, JSON.stringify(h2.calls))
+}
+
+// 4c/4d…) ★ 压缩成功后延迟收一次（2026-09-20 新增：手动 /compact 不产生 turn/end）
+//   真机实测那一串是「compaction/summary → user/message → compaction/end → command/done」，
+//   一条 turn/end 都没有 ⇒ 只靠轮末的话，手动压完就关会话 = 这份摘要永远不进库。
+{
+  writeCfg({ autoCollect: { enabled: true }, root: { sessionId: null, characterId: 'charA', playthroughId: 'ptA' } })
+  const h = harness({ delay: 30 })
+  h.fire('compaction/summary', 'sid-ce')
+  h.fire('compaction/end', 'sid-ce', {})
+  check('4c 压缩成功那一刻不立刻收（是延迟，不是同步）', h.calls.length === 0, JSON.stringify(h.calls))
+  await new Promise((r) => setTimeout(r, 150))
+  check('4d ★ 延迟到点 ⇒ 收了一次（手动压缩也能落库）',
+    h.calls.length === 1 && h.calls[0] === 'sid-ce', JSON.stringify(h.calls))
+  h.fire('turn/end', 'sid-ce')
+  check('4e 之后真有轮末也不重复收（pending 已用掉）', h.calls.length === 1, JSON.stringify(h.calls))
+
+  // 4f 反证：压缩**失败**（end 带 error）⇒ 延迟到了也不许收
+  const h2 = harness({ delay: 30 })
+  h2.fire('compaction/summary', 'sid-fail')
+  h2.fire('compaction/end', 'sid-fail', { error: 'Receiver must be an instance of class RpCompactionEngine' })
+  await new Promise((r) => setTimeout(r, 150))
+  check('4f ★ 反证：压缩失败（end 带 error）⇒ 不收', h2.calls.length === 0, JSON.stringify(h2.calls))
+
+  // 4g 轮末先到 ⇒ 延迟那一脚不再补收（同一次压缩只落一次库）
+  const h3 = harness({ delay: 80 })
+  h3.fire('compaction/summary', 'sid-both')
+  h3.fire('compaction/end', 'sid-both', {})
+  h3.fire('turn/end', 'sid-both')
+  await new Promise((r) => setTimeout(r, 200))
+  check('4g ★ 轮末先收 ⇒ 延迟器不再补收（一次压缩只落一次）', h3.calls.length === 1, JSON.stringify(h3.calls))
+
+  // 4h 没压缩过的会话：光有 compaction/end 不许收（判据仍然是 compaction/summary 那一笔）
+  const h4 = harness({ delay: 30 })
+  h4.fire('compaction/end', 'sid-none', {})
+  await new Promise((r) => setTimeout(r, 150))
+  check('4h 反证：没压过（没有 summary）⇒ 光 end 不收', h4.calls.length === 0, JSON.stringify(h4.calls))
 }
 
 // 5/6/7) 真执行器（不注入替身）跑一遍：验归属门 + 跳过/失败怎么落状态文件

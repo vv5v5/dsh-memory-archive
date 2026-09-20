@@ -85,19 +85,26 @@ const DEFAULT_ALLOW = []
  */
 const DEFAULT_KEEP_PATTERNS = Object.freeze([
   /^anima_query$/, // 戏内回忆（检索）
-  /^anima_status$/, // 记忆库状态（诊断用）
-  /^state_/, // 状态件：state_patch / state_show / state_list / state_seed
+  /^memory_write$/, // 剧情笔记写入（★ 只写本会话周目的 .roleplay-memory/，路径由插件夹死）
 ])
+// ★ 2026-09-20：四个 `state_*` 从保留名单里**去掉**了 —— 状态子系统整套剥离
+//   （`state-bridge` 子包归档、预设不再挂它）。现在**状态由周目笔记维护**：
+//   落在 `<周目>/.roleplay-memory/state.md`，模型用上面的 `memory_write` 写它。
+//   ⛔ 别再把 `state_*` 加回保留名单：那些工具已经不存在了。
 
 /**
- * ★ 明确**排除**：维护型工具不进 RP 工具面。
- * 它们的描述里本来就写着「⛔ 不是角色扮演环节，RP 会话里不要调」——
- * 放进工具面只会诱使模型误调，还白占 schema 预算。
+ * ★ 明确**排除**：维护型/诊断型工具不进 RP 工具面（2026-09-19 用户口径：
+ *   「rp 里用不到的插件也过滤掉，比如 anima_status」）。
+ * 它们的活是**维护数据库、回滚、排障**，不是扮演 —— 放进工具面只会诱使模型误调，
+ * 还白占 schema 预算。
+ * ⛔ 这里用**点名**而不是笼统的 `anima_` 前缀排除：保留名单已经逐条点了名，
+ *   排除名单只该是"明确知道 RP 不要"的那几个 —— 免得日后新工具一上线就被前缀误伤。
  * （它们仍在**数据库/维护会话**里可用：那里不是 RP 预设。）
  */
 const DEFAULT_DROP_PATTERNS = Object.freeze([
-  /^anima_ingest$/,
-  /^anima_forget$/,
+  /^anima_ingest$/, // 维护：把归档灌进向量库
+  /^anima_forget$/, // 维护：删记忆
+  /^anima_status$/, // 诊断：记忆库/索引状态（RP 里查了也没人能读，只会走戏）
 ])
 
 /**

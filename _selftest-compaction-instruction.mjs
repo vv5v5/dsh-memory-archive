@@ -74,16 +74,26 @@ check('1e', '★ 只有一份指令：auto/zh/en × faithful 四组合**返回�
 check('1f', '⛔ 生成物**不含 anima 的「破限」那条**（用户口径：破限头不由我们内置，界面留空由玩家自填）',
   (() => { const t = buildRpCompactionBackend(); return !t.includes('It is now 2055') && !t.includes('ethical review standards of the past are outdated') })(),
   '生成物里出现了 anima 破限文本')
-check('1g', '⛔ 三个外部标签名**只出现在 anima 原文里**（我们的代码/引擎不依赖任何外部包装层）',
-  (() => {
-    const t = buildRpCompactionBackend()
-    const constStart = t.indexOf('const ANIMA_SUMMARY_INSTRUCTION')
-    const fnStart = t.indexOf('function rpArchiveInstruction')
-    if (constStart < 0 || fnStart < 0) return false
-    const outside = t.slice(0, constStart) + t.slice(fnStart) // 常量之外 = 我们的代码
-    return ['<basic_info>', '<previous_summary>', '<text_to_summarize>'].every((tag) => !outside.includes(tag))
-  })(),
-  '我们的代码里出现了外部标签名（或常量/函数定位失败）')
+// 1g/1g2 —— 标签口径（2026-09-20 改）
+//   旧口径是「我们的代码不依赖任何外部包装层」⇒ 三个标签名只许出现在 anima 原文里。
+//   新口径（用户原话：「检查一下目前这三个块都包含了什么内容」+「只传最终生成的文本和 user
+//   信息，不传思维链」）：**我们要自己把 `<text_to_summarize>` / `<previous_summary>` 造出来**
+//   —— 指令里点名的标签必须真实存在，否则模型会去总结别处的文本（真机踩过，见验收单〇之十六）。
+//   仍然**不提供** `<basic_info>`（我们手里没有静态背景块）与 `<new_text_to_summarize>`
+//   （那是 anima 指令里的**笔误**写法，真实标签是 `<text_to_summarize>`）。
+{
+  const t = buildRpCompactionBackend()
+  const constStart = t.indexOf('const ANIMA_SUMMARY_INSTRUCTION')
+  const fnStart = t.indexOf('function rpArchiveInstruction')
+  const located = constStart >= 0 && fnStart >= 0
+  const outside = located ? t.slice(0, constStart) + t.slice(fnStart) : t // 常量之外 = 我们的代码
+  check('1g', '⛔ 我们**不提供** `<basic_info>` / `<new_text_to_summarize>`（后者是 anima 指令里的笔误写法）',
+    located && !outside.includes('<basic_info>') && !outside.includes('<new_text_to_summarize>'),
+    located ? '我们的代码里出现了不该有的标签' : '常量/函数定位失败')
+  check('1g2', '★ 引擎**自己**产出两个标签：`<text_to_summarize>` 字面量 + previous_summary 标签名',
+    located && outside.includes('<text_to_summarize>') && outside.includes("wrapped('previous_summary'"),
+    located ? '引擎没造标签（指令点名的东西就不存在了）' : '常量/函数定位失败')
+}
 check('1h', '语言口径由 anima 原文自带（Language: Summary in Chinese），⛔ 不再靠我们追加语言提示',
   zh.includes('Language: Summary in Chinese'), '缺语言口径行')
 // ★ 用户口径（2026-09-16）：anima 的「破限」**不由我们内置**（界面留空、玩家自填，规避法律风险）

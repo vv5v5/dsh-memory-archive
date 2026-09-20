@@ -155,7 +155,7 @@ await check('⑧ trace 合同 ⇒ 必须说清"组合器/切模式这两条路�
     contract: { id: 'trace', known: true, reason: "capabilities.contract === 'prompt-trace-primitives'", label: 'trace（只读补集）', detail: '这台 Tavern 用的是 prompt-trace 合同（capabilities 自述 composerRegistry:false）…', composerUsable: false, tailServiceUsable: false, modeSwitchable: false },
     capabilities: { apiVersion: 3, contract: 'prompt-trace-primitives', composerRegistry: false, officialSections: true, sourceMapping: 'section-contributors' },
     composer: { enabled: true, owner: 'dsh-memory-archive', usable: false, registered: false, owners: [], needsHostRestart: false, note: '这条路在这台 Tavern 上**不存在**：trace 合同没有组合器注册表。⛔ 与配置无关，**重启也不会变好**。' },
-    tail: { enabled: true, name: 'mt:postHistory', order: 10203, registered: true, usable: false, last: { reason: 'no-tavern-service', source: null, chars: 0 } },
+    parts: { registered: true, armed: false, reason: 'ok', planLoaded: true, planVersion: 1, placedTotal: 7, lastPlaced: { placed: [{ key: 'character:postHistoryInstructions', order: 10203 }], fallback: 0 }, lastSeen: { total: 27, parts: 7, placed: 7, fallback: 0 } },
     replaceGuard: { presetMode: 'append', ourSections: ['state:card'], atRisk: false, note: '预设是 append 模式 ⇒ Tavern 不会滤掉我们的段' },
     mode: null, sources: null,
     assemblies: { ok: true, sessionId: 's', total: 2, storage: { maxRecords: 256 }, records: [{ id: 'legacy:7', legacy: true, turn: 7, step: 0, sectionCount: null, status: 'legacy-metadata-only' }, { id: 'r1', legacy: false, turn: 8, step: 0, sectionCount: 12, status: 'request-observed' }] },
@@ -164,7 +164,9 @@ await check('⑧ trace 合同 ⇒ 必须说清"组合器/切模式这两条路�
   assert.match(t, /v3 合同=trace（只读补集）/)
   assert.match(t, /组合器=这条路在这台 Tavern 上不存在/)
   assert.doesNotMatch(t, /重启宿主/, '⛔ trace 合同下不许再给"重启宿主"——那是无效指引')
-  assert.match(t, /末尾段=.*⚠ 它依赖的 Cordis 服务在这台 Tavern 上不存在/)
+  // ★ 2026-09-19：`末尾段` 行**退役**（mt:postHistory 已删）⇒ 换成「卡字段摆位」那一行
+  assert.doesNotMatch(t, /末尾段=/, '⛔ 尾段已退役，不该再有末尾段行')
+  assert.match(t, /卡字段摆位=/, '缺「卡字段摆位」行')
   assert.match(t, /历史装配=2 条 \/ 上限 256/)
   assert.match(t, /段数 12/)
   // 反证：mode 字段是 null（trace 合同宿主根本不给它），所以不该出现 mode 行
@@ -244,55 +246,50 @@ await check('⑩ ★ 合同认不准 ⇒ 明确警告"下面的状态一律不�
   assert.match(cm.value, /无法判定/)
 })
 
-await check('⑩b ★ 带外填充器必须可见：没接线时要说明"trace 下 tail 会一直空"，⛔ 不许静默', () => {
-  const TRACE = { id: 'trace', known: true, label: 'trace（只读补集）', detail: 'd', composerUsable: false, tailServiceUsable: false, modeSwitchable: false }
-  const baseT = { ok: true, tavern: { status: 200 }, contract: TRACE, capabilities: { apiVersion: 3 }, composer: { usable: false, owners: [] }, mode: null, sources: null }
-  const on = Object.assign({}, baseT, { sourcesFiller: { registered: true, reason: 'ok', port: 3080, attempts: 2, cached: 2, skipped: 0, failures: 0, cache: { size: 2, maxSessions: 32, ttlMs: 60000 } } })
-  const onLine = lines(on).find((l) => l.label === '带外填充器')
-  assert.ok(onLine, '缺带外填充器行')
+await check('⑩b ★ 卡字段摆位必须可见：接线/未接线都要说清，且报出"上游解出几段、我们摆了几段"', () => {
+  const base = { ok: true, tavern: { status: 200 }, capabilities: { apiVersion: 3 }, composer: { usable: false, owners: [] }, mode: null, sources: null }
+  const on = Object.assign({}, base, {
+    parts: {
+      registered: true, armed: false, reason: 'ok', planLoaded: true, planVersion: 1, placedTotal: 7,
+      lastPlaced: { placed: [{ key: 'character:description', order: 12 }, { key: 'character:postHistoryInstructions', order: 10203 }], fallback: 0 },
+      lastSeen: { total: 27, parts: 7, placed: 7, fallback: 0, summary: 'x' },
+    },
+  })
+  const onLine = lines(on).find((l) => l.label === '卡字段摆位')
+  assert.ok(onLine, '缺「卡字段摆位」行')
   assert.notEqual(onLine.kind, 'warn')
   assert.match(onLine.value, /已接线/)
-  assert.match(onLine.value, /回环端口 3080/)
-  assert.match(onLine.value, /取到 2 次/)
-  assert.match(onLine.value, /缓存 2\/32 个会话 · TTL 60000ms/)
-  // 反证：没接线 ⇒ warn，且说清后果
-  const off = Object.assign({}, baseT, { sourcesFiller: { registered: false, reason: 'plugin-failed:boom', port: null, attempts: 0, cached: 0, skipped: 0, failures: 0, cache: null } })
-  const offLine = lines(off).find((l) => l.label === '带外填充器')
+  assert.match(onLine.value, /累计摆 7 段/)
+  assert.match(onLine.value, /上轮 7 个上游段，摆了 7 个/)
+  assert.match(onLine.value, /character:description→12/, '摆位摘要要逐字段给出"' + '字段→order' + '"')
+  // 反证：没接线 ⇒ warn，并说清后果（上游的段留在它给的位置）
+  const off = Object.assign({}, base, { parts: { registered: false, armed: false, reason: 'threw:boom', planLoaded: true, placedTotal: 0, lastPlaced: null, lastSeen: null } })
+  const offLine = lines(off).find((l) => l.label === '卡字段摆位')
   assert.equal(offLine.kind, 'warn')
   assert.match(offLine.value, /未接线/)
-  assert.match(offLine.value, /plugin-failed:boom/)
-  // ★ 反证：**trace 合同**下拿不到端口才是问题（那是唯一真的需要端口的情形）
-  const noPort = Object.assign({}, baseT, { sourcesFiller: { registered: true, reason: 'ok', port: null, attempts: 1, cached: 0, skipped: 0, failures: 1, cache: { size: 0, maxSessions: 32, ttlMs: 60000 } } })
-  assert.match(lines(noPort).find((l) => l.label === '带外填充器').value, /⚠ 拿不到 webServer.port/)
-  // ★ 反证：**composer 合同**下端口为空是**正常**（那条路根本不用端口）⇒ ⛔ 不许报警
-  const COMPOSER = { id: 'composer', known: true, label: 'composer（可接管）', detail: 'd', composerUsable: true, tailServiceUsable: true, modeSwitchable: true }
-  const composerNoPort = Object.assign({}, baseT, {
-    contract: COMPOSER, composer: { usable: true, owners: [] },
-    sourcesFiller: { registered: true, reason: 'ok', port: null, attempts: 3, cached: 0, skipped: 3, failures: 0, cache: { size: 0, maxSessions: 32, ttlMs: 60000 } },
+  assert.match(offLine.value, /threw:boom/)
+  // 反证：摆位表模块没加载 ⇒ 要显式说（那是"位置全都不管了"）
+  const noPlan = Object.assign({}, base, { parts: { registered: false, armed: true, reason: 'plan-module-missing', planLoaded: false, placedTotal: 0 } })
+  assert.match(lines(noPlan).find((l) => l.label === '卡字段摆位').value, /⚠ 摆位表模块没加载/)
+  // 反证：有字段没进表 ⇒ 如实报个数（⛔ 不许静默走兜底）
+  const fb = Object.assign({}, base, {
+    parts: { registered: true, armed: false, reason: 'ok', planLoaded: true, placedTotal: 3, lastPlaced: { placed: [], fallback: 2 }, lastSeen: { total: 20, parts: 3, placed: 3, fallback: 2 } },
   })
-  const cnLine = lines(composerNoPort).find((l) => l.label === '带外填充器')
-  assert.doesNotMatch(cnLine.value, /⚠ 拿不到 webServer.port/, '⛔ composer 合同下不该报"拿不到端口"')
-  assert.doesNotMatch(cnLine.value, /取到 3 次/, '⛔ 空转不许算成"取到"')
-  assert.match(cnLine.value, /空转 3 次/, '空转要单独如实说')
+  assert.match(lines(fb).find((l) => l.label === '卡字段摆位').value, /2 个字段没进表/)
 })
 
-await check('⑩c ★ 摘除器 armed（等第一个会话事件）是**正常待启用**，⛔ 不许渲染成警告', () => {
-  const base = { ok: true, tavern: { status: 200 }, capabilities: { apiVersion: 3 }, composer: { usable: true, owners: [] }, mode: null, sources: null }
-  const armed = Object.assign({}, base, { phiStrip: { registered: false, armed: true, reason: 'armed', tailGated: true, strippedTotal: 0, last: null, lastSeen: null } })
-  const armedLine = lines(armed).find((l) => l.label === '重复PHI')
-  assert.ok(armedLine, '缺重复PHI行')
+await check('⑩c ★ 摆位 armed（等第一个会话事件）是**正常待启用**，⛔ 不许渲染成警告', () => {
+  const base = { ok: true, tavern: { status: 200 }, capabilities: { apiVersion: 3 }, composer: { usable: false, owners: [] }, mode: null, sources: null }
+  const armed = Object.assign({}, base, { parts: { registered: false, armed: true, reason: 'armed', planLoaded: true, placedTotal: 0, lastPlaced: null, lastSeen: null } })
+  const armedLine = lines(armed).find((l) => l.label === '卡字段摆位')
+  assert.ok(armedLine, '缺「卡字段摆位」行')
   assert.notEqual(armedLine.kind, 'warn', '⛔ armed 被渲染成警告了（那会把正常待启用说成故障）')
   assert.match(armedLine.value, /待启用/)
   // 反证：真没接线时**必须**是 warn
-  const off = Object.assign({}, base, { phiStrip: { registered: false, armed: false, reason: 'module-missing', tailGated: true, strippedTotal: 0, last: null, lastSeen: null } })
-  const offLine = lines(off).find((l) => l.label === '重复PHI')
+  const off = Object.assign({}, base, { parts: { registered: false, armed: false, reason: 'install-module-missing', planLoaded: true, placedTotal: 0 } })
+  const offLine = lines(off).find((l) => l.label === '卡字段摆位')
   assert.equal(offLine.kind, 'warn')
   assert.match(offLine.value, /未接线/)
-  // 反证：已接线 + 摘过 ⇒ 不是 warn，且报出摘了几次
-  const on = Object.assign({}, base, { phiStrip: { registered: true, armed: false, reason: 'ok', tailGated: true, strippedTotal: 2, last: { removed: [{ characters: 90 }] }, lastSeen: { total: 35, parts: 8, phiParts: 1 } } })
-  const onLine = lines(on).find((l) => l.label === '重复PHI')
-  assert.notEqual(onLine.kind, 'warn')
-  assert.match(onLine.value, /累计摘 2 段/)
 })
 
 // ───────────────────────────── assemblyLines（单条装配记录） ─────────────────────────────

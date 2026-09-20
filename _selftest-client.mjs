@@ -16,7 +16,7 @@
  *            （无 dangerouslySetInnerHTML；md 只用于正文不用于 system/tools/完整/状态；
  *            源列表无「会话搜索」、仍有 摘要/原文/状态；「阅读源」标签不再出现；
  *            CSS 兼容备忘两处逐字）。
- *   第 5 步（20260919 大纲单）：工作区四档逐字（摘要/原文/状态/剧情大纲）+ ★防剧透门
+ *   第 5 步（20260919 大纲单）：工作区档位逐字（摘要/原文/剧情大纲/向量）+ ★防剧透门
  *            （确认控件在、未确认路径零取数、判据灵敏度自证、"渲染门控与发起请求是同一个
  *            条件"的结构断言、大纲字面量全源码只在门后出现一次）。
  *
@@ -215,18 +215,32 @@ await check('inject 名单的每个成员在假 ctx 上都有真实载体', () =
   }
 })
 
-await check('★ D 单：apply(fakeCtx) 不抛；搜索类阅读源已删 ⇒ 不再取 sessions 能力，inject 恰好 ["slots"]', () => {
+await check('★ D 单 + 20260919：apply(fakeCtx) 不抛；inject 恰好 ["slots","sessions"]（sessions 是**跟随当前会话**用的，不是搜索类阅读源回来了）', () => {
   mod.apply(ctxLike)
-  assert.equal(gotNames.includes('sessions'), false, 'sessions 能力已随搜索类阅读源移除，不该再 ctx.get')
-  assert.deepEqual(mod.inject, ['slots'])
+  assert.deepEqual(mod.inject, ['slots', 'sessions'])
 })
 
-await check('★ 席位契约（20260918 F 单 2→3；20260919 加 OOC 前缀席 3→4）：恰好 4 个席位 = sidebar ×2（原样未动）+ conversation.input.right ×2（{ooc-quote,90} + {ooc-prefix,89}）', () => {
+await check('★ 面板跟随（20260919）：查到会话的周目才改绑定；查不到一个字不改；本次打开不重复写；读的端点只此一处', () => {
+  assert.ok(src.includes('function ArchivePanel({ onClose, sessions }) {'), '面板要收 sessions prop（跟随要知道当前会话）')
+  assert.ok(src.includes('sessions: ctx.sessions'), '挂载面板时要把 ctx.sessions 传进去')
+  assert.ok(src.includes("data.source !== 'session') return"), '⛔ 只有在 source===\'session\' 时才许动（查不到保持原绑定）')
+  assert.ok(src.includes('followRef.current === key'), '本次打开跟过就不再写（reload 会让 effect 再跑一遍，⛔ 不许来回写）')
+  assert.ok(src.includes("{ root: { characterId: char, playthroughId: play } }"), '改的是**绑定**（config.root），不是只改显示')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  const hits = code.match(/\/playthrough\/for-session/g) || []
+  assert.equal(hits.length, 1, '该端点字面量应恰好出现 1 次（面板只该有一个地方问它），实际 ' + hits.length)
+  assert.ok(src.includes('mutateJson(HOST_API_BASE + \'/config\', \'PUT\''), '改绑定走既有的 /config PUT（⛔ 不另开写口）')
+})
+
+await check('★ 席位契约（20260918 F 单 2→3；20260919 加 OOC 前缀席 3→4、收纳提示席 4→5）：恰好 5 个席位 = sidebar ×2（原样未动）+ conversation.input.right ×2 + shell.overlay ×1', () => {
   // 为什么改 4：F 单「OOC 划词质疑」加第 3 席；20260919 又在同一座位加了「OOC」前缀席（一键标场外）。
   //   既有两席一字未动；这条断言仍钉死**全插件席位总数恰好 N**（不是放宽成"至少 2"），只是 3 → 4。
-  assert.equal(registeredList.length, 4, '席位数不是 4：' + registeredList.length)
+  assert.equal(registeredList.length, 5, '席位数不是 5：' + registeredList.length)
   const ids = registeredList.map((r) => r.meta.id).sort()
-  assert.deepEqual(ids, ['agent-editor', 'memory-archive', 'ooc-prefix', 'ooc-quote'])
+  assert.deepEqual(ids, ['agent-editor', 'dma-ingest-toast', 'memory-archive', 'ooc-prefix', 'ooc-quote'])
+  const overlay = registeredList.filter((r) => r.meta.name === 'shell.overlay')
+  assert.equal(overlay.length, 1, 'shell.overlay 应恰好 1 席（frame-wide 浮层）')
+  assert.equal(overlay[0].meta.id, 'dma-ingest-toast', '收纳提示席 id 应为 dma-ingest-toast')
   const sidebar = registeredList.filter((r) => r.meta.name === 'sidebar.footer.action')
   assert.equal(sidebar.length, 2, 'sidebar 席位数不是 2')
   assert.deepEqual(sidebar.map((r) => r.meta.id).sort(), ['agent-editor', 'memory-archive'], '既有两席的 id 集合不许变')
@@ -240,6 +254,22 @@ await check('★ 席位契约（20260918 F 单 2→3；20260919 加 OOC 前缀�
   for (const s of [quote, prefix]) {
     assert.equal(['memory-archive', 'agent-editor', 'restart-host'].includes(s.meta.id), false, '⛔ 不许占用既有 id')
   }
+})
+
+await check('★ 收纳提示席（20260919）：注册在 shell.overlay、读 /anima/ingest-state **恰好一次**、空闲时不渲染、卸载即停', () => {
+  assert.ok(src.includes('function IngestToast()'), '缺 IngestToast 组件')
+  assert.ok(
+    /ctx\.slots\.inject\('shell\.overlay', \(\) => ctx\.slots\.register\(\s*\{ name: 'shell\.overlay', id: 'dma-ingest-toast' \}/.test(src),
+    'shell.overlay 席位注册形状不对（id 必须新开一个，⛔ 不许顶掉别人的条目）',
+  )
+  // ⚠️ 本检查在 `outlineCodeOnly` 之前跑（那个常量在后面才声明）⇒ 这里自己剥一遍注释：
+  //    数端点字面量必须看**活代码**，注释里提到它不算第二次取数。
+  const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  const hits = codeOnly.match(/\/anima\/ingest-state/g) || []
+  assert.equal(hits.length, 1, '该端点字面量应恰好出现 1 次（面板只该有一个读它的地方），实际 ' + hits.length)
+  assert.ok(src.includes("if (!running && !finishedRecently) return null"), '空闲时必须不渲染（不给界面留空壳）')
+  assert.ok(src.includes('clearInterval(timer)'), '卸载必须停轮询（⛔ 不许留着定时器）')
+  assert.ok(src.includes('INGEST_TOAST_POLL_MS = 5000'), '轮询间隔应为 5s（低频；这是个提示条，不值得更勤）')
 })
 
 await check('★ settings.section 一个都没有（注入与注册两侧都为零）', () => {
@@ -532,7 +562,8 @@ await check('★ 读视图（工作区）：顶栏=当前根人话名+提示词+
     const srcTabs = []
     collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && typeof n.props.children === 'string', srcTabs)
     const srcLabels = srcTabs.map((n) => n.props.children)
-    for (const t of ['摘要', '原文', '状态']) assert.ok(srcLabels.includes(t), '缺阅读源 tab: ' + t + '（实有: ' + srcLabels.join(',') + '）')
+    // ★ 2026-09-20：「状态」档已摘除（用户口径「记忆库里的状态面板可以摘除」）
+    for (const t of ['摘要', '原文']) assert.ok(srcLabels.includes(t), '缺阅读源 tab: ' + t + '（实有: ' + srcLabels.join(',') + '）')
     assert.equal(srcLabels.includes('会话搜索'), false, '「会话搜索」源应已移除')
     assert.equal(visibleText(tree).includes('阅读源'), false, '「阅读源」标签应已撤掉（渲染断言）')
     const scrollers = []
@@ -617,7 +648,8 @@ await check('读视图（宿主 API 失败）：说明红字在，工作区阅�
     const tree = fakeReact.createElement(comp, { wide: true })
     const s = JSON.stringify(tree)
     assert.ok(s.includes('宿主 API 不可用'), '缺宿主不可用说明')
-    for (const t of ['摘要', '原文', '状态']) assert.ok(s.includes(t), '缺阅读源: ' + t)
+    // ★ 2026-09-20：「状态」档已摘除
+    for (const t of ['摘要', '原文']) assert.ok(s.includes(t), '缺阅读源: ' + t)
     assert.equal(s.includes('会话搜索'), false, '「会话搜索」源应已移除（D 单）')
   } finally { fakeReact.__setPreset(null) }
 })
@@ -918,6 +950,15 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     ['GET', '/auto-collect'],
     // 「角色扮演记忆库」只读出口（20260919）：同一档的上一块 —— 清单（不带 ?file=）与单份正文各一次调用
     ['GET', '/playthrough/rp-memory'],
+    // 「打开文件夹」（2026-09-20）：剧情大纲档那一颗按钮 —— 动作型，POST；⛔ 客户端不传路径
+    ['POST', '/playthrough/reveal'],
+    // 「后台收纳状态」只读出口（20260919）：面板 shell.overlay 的提示条读它（dsh-anima-rag 落的文件）
+    ['GET', '/anima/ingest-state'],
+    // 「这个会话属于哪个周目」只读查询（20260919）：面板**跟随当前会话**靠它（查到就把绑定改过去）
+    ['GET', '/playthrough/for-session'],
+    // 「向量」页签（2026-09-20）：状态只读 + 动作请求单（动作由按会话挂载的 dsh-anima-rag 执行）
+    ['GET', '/vector/state'],
+    ['POST', '/vector/action'],
     // v3 消费端（2026-09-16）：维护抽屉的「v3 外部组合」面板读投影 + 两个显式动作
     // （面板那条 PUT /config 走的是表里已有的 ['PUT','/config']，这里两条是新端点）
     ['GET', '/v3'],
@@ -1099,7 +1140,8 @@ await check('★ §2.6 的 12 条版块注释逐字进源码（title 悬停含�
     '部署/agent 配置里的人设与定位（这个 agent 是谁、怎么说话）。',
     '当前所选预设的固定段：ST 预设归一化后的系统提示内容（身份与文风主要来自这里）。',
     'RP 模式策略段。默认只说明“高风险操作被锁”，不是扮演身份；身份与文风仍来自 preset / 角色卡。',
-    'L1 状态卡：由副 LLM 每轮记账的当前状态（数值/分组/到期），让模型不必从正文里重算。',
+    // ★ 2026-09-20：这条注释改成"已退役"口径（状态子系统整套剥离）—— 断言跟着文案走。
+    '【已退役 · 2026-09-20】原为 L1 状态卡（副 LLM 每轮记账的数值/分组/到期）；现在状态改由周目笔记里的 `state.md` 维护。',
     'L2 检索记忆：从历史里检索出来的摘录（<recalledMemories>）与近场历史（<immediateHistory>）。只对 RP 会话注入。',
     '工具的使用说明与纪律，和下面 tools 里的定义配套。',
     '被压缩出上下文的那段历史（checkpoint）。前言由官方 frameSummary() 拼出，作用是告诉模型“这是既成背景，别复述”。',
@@ -1248,7 +1290,7 @@ await check('★ D 单 parseMarkdown 健壮性：未闭合围栏 / 落单 ** / �
   assert.deepEqual(md(''), [], '空串应给空块数组')
 })
 
-await check('★ D 单静态：无 dangerouslySetInnerHTML；md 只用于正文（摘要/原文/事件/messages 视图），system/tools/完整/状态 保持原样', () => {
+await check('★ D 单静态：无 dangerouslySetInnerHTML；md 只用于正文（摘要/原文/事件/messages 视图），system/tools 保持原样；★ 2026-09-20「状态」档已摘除', () => {
   assert.equal(src.includes('dangerouslySetInnerHTML'), false, '出现 dangerouslySetInnerHTML')
   const fnBody = (name) => {
     const i = src.indexOf('function ' + name + '(')
@@ -1266,7 +1308,10 @@ await check('★ D 单静态：无 dangerouslySetInnerHTML；md 只用于正文�
   const part = fnBody('PromptPartView')
   assert.ok(part.includes('ViewerMessagesBody'), 'messages 视图应经 ViewerMessagesBody')
   assert.equal(part.includes('MarkdownBody'), false, 'PromptPartView 里不得直接用 MarkdownBody（只能经 messages 入口）')
-  assert.equal(fnBody('StateFlow').includes('MarkdownBody'), false, '状态源是 JSON，保持等宽原样')
+  // ★ 2026-09-20：「状态」档整个摘除（用户口径：「记忆库里的状态面板可以摘除」）
+  //   ⇒ 原来那条"状态源是 JSON、不 md 化"的断言跟着撤；改成"它不许回来"。
+  //   ⚠️ 这里**不能**用上面那个 `fnBody`（它自带"函数必须存在"的断言，会以"缺函数"名义炸）。
+  assert.equal(src.includes('function StateFlow('), false, '⛔ StateFlow 已摘除，不该再出现')
   assert.equal(src.includes('ProseBody'), false, '被 MarkdownBody 取代的旧正文组件应删干净')
 })
 
@@ -1289,7 +1334,8 @@ await check('★ D 单：搜索类阅读源删干净（组件/字面量/注入�
     const tree = fakeReact.createElement(comp, { wide: true })
     const text = visibleText(tree)
     assert.equal(text.includes('阅读源'), false, '「阅读源」标签还在（渲染断言）')
-    for (const t of ['摘要', '原文', '状态']) assert.ok(text.includes(t), '缺阅读源: ' + t)
+    // ★ 2026-09-20：「状态」档已摘除
+    for (const t of ['摘要', '原文']) assert.ok(text.includes(t), '缺阅读源: ' + t)
   } finally { fakeReact.__setPreset(null) }
 })
 
@@ -1506,9 +1552,10 @@ await check('★ 宿主侧（lib/index.js）：ENDPOINTS 有 /agent 与 /agent/c
   }
 })
 
-await check('★ skill 文档：合并后的 rp-assistant 在，且"结构地图 / 先讲作用再问意见 / 白话纪律 / 边界 / 只做选择题"齐', () => {
+await check('★ skill 文档：唯一的 rp-assistant 在，且"结构地图 / 先讲作用再问意见 / 白话纪律 / 边界 / 只做选择题 / 资料指路"齐', () => {
   const here2 = here
-  const rp = readFileSync(path.join(here2, 'skill', 'rp-assistant.md'), 'utf8')
+  const skillDir = path.join(here2, 'skill', 'rp-assistant')
+  const rp = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8')
   for (const t of [
     '读这段的 AI',
     '读者是玩家本人，不是开发者',
@@ -1516,40 +1563,58 @@ await check('★ skill 文档：合并后的 rp-assistant 在，且"结构地图
     // —— 合并进来的两条腿：演得好不好 + 装得对不对
     '演得好不好',
     '装得对不对',
-    // —— ★ 本次新增的核心：结构地图（每部分的作用 / 怎么改 / 改它的风险）
+    // —— 结构地图（每部分的作用 / 怎么改 / 改它的风险）
     '结构地图：每一部分是什么、怎么改、改它的风险',
     '怎么改',
     '⚠ 改它的风险',
-    // —— ★ 本次新增的核心：结构化优化（先讲作用，再问意见）
+    // —— 结构化优化（先讲作用，再问意见）
     '先讲作用，再问意见',
     '逐块讲作用',
     '一次讲一块',
     '问意见（每题四件事，缺一不可）',
-    // —— 合并后的流程与边界
+    // —— 流程与边界
     '只读体检',
     '先干跑给你看',
     '我的边界（这几条不松口）',
     '一旦说过话', // 会话建立后不能换设定 —— 必须提前讲
     '收纳 / 折叠', // 折叠不可逆 —— 必须提前讲
-    '同一份设定被注入两遍', // 两处都注入 = 两份矛盾设定（合并带来的新风险条目）
+    '同一份设定被注入两遍', // 两处都注入 = 两份矛盾设定
     '翻译对照表',
     'TECH_JARGON',
     '提示词查看器', // 让玩家能亲眼核对结构，而不是只信转述
-    'config-kb', // 指向知识库
-    // —— 旧的两个 skill 名字不许再留在这份正文里（否则模型会去找不存在的 skill）
-    'character-card-assistant',
-    'config-assistant',
+    // —— ★★ 2026-09-20 重塑：唯一一个 skill + 自带资料指路（§六）
+    '资料去哪儿查',
+    '../README.md', // 本插件 README（包内相对路径，不复制）
+    'refs/dsh-tavern.md',
+    'refs/dsh-anima-rag.md',
+    'refs/dsh-internals.md',
   ]) {
-    const shouldBeAbsent = t === 'character-card-assistant' || t === 'config-assistant'
-    if (shouldBeAbsent) assert.equal(rp.includes(t), false, 'rp-assistant.md 不该再提旧 skill 名: ' + t)
-    else assert.ok(rp.includes(t), 'rp-assistant.md 缺: ' + t)
+    assert.ok(rp.includes(t), 'rp-assistant/SKILL.md 缺: ' + t)
   }
-  // 旧的两份正文必须已删（合并后不许留孤儿文件）
-  for (const gone of ['character-card-assistant.md', 'config-assistant.md']) {
-    assert.equal(existsSync(path.join(here2, 'skill', gone)), false, 'skill/ 下还留着已合并的旧文件: ' + gone)
+  // ⛔ 旧 skill 名不许再出现在正文里（否则模型会去找不存在的 skill）
+  for (const goneName of ['character-card-assistant', 'config-assistant', 'config-kb']) {
+    assert.equal(rp.includes(goneName), false, 'SKILL.md 不该再提旧 skill 名: ' + goneName)
   }
-  // 知识库必须在（模型按需加载）
-  assert.ok(readFileSync(path.join(here2, 'skill', 'kb-dsh-preset-architecture.md'), 'utf8').length > 3000, '知识库太短')
+  // ⛔ 已合并/重排的旧正文文件必须都不在了（不留孤儿）
+  for (const gone of [
+    'character-card-assistant.md', 'config-assistant.md',
+    'rp-assistant.md', 'kb-dsh-preset-architecture.md',
+  ]) {
+    assert.equal(existsSync(path.join(here2, 'skill', gone)), false, 'skill/ 下还留着旧文件: ' + gone)
+  }
+  // 资料必须在（模型按需读）：三份 refs 都够长、且各自标了来源
+  const refs = [
+    ['dsh-internals.md', 3000], ['dsh-tavern.md', 3000], ['dsh-anima-rag.md', 1000],
+  ]
+  for (const [file, min] of refs) {
+    const body = readFileSync(path.join(skillDir, 'refs', file), 'utf8')
+    assert.ok(body.length > min, `资料 ${file} 太短（${body.length}）`)
+  }
+  // ★ 内部事实那份要带上 2026-09-20 真机踩出来的两条硬事实（防回流：删了就红）
+  const internals = readFileSync(path.join(skillDir, 'refs', 'dsh-internals.md'), 'utf8')
+  for (const t of ['不许用哈希私有成员', 'buildSummarizationInput', 'bm25', 'pt:<周目']) {
+    assert.ok(internals.includes(t), 'dsh-internals.md 缺: ' + t)
+  }
 })
 
 // ---------- 20260913 三级导航（C 单）：静态 + 渲染断言 ----------
@@ -2313,12 +2378,12 @@ function outlineArrowBody(code, marker) {
 // 已知代价：带 `://` 的行后半截会被行注释剥法吃掉，只会漏报不会误报，对本块判据无影响）
 const outlineCodeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
 
-await check('★ 大纲·四档逐字（验收1）：computeSources 工作区返回恰好 [摘要, 原文, 状态, 剧情大纲]（逐字+渲染顺序）；会话模式无此档', () => {
+await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返回恰好 [摘要, 原文, 剧情大纲, 向量]（★ 2026-09-20：摘「状态」档、加「向量」档）；会话模式无此档', () => {
   const cs = outlineFnBody(src, 'computeSources')
   assert.ok(cs, '缺 computeSources 函数')
   assert.ok(
-    cs.includes("return [['summaries', '摘要'], ['floors', '原文'], ['state', '状态'], ['outline', '剧情大纲']]"),
-    '四档返回不是逐字约定形状',
+    cs.includes("return [['summaries', '摘要'], ['floors', '原文'], ['outline', '剧情大纲'], ['vector', '向量']]"),
+    '档位返回不是逐字约定形状',
   )
   // 渲染断言：工作区就绪读视图，tab 标签按序恰为四档
   const readyHost = {
@@ -2334,8 +2399,11 @@ await check('★ 大纲·四档逐字（验收1）：computeSources 工作区返
     const clickables = []
     collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && typeof n.props.children === 'string', clickables)
     const labels = clickables.map((n) => n.props.children)
-    const order = labels.filter((l) => ['摘要', '原文', '状态', '剧情大纲'].includes(l))
-    assert.deepEqual(order, ['摘要', '原文', '状态', '剧情大纲'], '四档顺序或成员不对: ' + order.join(','))
+    const order = labels.filter((l) => ['摘要', '原文', '剧情大纲', '向量'].includes(l))
+    assert.deepEqual(order, ['摘要', '原文', '剧情大纲', '向量'], '档位顺序或成员不对: ' + order.join(','))
+    assert.equal(labels.includes('状态'), false, '⛔「状态」档已摘除，不许回来')
+    // ★ 2026-09-20：「向量」档与 摘要/原文/剧情大纲 同层（用户口径「和摘要原文平级」）
+    assert.equal(labels.includes('向量'), true, '缺「向量」档入口')
   } finally { fakeReact.__setPreset(null) }
   // 会话模式：不该出现这一档（入口只在工作区模式与 摘要/原文/状态 同层）
   const sessHost = {
@@ -2351,6 +2419,7 @@ await check('★ 大纲·四档逐字（验收1）：computeSources 工作区返
     const clickables = []
     collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && typeof n.props.children === 'string', clickables)
     assert.equal(clickables.some((n) => n.props.children === '剧情大纲'), false, '会话模式不该有剧情大纲入口')
+    assert.equal(clickables.some((n) => n.props.children === '向量'), false, '会话模式不该有向量入口（它与摘要原文同层，都在工作区模式）')
   } finally { fakeReact.__setPreset(null) }
 })
 
@@ -2444,11 +2513,36 @@ await check('★★ 记忆库·两条取数路径（验收R2）：清单只在 r
 })
 
 await check('★ 记忆库·互不越界（验收R3）：另外四个阅读源组件都不碰 rp-memory', () => {
-  for (const name of ['SummariesFlow', 'FloorsFlow', 'StateFlow', 'EventsFlow']) {
+  for (const name of ['SummariesFlow', 'FloorsFlow', 'EventsFlow']) { // ★ StateFlow 2026-09-20 已摘除（用户口径）
     const b = outlineFnBody(src, name)
     assert.ok(b, '缺组件 ' + name)
     assert.equal(b.includes('rp-memory'), false, name + ' 里出现了 rp-memory 引用')
   }
+})
+
+// ★ 2026-09-20（用户口径：「给剧情大纲面板加一个打开文件夹的按钮」）
+//   判据四条：① 按钮在**确认之后**那一支（未确认前不给）；② 走 apiPost 的 POST；
+//   ③ ⛔ URL 里**一个路径参数都没有**（开哪个目录由宿主自己解析）；④ 失败/成功都如实播报。
+await check('★ 记忆库·打开文件夹（2026-09-20）：按钮只出现在确认之后；POST 不带任何路径；成败都播报', () => {
+  const body = outlineFnBody(src, 'RpMemoryFlow')
+  assert.ok(body, '缺 RpMemoryFlow 组件')
+  assert.ok(body.includes("id: 'dma-rpmem-openfolder'"), '缺「打开文件夹」按钮 id')
+  assert.ok(body.includes('打开文件夹'), '按钮文案不是「打开文件夹」')
+  // ① 只在 ready 支：按钮字符串必须出现在 `gate === 'ready'` 之后的正文里
+  const readyAt = body.indexOf("gate === 'ready'")
+  const btnAt = body.indexOf("id: 'dma-rpmem-openfolder'")
+  assert.ok(readyAt > 0 && btnAt > readyAt, '按钮跑到了"确认之前"—— 未确认前不该给任何动作入口')
+  // ②③ 取数形状：apiPost + 端点 + **不带 query/body 路径**
+  const call = outlineArrowBody(body, 'const openMemFolder = () => ')
+  assert.ok(call, '缺打开文件夹的回调 openMemFolder')
+  assert.ok(call.includes("apiPost(HOST_API_BASE + '/playthrough/reveal', undefined, {})"),
+    '回调没有按"不带路径"的形状 POST：' + call.slice(0, 200))
+  assert.equal(/playthrough\/reveal\?/.test(src), false, '⛔ URL 里不许带查询串（路径只能由宿主自己解析）')
+  assert.equal(/playthrough\/reveal'[^)]*(\{\s*dir|\bpath\b)/.test(src), false, '⛔ 不许把路径塞进请求体')
+  assert.ok(!/useEffect/.test(body), 'RpMemoryFlow 里仍不许有 useEffect')
+  // ④ 成败都播报（⛔ 不许静默）
+  assert.ok(body.includes("openFolder.status === 'ok'") && body.includes("openFolder.status === 'err'"),
+    '成败两条播报缺一条（不许静默）')
 })
 
 console.log('== 总结：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')

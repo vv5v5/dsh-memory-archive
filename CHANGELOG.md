@@ -8,8 +8,56 @@
 
 > 提示词重整（第一批）：**身份句改写模块** + **装配注入口径按用户定稿调整**。纯调试阶段。
 
+### 2026-09-20（状态剥离 · 向量页签 · 压缩链修复 · skill 重塑 · README 重写）
+
+- **Removed｜状态子系统整体剥离**：删掉 `state-bridge` 子包与其在宿主/预设两处的挂载、`state:card` 段（order 50）、
+  5 个 `state_*` 工具与对应放行名单；状态改由**周目笔记 `state.md`** 承载（维护要求写在文件自己开头，模型用
+  `memory_write` 维护）。旧数据改名归档（`l1-state.removed-20260920/`），⛔ 没有直接删。
+  自检：新增 `_selftest-state-removed.mjs`。
+- **Added｜「向量」页签 + 宿主两端点**：记忆库面板第四档（与摘要/原文/剧情大纲平级）——本库体检行
+  （总数 / 属于本周目 / 被隔离排除 / 两个库在不在 / 上次入库结果 / 快照落后多久）+ 两行库（`⚠缺失` / 重建 / 删除）
+  + 一个「参与检索」开关。`lib/vector-panel.js` 只做两件事：读状态快照、写**请求单**；真正的库归 `dsh-anima-rag`
+  （按会话挂载）⇒ 动作由它在下一轮装配前执行，回执写回来。端点：`GET /vector/state`、`POST /vector/action`。
+- **Fixed｜压缩后端不许用哈希私有成员**（真机事故）：cordis 把服务对象包成可追踪 Proxy，而 ES 私有成员
+  （`#x`）过不了 Proxy ⇒ 每次 `/compact` 都在 1 毫秒内抛 `Receiver must be an instance of class …`，
+  现象是"压缩按钮没反应"。→ 私有方法挪成模块级函数；自检台新增第 8 节**守真机挂载的那份副本**（含与仓库生成物逐字节比对）。
+- **Changed｜摘要输入只看对话**（用户口径：只传玩家发言 + AI 最终正文）：摘要后端不再原样转发重放前缀
+  （`input.messages[0]` 就是整个系统提示词，含注入的近场原文 ⇒ 摘要会变成"原文的二次摘要"），
+  改走过滤：思维链、工具调用/结果、系统提示词、插件注入一律摘除；正文包进 `<text_to_summarize>`、
+  历史 checkpoint 抠成 `<previous_summary>`；`input.tools` 也不传。自检：4b 节 13 条 + **4c 节 8 条真装配截获**。
+- **Changed｜压缩后端改挂预设目录内的相对模块**（为能换台机器）：`./mt-compaction-rp.js`（由本仓库生成，
+  用 `产物/memory-tools/_materialize-preset-modules.mjs --apply` 铺盘）；配套自检守"预设目录那份必须在、
+  且与仓库逐字节一致"。旧的独立插件改名归档。
+- **Changed｜收纳时机**：除"该轮末收一次"外，新增**压缩成功后延迟收一次**（手动 `/compact` 不产生 turn/end，
+  只靠轮末会让那份摘要永远进不了库）；归属门一个字没松。
+- **Changed｜skill 重塑成一个**：原来两个（`rp-assistant` + 只给模型的 `config-kb`）合并为**一个** `rp-assistant`：
+  正文保留原「说人话的工作流」，并带上**资料基准目录**（`resourceBase`）指路三份资料
+  （本包 README / 酒馆 README 快照 / 检索插件 README 快照 / 平台内部事实与踩坑集）。
+  ⛔ 演故事时不读这些；只有用户在问"装得对不对 / 怎么改配置"时才用。
+- **Docs｜README 重写 + 英文版下架**：中文 README 按当前真相重写（四档面板、每轮注入表、PHI 的两处清洗、
+  两个可选依赖、已知限制）；`README.en.md` 删除（16KB 已过时 ⇒ 避免两份真相），`package.json` 的 `files` 同步。
+
 ### Added
 
+- **面板跟随当前会话（打开即跳转）+ 只读查询端点 `GET /playthrough/for-session?sessionId=…`**
+  （20260919，用户口径「点开记忆库要自动跳转到对应周目」）：面板打开时问一句"这个会话属于哪个周目"
+  （宿主读 Tavern 的 `catalog.json` + 每个周目的 `timeline.json`，纯函数核心见 `lib/session-playthrough.js`），
+  查到就**把绑定改过去**（`PUT /config` 的 `root.{characterId,playthroughId}`）—— 改**绑定**而不是只改显示：
+  面板读的档、面板里「收纳/导入」写的、后台自动收纳，三处都读同一个绑定，于是口径全都对得上。
+  ⛔ 只在 `source==='session'` 时动；查不到（非 Tavern 会话 / catalog 读不到）**一个字都不改**（保持原绑定）；
+  本次打开跟过就不再写（`followRef` 防 reload→effect 来回写）；跟随失败绝不影响面板。
+  为此把 `sessions` 加回客户端 inject（**不是**搜索类阅读源回来了，是跟随要拿当前会话 id）。
+  自检：`_selftest-session-playthrough.mjs`（17 项：纯函数真值表 + ★真机锚〔真实 catalog 断言每个周目的
+  rootSessionId 映射回自己〕+ 端点四相〔命中/不认识/缺参数/响应不含路径〕）；
+  `_selftest-client.mjs` 新增「面板跟随」断言（含"只在 source=session 才动""端点只此一处""不重复写"）。
+- **后台收纳提示条 + 只读端点 `GET /anima/ingest-state`**（20260919）：dsh-anima-rag 在后台收纳
+  （它现在**按活跃会话的周目**入库）时会把状态落 `<DSH_HOME>/dsh-anima-rag/ingest-state.json`；
+  本插件读它并投影成端点，客户端在 **`shell.overlay`**（DSH 官方推荐的 frame-wide 叠加席位，
+  `ui-renderer/registry.ts:40` 原话「register into `shell.overlay` instead (a list slot: additive…)」）
+  上挂一条小提示：收纳中显示「记忆库正在后台收纳当前会话…」，跑完 ≤6s 显示一句结果，其余不渲染。
+  ⛔ 端点只投影白名单字段（不吐原始文件、⛔ 不吐任何路径）；挂载期 5s 低频轮询、卸载即停。
+  自检：`_selftest-anima-state.mjs`（6 项，含"坏类型不猜""文件坏掉如实报错""不吐路径"三条反证）；
+  `_selftest-client.mjs` 新增收纳提示席断言（含"该端点只许出现一次""空闲不渲染""卸载停轮询"）。
 - **OOC 前缀席（输入栏「OOC」按钮，20260919）**：一键把输入框里的东西标成**场外指令**。
   为什么需要：社区 RP 预设（`oliblue-evan/dsh-roleplay-preset`）的 OOC 契约是**看开头**的
   ——「以 `OOC:` 或 `（OOC）` 开头、或以 `【导演】` 开头的内容是场外指令」；而我们已有的

@@ -1,13 +1,15 @@
 /**
  * _selftest-skills.mjs —— 宿主半侧 skill 注册（lib/index.js apply → registerSkills）的自检台。
  *
- * 覆盖（对应任务 6 条）：
- *   ① register 被调 3 次，三个 name 正确且符合 kebab-case（^[a-z0-9][a-z0-9-]*$）
+ * 覆盖（2026-09-20 重塑后：**只剩一个 skill**）：
+ *   ① register 被调 **1** 次，name = `rp-assistant` 且符合 kebab-case（^[a-z0-9][a-z0-9-]*$）
  *   ② description 与 content 都非空，content 长度 > 500（真把包内 .md 全文带上）
- *   ③ 第三个 skill 的 invocation.userInvocable === false（不进 / 列表），另外两个不是 false
- *   ④ disposer 真经 ctx.effect 挂上：effect 被调 ≥3 次，逐个执行后 disposed 增加
- *   ⑤ 反证：让一个正文文件读不到（复制树到临时目录、删掉其中一个 .md）
- *      ⇒ apply() 不抛、只跳过那一个、其余仍注册
+ *   ③ `rp-assistant` 人可见（`invocation.userInvocable !== false`，进 / 列表）
+ *   ④ disposer 真经 ctx.effect 挂上：effect 被调 1 次，执行后 disposed 增加
+ *   ④b ★ 资料基准目录：`resourceBase = {kind:'directory', path: <…>/skill/rp-assistant}`
+ *      —— 有了它，正文里写的相对路径（`../README.md`、`refs/*.md`）模型才读得到
+ *   ⑤ 反证：正文文件读不到（复制树到临时目录、删掉唯一的 SKILL.md）
+ *      ⇒ apply() 不抛、0 注册、warn 点名它
  *   ⑥ exports.inject 含 'skills'
  *
  * ★ 全程用记账假 ctx，不碰真实宿主；临时目录测完即删。
@@ -77,28 +79,46 @@ try {
 check('apply(fakeCtx) 不抛', applyThrew === null, String(applyThrew))
 
 const names = state.registered.map((s) => s.name)
-check('① register 被调 2 次（合并后：RP 助手 + 知识库）', state.registered.length === 2, `实际 ${state.registered.length}：${JSON.stringify(names)}`)
-check('① 两个 name 正确且顺序 = defs 声明序',
-  JSON.stringify(names) === JSON.stringify(['rp-assistant', 'config-kb']),
+check('① register 被调 **1** 次（2026-09-20 起只剩一个通用 skill）',
+  state.registered.length === 1, `实际 ${state.registered.length}：${JSON.stringify(names)}`)
+check('① name = rp-assistant（沿用旧名，内容是新的：通用 + 带资料）',
+  JSON.stringify(names) === JSON.stringify(['rp-assistant']),
   JSON.stringify(names))
-check('① name 全部符合 ^[a-z0-9][a-z0-9-]*$', names.every((n) => /^[a-z0-9][a-z0-9-]*$/.test(n)), JSON.stringify(names))
-check('② description 全部非空', state.registered.every((s) => typeof s.description === 'string' && s.description.trim().length > 0))
+check('① name 符合 ^[a-z0-9][a-z0-9-]*$', names.every((n) => /^[a-z0-9][a-z0-9-]*$/.test(n)), JSON.stringify(names))
+check('② description 非空', state.registered.every((s) => typeof s.description === 'string' && s.description.trim().length > 0))
 check('② content 非空且长度 > 500（正文是包内 .md 全文）',
   state.registered.every((s) => typeof s.content === 'string' && s.content.length > 500),
   state.registered.map((s) => `${s.name}:${(s.content || '').length}`).join(', '))
-check('② whenToUse：人可见那个给了、只给模型的那个可缺省',
+check('② whenToUse 给了（人可见、要能被路由到）',
   typeof state.registered[0].whenToUse === 'string' && state.registered[0].whenToUse.length > 0)
 check('★ description 开头就是中文名「RP 助手」（name 放不下中文 ⇒ 靠 description 首段露脸）',
   state.registered[0].description.startsWith('RP 助手'),
   state.registered[0].description.slice(0, 40))
-check('★ 合并后不该再注册旧的两个 name（否则 / 列表里会出现三个重复的助手）',
-  !names.includes('character-card-assistant') && !names.includes('config-assistant'),
+check('★ 重塑后不该再注册旧的两个 name（列表里不许再出现第二个助手 / 知识库）',
+  !names.includes('character-card-assistant') && !names.includes('config-assistant') && !names.includes('config-kb'),
   JSON.stringify(names))
-check('③ 第二个 invocation = { modelInvocable: true, userInvocable: false }',
-  JSON.stringify(state.registered[1].invocation) === JSON.stringify({ modelInvocable: true, userInvocable: false }),
-  JSON.stringify(state.registered[1].invocation))
 check('③ RP 助手的 invocation.userInvocable 不是 false（可出现在 / 列表）',
   state.registered[0].invocation?.userInvocable !== false)
+
+// ---- ④b ★ 资料基准目录（2026-09-20 新加）----
+// 为什么非有这条不可：正文 §六 用**相对路径**指向三份资料（`../README.md`、`refs/*.md`）。
+// 官方渲染只有在 `resourceBase.kind === 'directory'` 时才会告诉模型「基准目录是哪个」
+// （`packages/skill/skill/src/index.ts:187-201`）；漏了它 ⇒ 模型按相对路径读**读不到**，
+// 而且**注册与列表都照常**（静默失效）。
+{
+  const rb = state.registered[0].resourceBase
+  check('④b resourceBase = {kind:directory, path:…/skill/rp-assistant}',
+    rb !== undefined && rb.kind === 'directory'
+    && typeof rb.path === 'string' && /[\\/]skill[\\/]rp-assistant$/.test(rb.path),
+    JSON.stringify(rb))
+  check('④b 基准目录真的存在，且三份资料都在里面（否则模型按相对路径读会扑空）',
+    rb !== undefined && existsSync(join(rb.path, 'SKILL.md'))
+    && existsSync(join(rb.path, 'refs', 'dsh-internals.md'))
+    && existsSync(join(rb.path, 'refs', 'dsh-tavern.md'))
+    && existsSync(join(rb.path, 'refs', 'dsh-anima-rag.md'))
+    && existsSync(join(rb.path, '..', '..', 'README.md')), // 正文里的 ../README.md = 包根 README
+    String(rb && rb.path))
+}
 
 // ---- ★ DSH **加载期**的必填字段契约 ----
 // 照抄官方校验：packages/skill/skill/src/index.ts:759-768
@@ -134,23 +154,21 @@ check('★ 反证：去掉 source 的对象必须被这条断言判为不齐',
 check('★ 反证：source 传成非字符串（对象）也必须被判为不齐',
   loadShapeErrors({ name: 'x', description: 'y', content: 'z', source: { v: 1 } }).includes('source'))
 
-check('④ disposer 经 ctx.effect 挂上：effect 被调恰好 2 次、带标签、返回值是可调用的 disposer',
-  state.effects.length === 2
+check('④ disposer 经 ctx.effect 挂上：effect 被调恰好 1 次、带标签、返回值是可调用的 disposer',
+  state.effects.length === 1
   && state.effects.every((e) => e.label.includes('skill') && typeof e.dispose === 'function'),
   JSON.stringify(state.effects.map((e) => e.label)))
 check('④ 挂上后（未卸载）disposed 仍为 0', state.disposed === 0, String(state.disposed))
 for (const e of state.effects) e.dispose()
-check('④ 卸载：逐个调用 effect 持有的 disposer ⇒ disposed 增加 2', state.disposed === 2, String(state.disposed))
+check('④ 卸载：调用 effect 持有的 disposer ⇒ disposed 增加 1', state.disposed === 1, String(state.disposed))
 
-// ---- ⑤ 反证：正文读不到 ⇒ apply 不抛、跳过那一个、其余照常 ----
+// ---- ⑤ 反证：正文读不到 ⇒ apply 不抛、0 注册、warn 点名 ----
+// ★ 只剩一个 skill 之后，"读不到 ⇒ 跳过、其余照常" 这条不再成立（没有"其余"了）；
+//   现在要证的是更硬的半边：**降级不许拖垮 apply**，且**不许悄悄装个空壳**。
 mkdirSync(join(tmp, 'lib'), { recursive: true })
-mkdirSync(join(tmp, 'skill'), { recursive: true })
 cpSync(join(repo, 'lib', 'index.js'), join(tmp, 'lib', 'index.js'))
-for (const f of ['rp-assistant.md', 'kb-dsh-preset-architecture.md']) {
-  cpSync(join(repo, 'skill', f), join(tmp, 'skill', f))
-}
-const missing = join(tmp, 'skill', 'rp-assistant.md')
-unlinkSync(missing) // 只让这一个读不到
+cpSync(join(repo, 'skill', 'rp-assistant'), join(tmp, 'skill', 'rp-assistant'), { recursive: true })
+unlinkSync(join(tmp, 'skill', 'rp-assistant', 'SKILL.md')) // 只删正文，资料留着（资料不是注册期读的）
 
 const mod2 = await import(pathToFileURL(join(tmp, 'lib', 'index.js')).href)
 const ctx2 = makeAccountingCtx()
@@ -162,13 +180,12 @@ try {
 }
 const names2 = ctx2.state.registered.map((s) => s.name)
 check('⑤ 反证：apply() 不抛（读盘失败只降级）', apply2Threw === null, String(apply2Threw))
-check('⑤ 反证：读不到的那一个被跳过、另一个照常注册',
-  JSON.stringify(names2.sort()) === JSON.stringify(['config-kb']),
-  JSON.stringify(names2))
+check('⑤ 反证：读不到正文 ⇒ **0 注册**（⛔ 不许注册空壳）',
+  names2.length === 0, JSON.stringify(names2))
 check('⑤ 反证：跳过时有 log.warn 且点名该 skill',
   ctx2.state.logs.warn.some((m) => m.includes('rp-assistant') && m.includes('跳过')),
   JSON.stringify(ctx2.state.logs.warn))
-check('⑤ 反证：剩下那个的 disposer 仍经 effect 挂上', ctx2.state.effects.length === 1, String(ctx2.state.effects.length))
+check('⑤ 反证：没有任何 disposer 被挂上（没注册就不该挂）', ctx2.state.effects.length === 0, String(ctx2.state.effects.length))
 
 // ---- 收尾：临时目录清掉 ----
 rmSync(tmp, { recursive: true, force: true })

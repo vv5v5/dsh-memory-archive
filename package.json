@@ -7,16 +7,13 @@
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./state-bridge": "./state-bridge/lib/index.js",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
     "preset-modules",
-    "state-bridge",
     "cordis.patch.yml",
     "README.md",
-    "README.en.md",
     "docs",
     "LICENSE",
     "CHANGELOG.md",

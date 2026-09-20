@@ -11,7 +11,7 @@ import {
   CONTRACT_TRACE, CONTRACT_COMPOSER, CONTRACT_ABSENT, CONTRACT_UNKNOWN,
   detectV3Contract, contractInfo, v3Paths, parsePartSectionName, fieldChars,
   projectSources, projectAssemblyIndex, projectAssemblyRecord, pickSectionText,
-  PHI_PART_FIELD, isPhiPartSection, stripPhiParts, phiSectionText, guardFromSections,
+  guardFromSections,
 } from './lib/v3-contract.js'
 
 let pass = 0
@@ -308,61 +308,6 @@ console.log('\nC10 pickSectionText：按需取正文，越界不猜')
   check('C10h', '★ 反证：按下标取会取错的那一格 —— index=1 是**不存在**的 ⇒ null（⛔ 不许拿数组下标顶替）',
     pickSectionText(gapped, 1) === null)
   check('C10i', '★ 反证：index=2 也不存在 ⇒ null', pickSectionText(gapped, 2) === null)
-}
-
-// ───────────────────────────── C11 PHI 段识别与摘除（T7） ─────────────────────────────
-console.log('\nC11 isPhiPartSection / stripPhiParts')
-{
-  check('C11a', '常量就是卡里那个驼峰键', PHI_PART_FIELD === 'postHistoryInstructions', PHI_PART_FIELD)
-  check('C11b', '认出 Tavern 展开的 PHI 段', isPhiPartSection({ name: 'pmp-dsh-tavern:part:0006:character:postHistoryInstructions' }) === true)
-  check('C11c', '★ 反证：别的卡字段段**不**误判', [
-    'pmp-dsh-tavern:part:0000:generated:header',
-    'pmp-dsh-tavern:part:0001:character:systemPrompt',
-    'pmp-dsh-tavern:part:0002:character:description',
-    'pmp-dsh-tavern:part:0007:character:depthPrompt',
-  ].every((n) => isPhiPartSection({ name: n }) === false))
-  check('C11d', '★ 反证：我们自己的段、别的插件的段都不误判',
-    ['mt:postHistory', 'mt:lastFloors', 'state:card', 'rp:policy', 'harness:source'].every((n) => isPhiPartSection({ name: n }) === false))
-  check('C11e', '★ 记录已知边界：经预设 jailbreak 注入的 PHI 段名会是 preset:… ⇒ **认不出来**（不许假装认得）',
-    isPhiPartSection({ name: 'pmp-dsh-tavern:part:0011:preset:prompts_3_content' }) === false)
-  check('C11f', '★ 反证：畸形输入不抛、一律 false', [null, undefined, {}, [], 3, 'x'].every((v) => { try { return isPhiPartSection(v) === false } catch { return false } }))
-
-  const secs = [
-    { name: 'harness:identity', text: 'a' },
-    { name: 'pmp-dsh-tavern:part:0006:character:postHistoryInstructions', text: 'phi', characters: 90 },
-    { name: 'mt:postHistory', text: 'ours', characters: 90 },
-  ]
-  const r = stripPhiParts(secs)
-  check('C11g', '摘掉那一份，留下别的（含我们自己的尾段）', r.kept.length === 2 && r.removed.length === 1
-    && r.kept.some((s) => s.name === 'mt:postHistory') && r.kept.some((s) => s.name === 'harness:identity'), JSON.stringify(r.removed))
-  check('C11h', '摘除清单带名字与字数（供面板如实报告）', r.removed[0].name.endsWith('character:postHistoryInstructions') && r.removed[0].characters === 90)
-  check('C11i', '★ 反证：没有 PHI 段时**一个都不摘**（⛔ 不许顺手删别人的东西）', (() => {
-    const r2 = stripPhiParts([{ name: 'a' }, { name: 'mt:postHistory' }])
-    return r2.kept.length === 2 && r2.removed.length === 0
-  })())
-  check('C11j', '★ 反证：畸形输入不抛，回 {kept:[], removed:[]}', [null, undefined, 'x', {}].every((v) => { try { const x = stripPhiParts(v); return x.kept.length === 0 && x.removed.length === 0 } catch { return false } }))
-}
-
-// ─────────── C12 PHI 段的**已渲染正文**（2026-09-18 上游删 /sources 之后的来源）
-{
-  const sec = (name, text) => ({ name, text })
-  const PHI = 'pmp-dsh-tavern:part:0005:character:' + PHI_PART_FIELD
-  const SYS = 'pmp-dsh-tavern:part:0000:character:systemPrompt'
-  check('C12a', '认得 PHI 段并取出它的 text',
-    phiSectionText([sec(SYS, '卡的系统提示'), sec(PHI, '每次回复不超过两句。')]) === '每次回复不超过两句。')
-  check('C12b', '★ 反证：不是 PHI 的段一律不取（不许把别段的正文当成 PHI）',
-    phiSectionText([sec(SYS, '卡的系统提示'), sec('pmp-dsh-tavern:part:0001:character:description', '描述')]) === null)
-  check('C12c', '★ 反证：PHI 段存在但正文空/空白 ⇒ null（⛔ 不拿空串冒充"拿到了"）',
-    phiSectionText([sec(PHI, '   '), sec(PHI, '')]) === null)
-  check('C12d', '多段 PHI ⇒ 取第一段**非空**的', phiSectionText([sec(PHI, ''), sec(PHI, '第二段有效')]) === '第二段有效')
-  check('C12e', '★ 反证：畸形输入不抛（null / 字符串 / 数字 / 对象 ⇒ null）',
-    [null, undefined, 'x', 42, {}].every((v) => { try { return phiSectionText(v) === null } catch { return false } }))
-  check('C12f', '与 stripPhiParts 一致：phiSectionText 认得的那段，就是会被摘掉的那段',
-    (() => {
-      const sections = [sec(SYS, '甲'), sec(PHI, '乙')]
-      const r = stripPhiParts(sections)
-      return r.removed.length === 1 && phiSectionText(sections) === '乙'
-    })())
 }
 
 // ─────────── C13 看守（直接观察版）：这一轮段表里我们自己的段在不在
