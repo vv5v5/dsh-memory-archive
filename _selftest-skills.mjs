@@ -100,6 +100,60 @@ check('★ 重塑后不该再注册旧的两个 name（列表里不许再出现�
 check('③ RP 助手的 invocation.userInvocable 不是 false（可出现在 / 列表）',
   state.registered[0].invocation?.userInvocable !== false)
 
+// ---- ③b ★★ 技能目录那一条必须自带三条事实（2026-09-20 第二版；这是**回归位**）----
+// 为什么钉它：技能目录（`<available_skills>`）由 `@deepseek-ai/dsh-tool-skill` **每条会话一次**塞进上下文
+// （`source.kind='skill-catalog'`，tool-skill/src/index.ts:258-276），里面每条就渲染成
+//     `- \`<name>\`: <description>`
+// 而 description 会被宿主**截断**（`catalogDescription`：压空白 → 超长就 `slice(0, max-3) + '...'`，
+// 见 tool-skill/src/index.ts:390-393；RP 预设里把 maxLength 显式钉成 500）。
+//
+// ⇒ 所以"三条必知事实"**必须排在前 500 字以内**才算数：
+//     ① 由 `dsh-memory-archive` 插件注入（免得被当成平台自带 / 别的插件的东西）
+//     ② 它是干什么用的（插件配置 / 安装 / 报错）
+//     ③ ⛔ RP 模式请勿调用
+//   上一版把 RP 禁令摆在描述**最末尾**（描述总长 > 500）⇒ 目录里那一段**根本看不见**，等于白写。
+//   这一版因此把它挪到最前面，并用**照抄来的截断函数**钉住"前 500 字"这条窗口。
+// 描述与**正文（SKILL.md）两处都要有**：目录那条是给"没加载"时看的，正文是给"已加载"时看的。
+{
+  const desc = String(state.registered[0].description ?? '')
+  const body = String(state.registered[0].content ?? '')
+  const CATALOG_MAX = 500
+  // ★ 照抄 tool-skill/src/index.ts:390-393 的 catalogDescription（含压空白与省略号占位），
+  //   不照抄的话"前 500 字"这条就是我自己想象的窗口，测的不是真窗口。
+  const asCatalogLine = (s) => {
+    const normalized = String(s).replace(/\s+/g, ' ').trim()
+    return normalized.length <= CATALOG_MAX ? normalized : `${normalized.slice(0, CATALOG_MAX - 3)}...`
+  }
+  // 判据都取"概念"而非某一个词：用户原话是「请勿调用」，正文里写的是「不要调用」，两种都算数。
+  const hasOwner = (s) => s.includes('dsh-memory-archive') && s.includes('注入')
+  const hasPurpose = (s) => s.includes('配置') && s.includes('安装') && s.includes('报错')
+  const hasBan = (s) => s.includes('角色扮演') && (s.includes('不要调用') || s.includes('请勿调用'))
+  const shown = asCatalogLine(desc)
+
+  check('③b ★ 目录那一眼（前 500 字）写着「由 dsh-memory-archive 插件注入」', hasOwner(shown), shown.slice(0, 80))
+  check('③b ★ 目录那一眼写着用途（插件配置 / 安装 / 报错）', hasPurpose(shown), shown.slice(0, 80))
+  check('③b ★ 目录那一眼写着 RP 禁令', hasBan(shown), shown.slice(0, 80))
+  check('③b ★ 三条事实**都在**前 500 字以内（不是"描述里有"就算 —— 目录会截断）',
+    desc.length > CATALOG_MAX ? (hasOwner(shown) && hasPurpose(shown) && hasBan(shown)) : true,
+    `描述总长 ${desc.length}`)
+  check('③b ★ SKILL.md 正文里这三条也都在（万一真被加载，第一眼就看见）',
+    hasOwner(body) && hasPurpose(body) && hasBan(body), '')
+
+  // ★ 反证 1：整个描述推到 500 字之后 ⇒ 目录那一眼三条全红（证明这个窗口真的会咬人）
+  const pushedShown = asCatalogLine('铺'.repeat(CATALOG_MAX + 50) + desc)
+  check('③b ★ 反证：注明排到 500 字之后 ⇒ 目录那一眼三条全红',
+    !(hasOwner(pushedShown) || hasPurpose(pushedShown) || hasBan(pushedShown)),
+    pushedShown.slice(0, 40))
+  // ★ 反证 2：剪掉描述里的 RP 禁令 ⇒ 禁令判据必红
+  const noBan = desc.replace(/⛔ ?角色扮演（RP）模式请勿调用本技能[^。]*。/u, '')
+  check('③b ★ 反证：剪掉描述里的 RP 禁令 ⇒ 判据必红',
+    noBan !== desc && hasBan(asCatalogLine(noBan)) === false, asCatalogLine(noBan).slice(0, 60))
+  // ★ 反证 3：剪掉「由 dsh-memory-archive 插件注入」⇒ 归属判据必红
+  const noOwner = desc.replace(/由 dsh-memory-archive 插件注入[^，]*，/u, '')
+  check('③b ★ 反证：剪掉「由 dsh-memory-archive 插件注入」⇒ 判据必红',
+    noOwner !== desc && hasOwner(asCatalogLine(noOwner)) === false, asCatalogLine(noOwner).slice(0, 60))
+}
+
 // ---- ④b ★ 资料基准目录（2026-09-20 新加）----
 // 为什么非有这条不可：正文 §六 用**相对路径**指向三份资料（`../README.md`、`refs/*.md`）。
 // 官方渲染只有在 `resourceBase.kind === 'directory'` 时才会告诉模型「基准目录是哪个」

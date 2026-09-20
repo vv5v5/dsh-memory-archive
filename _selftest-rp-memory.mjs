@@ -285,12 +285,26 @@ try {
     const table = (src.match(/'\/playthrough\/reveal': \['POST'\]/g) || []).length
     const dispatch = (src.match(/rest === '\/playthrough\/reveal'/g) || []).length
     check('T17a 接线唯一：ENDPOINTS 条目 1 处（POST）、分发行 1 处', table === 1 && dispatch === 1, `table=${table} dispatch=${dispatch}`)
-    // ★ 关键安全性质：处理函数签名只有 (send, log) —— 它**连请求体/查询串都拿不到**，
-    //   所以"客户端塞一个路径过来"这个入口**在类型上就不存在**。
-    check('T17b ★ handler 只收 (send, log)：⛔ 客户端可控路径进不来',
-      /async function handleRevealRpMemory\(send, log\)/.test(src), '')
-    check('T17c ★ 目录解析复用 resolveRpMemoryDir（与 /playthrough/rp-memory 同一条候选链，⛔ 不许两处各写一遍）',
-      (src.match(/resolveRpMemoryDir\(\)/g) || []).length >= 2, '两处（rp-memory 与 reveal）都该用它')
+    // ★ 关键安全性质（2026-09-20 起强化到"枚举"）：处理函数收 `req`，但**只从体内读一个枚举 `base`**
+    //   （'playthrough' | 'workspace-root'），且**不认"这个枚举之外的任何值"** ⇒
+    //   "客户端塞一个路径过来"这个入口**在类型上就不存在**（连查询串都不读）。
+    const rv = /async function handleRevealRpMemory\(req, send, log\) \{([\s\S]*?)\n\}/.exec(src)
+    check('T17b ★ handler 收 (req, send, log)，但只认枚举 base：⛔ 客户端可控路径进不来',
+      rv !== null
+      && /body\.base/.test(rv[1])
+      && /RP_MEMORY_BAD_BASE/.test(rv[1])          // 认不出就拒，⛔ 不拿它当路径
+      && !/searchParams/.test(rv[1])               // 连查询串都不读
+      && !/\bjoin\([^)]*body\./.test(rv[1]),        // 绝不用请求体里的东西去拼路径
+      rv === null ? '拿不到 handleRevealRpMemory 的函数体' : rv[1].slice(0, 160))
+    check('T17c ★ 两处（rp-memory 与 reveal）走**同一条候选链** rpMemoryCandidates（⛔ 不许两处各写一遍）',
+      (src.match(/rpMemoryCandidates\(/g) || []).length >= 3, '候选链应当只有一份实现（定义 + 两处调用）')
+    // ★★ 2026-09-20 补（"空态也要能给按钮"）：周目目录不存在 ⇒ **按需创建**（我们的写面）；
+    //   工作区根那份 ⇒ **绝不创建**，退而打开工作区根本身（那是社区预设的地盘）。
+    check('T17e ★ reveal：只给**周目目录**按需 mkdir；共用那份退而打开工作区根（⛔ 不替社区预设建目录）',
+      rv !== null && /target\.base === 'playthrough'/.test(rv[1]) && /mkdirSync\(target\.dir/.test(rv[1])
+      && /hit\.rootPath/.test(rv[1]) && /fallbackTo/.test(rv[1]), '')
+    check('T17f ★ 反证：把"只给周目目录建"这层判断挖掉（一律 mkdir）⇒ T17e 同一句必红',
+      rv !== null && !/target\.base === 'playthrough'/.test(rv[1].replace(/if \(target\.base === 'playthrough'\) \{/, '{')), '')
     // ⚠️ 判据只看**这个函数自己的函数体** —— 仓库别处本来就有 `shell: true`（与本次无关），
     //   拿全文当判据会误报（第一版就是这么红的）。
     const fnBody = /function openDirInFileManager\(dir\) \{([\s\S]*?)\n\}/.exec(src)

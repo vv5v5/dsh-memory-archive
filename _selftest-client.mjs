@@ -2782,28 +2782,53 @@ await check('★ 记忆库·互不越界（验收R3）：另外四个阅读源�
 })
 
 // ★ 2026-09-20（用户口径：「给剧情大纲面板加一个打开文件夹的按钮」）
-//   判据四条：① 按钮在**确认之后**那一支（未确认前不给）；② 走 apiPost 的 POST；
-//   ③ ⛔ URL 里**一个路径参数都没有**（开哪个目录由宿主自己解析）；④ 失败/成功都如实播报。
-await check('★ 记忆库·打开文件夹（2026-09-20）：按钮只出现在确认之后；POST 不带任何路径；成败都播报', () => {
+//   判据：① 按钮在**确认之后**才出现（未确认前不给任何动作入口）；② 走 apiPost 的 POST；
+//   ③ ⛔ 请求里**只有枚举 base、一个路径都没有**（开哪个目录由宿主自己解析）；④ 成败都如实播报。
+// ★★ 同日补（用户口径：「**没有加打开文件夹的按钮**，新会话依旧不显示」）：空态也得有 ——
+//   新周目两处落点都还没建时，用户正是靠这一块才知道"往哪儿放"、并且有入口点。
+await check('★ 记忆库·打开文件夹（2026-09-20；同日补空态）：只出现在确认之后 · 两处落点都给 · 只带枚举不带路径 · 成败都播报', () => {
   const body = outlineFnBody(src, 'RpMemoryFlow')
   assert.ok(body, '缺 RpMemoryFlow 组件')
-  assert.ok(body.includes("id: 'dma-rpmem-openfolder'"), '缺「打开文件夹」按钮 id')
-  assert.ok(body.includes('打开文件夹'), '按钮文案不是「打开文件夹」')
-  // ① 只在 ready 支：按钮字符串必须出现在 `gate === 'ready'` 之后的正文里
-  const readyAt = body.indexOf("gate === 'ready'")
-  const btnAt = body.indexOf("id: 'dma-rpmem-openfolder'")
-  assert.ok(readyAt > 0 && btnAt > readyAt, '按钮跑到了"确认之前"—— 未确认前不该给任何动作入口')
-  // ②③ 取数形状：apiPost + 端点 + **不带 query/body 路径**
-  const call = outlineArrowBody(body, 'const openMemFolder = () => ')
-  assert.ok(call, '缺打开文件夹的回调 openMemFolder')
-  assert.ok(call.includes("apiPost(HOST_API_BASE + '/playthrough/reveal', undefined, {})"),
-    '回调没有按"不带路径"的形状 POST：' + call.slice(0, 200))
+  // ⚠️ 判据必须从**渲染块**起算：`gate === 'loading'` 在 `reveal()` 的早退里也出现过一次，
+  //   直接 `body.indexOf` 会拿到那一处（本台子第一版就这么假红了一次）。
+  const renderAt = body.indexOf("return e('div', { style: colFillStyle }")
+  assert.ok(renderAt > 0, '找不到渲染块起点')
+  const view = body.slice(renderAt)
+  const lockedAt = view.indexOf("gate === 'locked'")
+  const loadingAt = view.indexOf("gate === 'loading'")
+  const emptyAt = view.indexOf("gate === 'empty'")
+  const errAt = view.indexOf("gate === 'error'")
+  const readyAt = view.indexOf("gate === 'ready'")
+  assert.ok(lockedAt >= 0 && loadingAt > lockedAt && emptyAt > loadingAt && errAt > emptyAt && readyAt > errAt,
+    `渲染块里五支的边界不对：locked=${lockedAt} loading=${loadingAt} empty=${emptyAt} error=${errAt} ready=${readyAt}`)
+  // ① 确认之前（locked 支）不许出现任何落点/按钮
+  assert.equal(/dma-rpmem-openfolder|candRow\(/.test(view.slice(lockedAt, loadingAt)), false,
+    '按钮跑到了"确认之前"—— 未确认前不该给任何动作入口')
+  // ② 两处落点、两个按钮 id（周目目录 + 共用那份），文案分「打开文件夹 / 创建并打开 / 打开工作区根」
+  assert.ok(body.includes("'dma-rpmem-openfolder'"), '缺周目落点的按钮 id')
+  assert.ok(body.includes("'dma-rpmem-openfolder-' + base"), '缺按落点区分的按钮 id')
+  assert.ok(body.includes('打开文件夹') && body.includes('创建并打开') && body.includes('打开工作区根'), '三种按钮文案不齐')
+  // ③ **empty 与 ready 两支都要有落点块**（这就是"新会话不显示"的修法）
+  for (const [name, seg] of [['empty', view.slice(emptyAt, errAt)], ['ready', view.slice(readyAt)]]) {
+    assert.ok(seg.includes("candRow('playthrough')"), name + ' 支没有周目落点那一行')
+    assert.ok(seg.includes("candRow('workspace-root')"), name + ' 支没有共用落点那一行')
+  }
+  // ★ 反证：把 empty 支里的落点块挖掉 ⇒ 同一条判据必红（证明它会咬人）
+  const emptied = view.slice(emptyAt, errAt).replace("candRow('playthrough')", '')
+  assert.equal(emptied.includes("candRow('playthrough')"), false, '反证失败：挖掉后仍能命中')
+  // ④ 取数形状：apiPost + 端点 + **只带枚举 base**
+  const call = outlineArrowBody(body, 'const openMemFolder = (base) => ')
+  assert.ok(call, '缺打开文件夹的回调 openMemFolder(base)')
+  assert.ok(call.includes("apiPost(HOST_API_BASE + '/playthrough/reveal'"), '回调没走 reveal 端点')
+  assert.ok(call.includes('{ base: base }') && call.includes('base === undefined ? {}'), '回调没有"只带枚举 base"的形状')
   assert.equal(/playthrough\/reveal\?/.test(src), false, '⛔ URL 里不许带查询串（路径只能由宿主自己解析）')
   assert.equal(/playthrough\/reveal'[^)]*(\{\s*dir|\bpath\b)/.test(src), false, '⛔ 不许把路径塞进请求体')
   assert.ok(!/useEffect/.test(body), 'RpMemoryFlow 里仍不许有 useEffect')
-  // ④ 成败都播报（⛔ 不许静默）
+  // ⑤ 成败都播报（⛔ 不许静默）；回执里的 created / fallbackTo 要翻成人话
   assert.ok(body.includes("openFolder.status === 'ok'") && body.includes("openFolder.status === 'err'"),
     '成败两条播报缺一条（不许静默）')
+  assert.ok(body.includes("data.created === true") && body.includes("data.fallbackTo === 'workspace-root'"),
+    '回执没按 created / fallbackTo 如实播报')
 })
 
 console.log('== 总结：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')

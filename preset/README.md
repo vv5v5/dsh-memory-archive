@@ -1,6 +1,8 @@
-# 角色扮演 · 记忆库版（DSH Agent 预设）
+# 角色扮演（DSH Agent 预设 · 由 dsh-memory-archive 提供）
 
-一套给 **DeepSeek Harness（dsh）** 用的角色扮演预设：**记忆库驱动**的沉浸式扮演 —— 长剧情靠「语义检索（Anima）+ 周目笔记 + RP 专用中文压缩」扛住，工具面只留扮演真正需要的那几件（技能 / 联网考据 / 提问 / 找文件 / 只读读文件），编程向工具**根本不注册**。
+一套给 **DeepSeek Harness（dsh）** 用的角色扮演预设：**记忆库驱动**的沉浸式扮演 —— 长剧情靠「语义检索（Anima）+ 周目笔记 + RP 专用中文压缩」扛住，工具面只留扮演真正需要的那几件（记忆检索 / 联网考据 / 提问 / 找文件 / 只读读文件 / 技能），编程向工具**根本不注册**。
+
+★ **技能工具挂着**，但**在目录那条上把话说明白**（2026-09-20 用户口径「那不用摘掉。需要的是明确注明」）：挂上 `tool-skill` 就一定会出现技能目录（`<available_skills>`），所以目录里那一条必须自带三件事 —— **由 `dsh-memory-archive` 插件注入 / 它是插件配置·安装·报错用的手册 / RP 模式请勿调用**。这三句排在 skill 描述的前 500 字以内（宿主会把描述截到 500；见组装文件里的说明），两处都写：目录那条（`lib/index.js` 的 `SKILL_DEFS[].description`）+ 正文（`skill/rp-assistant/SKILL.md`）。
 
 ★ 本预设**随 [`dsh-memory-archive`](https://github.com/vv5v5/dsh-memory-archive) 一起发布**（就在这个 `preset/` 目录里）：模块与压缩后端都从**本仓库现场取**，所以预设与插件**不会各自漂移**。
 预设 = 一个目录若干文件，dsh 即时识别、**不需要重启宿主**（改完开**新会话**即生效）。
@@ -20,7 +22,7 @@ node ~/.dsh/profiles/web/node_modules/dsh-memory-archive/preset/install.mjs --ap
 
 （也可以直接 `git clone https://github.com/vv5v5/dsh-memory-archive` 后跑 `node preset/install.mjs --apply`。）
 
-3. 在会话的预设列表里选「**角色扮演 · 记忆库版**」，开一个**新会话**。
+3. 在会话的预设列表里选「**角色扮演**」（描述里写了它由 dsh-memory-archive 提供 —— 同名的那份是社区预设），开一个**新会话**。
 
 > 目录名默认 `roleplay`（`<dshHome>/.agent-presets/roleplay/`）；想装到别的名字用 `--id=<名字>`。
 > ⚠️ **如果你自己已经手写/维护着一份同名预设**：别直接把这份铺上去（`--apply` 会覆盖内容不同的文件，虽然会先备份）。换个 `--id=`，或先把你自己那份备份出来。
@@ -44,6 +46,7 @@ node ~/.dsh/profiles/web/node_modules/dsh-memory-archive/preset/install.mjs --ap
 
 - **system 里注入的东西**：RP 身份句、记忆检索协议、RP persona（本预设的主体提示词）、Tavern 注入的角色卡字段与状态页、Anima 检索到的历史记忆与原文回响、被压缩洗掉后钉回来的第一轮问答。
 - **工具面**：`anima_query`、`memory_write`、`skill`、`web_search`、`ask_user_question`、`glob`、`grep`、`read`（只读）。⛔ 没有 shell、没有写工具、没有子 agent —— 那些行**在这份组装里根本不存在**，不是被禁用。
+  - `skill` 与它带来的**技能目录**：本插件唯一的 skill（`rp-assistant`）是**维护手册**，不是扮演用的 ⇒ 目录那条与提示词的工具清单里都明写 **RP 模式请勿调用**；真要修插件请**开普通会话**。
 - **压缩**：走官方 `compaction-basic` 的机制，但摘要是 **RP 专用**的中文归档模板（时间跨度/地点/角色/关键事件/未回收伏笔 + 结构化标签），并且活在 preset 自己的 isolate realm 里，**碰不到编程会话**。
 - **记忆**：剧情笔记（`.roleplay-memory/`）由模型自己按文件开头的要求维护；被压掉的旧内容由 `dsh-memory-archive` 收进归档、由 `dsh-anima-rag` 建索引，每轮按**当前周目**检索回来。
 

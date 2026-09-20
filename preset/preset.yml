@@ -1,2 +1,3 @@
-name: 角色扮演 · 记忆库版
-description: 记忆库驱动的沉浸式角色扮演预设：Anima 语义检索 + 周目笔记 + RP 专用中文压缩，工具面只留扮演需要的那几件。安装、依赖与已知限制见 README.md。
+name: 角色扮演
+description: 由 dsh-memory-archive 插件提供：RP 专用组装 —— 工具面只留记忆检索与周目笔记那几件（记忆检索那一路来自 dsh-anima-rag）、persona 换成叙事者、压缩后端换成 RP 专用。只影响显式选了这个 preset 的会话。
+order: 5

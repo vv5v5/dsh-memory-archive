@@ -110,7 +110,9 @@ const DEFAULT_DROP_PATTERNS = Object.freeze([
 /**
  * 把调用方 scope 继承来的全局工具收成白名单。
  * @param ctx - preset 常驻挂载的（有 scope 的）context。
- * @param config - `{ allow?: string[] }`，**额外**要留下的全局工具名（照旧支持；默认空）。
+ * @param config - `{ allow?: string[]; logSettleMs?: number }`：
+ *   `allow` = **额外**要留下的全局工具名（照旧支持；默认空）；
+ *   `logSettleMs` = 日志防抖窗口（毫秒，默认 2500；自检台用它把窗口压到毫秒级）。
  */
 export function apply(ctx, config) {
   const explicitAllow = Array.isArray(config?.allow) ? config.allow : DEFAULT_ALLOW
@@ -123,12 +125,54 @@ export function apply(ctx, config) {
   let disposePrevious
   /** 重入保护：`restrict()` 自身会 emit `tools/change`。 */
   let applying = false
-  /** 上一次收窄后的「结果指纹」：只在结果真的变了时打印，免得每次 `tools/change` 都刷一行。 */
+  /** 上一次收窄后的「结果指纹」：只在结果真的变了时才算一次变动。 */
   let lastSignature = null
   /** 作用域失效后置位：之后不再做任何事。 */
   let stopped = false
   /** `ctx.on()` 返回的摘除函数（`events.ts:288-301`）。 */
   let off = null
+
+  /**
+   * ★★ 2026-09-20（真机：「scope 日志又刷屏了」）—— 打印改成**按稳定态防抖**。
+   *
+   * 起因：原来只按「全局数/挡掉数/白名单」这个**指纹**去重，可是 **MCP 握手时全局表会一条一条地长**
+   * （真机实测 `16 → 44` 一路 +1）⇒ 指纹每次都变 ⇒ 光一条 MCP 的握手就能打出几十行。
+   * 现在：指纹变了只**重置计时器**，静下来 `logSettleMs` 之后再打**一行**，并带上这段时间里
+   * 全局表摆动过的区间与被折叠的变动次数 —— 既不刷屏，也不隐瞒"它到底涨了多少"。
+   * ⚠️ 收窄本身**一点没变**（`restrict()` 该调还是马上调）—— 变的只是**什么时候说话**。
+   */
+  const settleMs = Number.isFinite(config?.logSettleMs) && config.logSettleMs >= 0 ? config.logSettleMs : 2500
+  let settleTimer = null
+  let pending = null
+  let folded = 0
+  let lo = 0
+  let hi = 0
+
+  /** 把攒着的那一行打出去（稳定之后 / 收工之前各调一次）。 */
+  function flushLog() {
+    if (settleTimer !== null) { clearTimeout(settleTimer); settleTimer = null }
+    if (pending === null) return
+    const p = pending
+    pending = null
+    const span = folded > 1 && hi > lo ? `（全局表在这 ${folded} 次变动里从 ${lo} 走到 ${hi}）` : ''
+    folded = 0
+    console.log(
+      `[rp-tool-scope] 全局工具 ${p.globals} 个 → 挡掉 ${p.deny} 个`
+      + (p.kept.length > 0 ? `（保留 ${p.kept.join(', ')}）` : '（⚠ 一个都没保留 —— 检查上方保留模式是否还匹配得上）')
+      + '；本 preset 自己挂的工具不在此列，不受影响' + span,
+    )
+  }
+
+  /** 记下这次结果，把打印推迟到"静下来"。 */
+  function scheduleLog(globalsN, denyN, kept) {
+    pending = { globals: globalsN, deny: denyN, kept: kept }
+    folded += 1
+    if (folded === 1) { lo = globalsN; hi = globalsN } else { if (globalsN < lo) lo = globalsN; if (globalsN > hi) hi = globalsN }
+    if (settleTimer !== null) clearTimeout(settleTimer)
+    settleTimer = setTimeout(() => { settleTimer = null; flushLog() }, settleMs)
+    // ⛔ 别让一个计时器把宿主拖着不退（有 unref 就用）。
+    if (settleTimer !== null && typeof settleTimer.unref === 'function') settleTimer.unref()
+  }
 
   /**
    * 本作用域还活着吗。
@@ -154,6 +198,7 @@ export function apply(ctx, config) {
   function stop(reason) {
     if (stopped) return
     stopped = true
+    flushLog()   // ★ 攒着的那一行不丢（收工时补打，并且会顺手清掉计时器）
     try {
       off?.()
     } catch {
@@ -188,11 +233,8 @@ export function apply(ctx, config) {
       //    看着像灾难，而那一轮模型实收的工具是 **7 个**（anima 2 + state-bridge 5）——
       //    它们是本 preset 自己注册的，压根不在 deny 名单里。
       //    ⇒ 日志只报「全局挡了多少」，并明说本 preset 自己的工具不受影响。
-      console.log(
-        `[rp-tool-scope] 全局工具 ${globals.length} 个 → 挡掉 ${deny.length} 个`
-        + (kept.length > 0 ? `（保留 ${kept.join(', ')}）` : '（⚠ 一个都没保留 —— 检查上方保留模式是否还匹配得上）')
-        + '；本 preset 自己挂的工具不在此列，不受影响',
-      )
+      // ★ 2026-09-20：**不在这里直接打**了 —— 交给 `scheduleLog()` 防抖（MCP 逐条握手会连打几十行）。
+      scheduleLog(globals.length, deny.length, kept)
     } catch (error) {
       if (isInactiveScope(error)) {
         // 这不是故障：preset 换代 / 会话收尾时作用域先没了，`restrict()` 自然落不下去。
