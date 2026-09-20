@@ -12,6 +12,7 @@
   "files": [
     "lib",
     "preset-modules",
+    "preset",
     "cordis.patch.yml",
     "README.md",
     "docs",

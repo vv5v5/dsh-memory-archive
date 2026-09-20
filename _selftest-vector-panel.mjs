@@ -307,6 +307,59 @@ mkdirSync(ANIMA, { recursive: true })
     st3.info === null && st3.live.vector === null && st3.live.bm25 === null)
 }
 
+// C7 buildVectorEntries：逐条展开（摘要名/标签/字数/正文预览），读不到的如实标、⛔ 不编数
+{
+  const fakeMeta = (p) => {
+    if (p === join('base', 'good.json')) return { chars: 12, text: '十二个字正文abc', textTruncated: false, timestamp: 1234, mtime: 5678 }
+    if (p === join('base', 'broken.json')) return { chars: null, text: null, textTruncated: false, timestamp: null, mtime: 99 } // 文件在但 JSON 坏
+    return { chars: null, text: null, textTruncated: false, timestamp: null, mtime: null }                                      // 文件缺
+  }
+  const items = [
+    { metadata: { index: 'sum_s-0240-0253-6.md', tags: ['Suspense', 'pt:playthrough-adacc634-2f2e-4c09-b21a-7ad48d703f2d'] }, metadataFile: 'good.json' },
+    { metadata: { index: 'sum_x.md', tags: ['Important'] }, metadataFile: 'broken.json' },
+    { metadata: { index: 'sum_y.md', tags: [] }, metadataFile: 'gone.json' },
+    { metadata: { index: 'probe_1', tags: ['verify'] }, metadataFile: '' },
+    'junk-not-an-object',
+  ]
+  const en = mod.buildVectorEntries(items, { readMeta: fakeMeta, baseDir: 'base' })
+  check('C7 items 展开成 5 条，total=5', en !== null && en.items.length === 5 && en.total === 5, JSON.stringify(en && en.total))
+  check('C7 好条目：index/tags/字数/正文预览/时间戳都在',
+    en.items[0].index === 'sum_s-0240-0253-6.md' && en.items[0].chars === 12 && en.items[0].text === '十二个字正文abc'
+    && en.items[0].tags.length === 2 && en.items[0].timestamp === 1234)
+  check('C7 正文读不到的条目（坏 JSON + 缺文件）+ 残条 ⇒ unreadable 恰好 3（字数都 null，⛔ 不编 0）',
+    en.items[1].chars === null && en.items[2].chars === null && en.unreadable === 3, String(en && en.unreadable))
+  check('C7 缺正文文件 ⇒ text/mtime 全 null（如实读不到）', en.items[2].text === null && en.items[2].mtime === null)
+  check('C7 没有正文文件的条目不算 unreadable（本来就没什么可读）', en.items[3].metadataFile === '' && en.items[3].chars === null)
+  check('C7 残条（连名字都没有）⇒ bad:true 且计入 unreadable', en.items[4].bad === true)
+  check('C7 ★反证（items 不是数组 ⇒ null：面板说"条目读不到"，⛔ 不回空表装没事）',
+    mod.buildVectorEntries('nope', { readMeta: fakeMeta }) === null && mod.buildVectorEntries(undefined) === null)
+  const capped = mod.buildVectorEntries([1, 2, 3], { readMeta: fakeMeta, limit: 2 })
+  check('C7 limit 截断：items 只留 2 条、truncated=true、total 仍 3',
+    capped.items.length === 2 && capped.truncated === true && capped.total === 3)
+}
+
+// C8 readVectorState 整链：快照 + 真 index.json + 真 <uuid>.json ⇒ entries 逐条到货（两处容错都要咬住）
+{
+  const DIR = join(VROOT, 'dsh-memory')
+  writeFileSync(join(ANIMA, 'vector-info.json'), JSON.stringify({ at: Date.now(), collectionId: 'dsh-memory', dataRoots: { vectorRoot: VROOT, bm25Root: BROOT } }), 'utf8')
+  writeFileSync(join(DIR, 'meta-good.json'), JSON.stringify({ text: 'abcd', timestamp: 42 }), 'utf8')
+  writeFileSync(join(DIR, 'index.json'), JSON.stringify({ version: 1, items: [
+    { id: 'x', metadata: { index: 'sum_s-0240-0253-6.md', tags: ['Suspense', 'pt:playthrough-adacc634-2f2e-4c09-b21a-7ad48d703f2d'] }, metadataFile: 'meta-good.json', vector: [] },
+    { id: 'y', metadata: { index: 'probe_1', tags: ['verify'] }, metadataFile: 'meta-missing.json', vector: [] },
+  ] }), 'utf8')
+  const st = mod.readVectorState({ homeDir: HOME })
+  check('C8 entries 到货：2 条、1 条正文读不到、count 与 items 同源',
+    st.entries !== null && st.entries.items.length === 2 && st.entries.unreadable === 1 && st.live.vector.count === 2,
+    JSON.stringify(st.entries && { n: st.entries.items.length, u: st.entries.unreadable }))
+  check('C8 好条目的字数/时间戳来自正文文件（bad JSON/缺文件都拿不到这两样）',
+    st.entries.items[0].chars === 4 && st.entries.items[0].timestamp === 42 && st.entries.items[0].index === 'sum_s-0240-0253-6.md')
+  check('C8 缺正文 ⇒ chars null（如实，⛔ 不编 0）', st.entries.items[1].chars === null)
+  writeFileSync(join(DIR, 'index.json'), '{oops', 'utf8')
+  const st2 = mod.readVectorState({ homeDir: HOME })
+  check('C8 index.json 坏 ⇒ entries=null 且 count=null（⛔ 不回空表/0 装没事）',
+    st2.entries === null && st2.live.vector.count === null)
+}
+
 // C5 DSH_HOME 环境变量兜底（homeDir 不给时；与 lib/index.js 的 dshHomeDir() 同口径）
 {
   const before = process.env.DSH_HOME
@@ -362,26 +415,26 @@ sensitive(
   "['vector', '向量']",
 )
 sensitive(
-  'E2 ReadArea 有 vector 分支渲染 VectorFlow',
-  (s) => s.includes("cur === 'vector'") && s.includes('e(VectorFlow, { scrollBind: scrollBind })'),
+  'E2 ReadArea 有 vector 分支渲染 VectorFlow（传入 archivePath：条目要与「摘要」页签对上）',
+  (s) => s.includes("cur === 'vector'") && s.includes('e(VectorFlow, { archivePath: archivePath, scrollBind: scrollBind })'),
   "} else if (cur === 'vector') {",
 )
 {
-  // 红字隔离诊断：条件（boundCount===0 && total>0）+ 文案 + id，三样都要在
+  // 红字诊断（用户踩的坑：库里条目全不是当前周目）：条件（boundCount===0 && total>0）+ 人话文案 + id，三样都要在
   const deadJudge = (s) => s.includes("boundCount === 0 && total !== null && total > 0")
-    && s.includes("'库里 ' + String(total) + ' 条全部属于别的周目（'")
-    && s.includes('⇒ 隔离把候选池清空了，所以检索永远是 0 命中')
+    && s.includes("'本库 ' + String(total) + ' 条都不属于当前周目（'")
+    && s.includes('当前周目 0 条 ⇒ 现在检索不到东西')
     && s.includes("id: 'dma-vector-isolation-dead'")
-  sensitive('E3 红字隔离诊断（用户今天踩的坑）逐字在', deadJudge, '⇒ 隔离把候选池清空了，所以检索永远是 0 命中')
+  sensitive('E3 红字诊断只说事实与数字（⛔ 内部词）逐字在', deadJudge, '当前周目 0 条 ⇒ 现在检索不到东西')
   sensitive('E3b 诊断的**触发条件**在位（boundCount===0 && total>0）', deadJudge, 'boundCount === 0 && total !== null && total > 0')
 }
 {
   const confirmJudge = (s) => s.includes('const VECTOR_ARMED = {')
-    && s.includes('会重新嵌入，可能花几十秒、消耗 token')
+    && s.includes('向量与 BM25 两个库一起从头重算')
     && s.includes("id: 'dma-vector-confirm'")
     && s.includes('再点一次确认')
     && s.includes("if (armed === key) { setArmed(''); submit(VECTOR_ARMED[key].action); return }")
-  sensitive('E4 二次确认：武装表 + 重建的"会重新嵌入…"说明 + 确认条 + 再点一次才执行', confirmJudge, '会重新嵌入，可能花几十秒、消耗 token')
+  sensitive('E4 二次确认：武装表 + 重建的"两个库一起从头重算"说明 + 确认条 + 再点一次才执行', confirmJudge, '向量与 BM25 两个库一起从头重算')
   sensitive('E4b 二次确认的**门**在位（第一次点只武装，不提交）', confirmJudge, "if (armed === key) { setArmed(''); submit(VECTOR_ARMED[key].action); return }")
   // 三个动作（立即入库/重建/删除）都在武装表里 ---- 删除必须能确认
   for (const key of ["'ingest-now'", "'rebuild:vector'", "'rebuild:bm25'", "'delete-vector'", "'delete-bm25'"]) {
@@ -394,9 +447,9 @@ sensitive(
   'const VECTOR_POLL_LIMIT_MS = 60000',
 )
 sensitive(
-  'E5b 超时如实说"还没被执行（anima 在该周目会话的下一轮开始前才取走这张单）"',
-  (s) => s.includes('还没被执行（anima 在该周目会话的下一轮开始前才取走这张单）'),
-  '还没被执行（anima 在该周目会话的下一轮开始前才取走这张单）',
+  'E5b 超时如实说"还没执行"+ 指明何时执行、去哪看结果',
+  (s) => s.includes('还没执行：这个动作要在该周目下一轮对话开始前才会进行'),
+  '还没执行：这个动作要在该周目下一轮对话开始前才会进行',
 )
 sensitive(
   'E6 端点前缀从 HOST_API_BASE 推（⛔ 不手写第二个前缀字面量）',
@@ -417,9 +470,9 @@ sensitive(
 )
 sensitive(
   'E11 绑定周目标**来源**（boundSource：session=活跃会话 / config=面板绑定）',
-  (s) => s.includes("boundSrc === 'session' ? '活跃会话' : (boundSrc === 'config' ? '面板绑定' : '')")
-    && s.includes("'（来源：' + boundSrcLabel + '）'"),
-  "boundSrc === 'session' ? '活跃会话' : (boundSrc === 'config' ? '面板绑定' : '')",
+  (s) => s.includes("boundSrc === 'session' ? '来自活跃会话' : (boundSrc === 'config' ? '来自面板绑定' : '')")
+    && s.includes("'（' + boundSrcLabel + '）'"),
+  "boundSrc === 'session' ? '来自活跃会话' : (boundSrc === 'config' ? '来自面板绑定' : '')",
 )
 sensitive(
   'E12 上次入库用 anima 写好的 reason 人话（live 优先、快照兜底，⛔ 不自己拼机器码）',
@@ -428,11 +481,11 @@ sensitive(
   "ingestReason !== '' ? ingestReason : vectorIngestText(ingestLive)",
 )
 sensitive(
-  'E13 库行内 ⚠缺失 徽标（向量/BM25 各自 exists===false 时都要摆出来）',
-  (s) => s.includes("missing === true ? e('span', { style: warnBadgeStyle }, '⚠缺失') : null")
+  'E13 库行内 ⚠缺失 徽标（琥珀色，向量/BM25 各自 exists===false 时都要摆出来）',
+  (s) => s.includes("missing === true ? e('span', { style: amberBadgeStyle }, '⚠缺失') : null")
     && s.includes('vec !== null && vec.exists === false')
     && s.includes('bm !== null && bm.exists === false'),
-  "missing === true ? e('span', { style: warnBadgeStyle }, '⚠缺失') : null",
+  "missing === true ? e('span', { style: amberBadgeStyle }, '⚠缺失') : null",
 )
 sensitive(
   'E14 提交没拿到回执 id ⇒ 不起轮询（空 id 永远对不上，⛔ 不许白转 60 秒）',
@@ -459,7 +512,38 @@ sensitive(
   check('E8 ★反证（档内夹带 ' + KEY_NEEDLE + ' ⇒ 密钥判据必须红）', keyJudge(vf) === true && keyJudge(dirty) === false)
   check('E8 ★反证（档内多一种请求体 ⇒ 计数判据必须红）', bodiesJudge(vf) === true && bodiesJudge(dirty) === false)
   // 入库时机口径（用户 2026-09-20：「向量生成的时机需要明确为自动压缩入库或工具检索调用时」）
-  check('E9 面板写明入库时机 = 自动压缩入库 + 工具检索调用时', clientSrc.includes('入库时机：自动压缩入库 + 工具检索调用时'))
+  check('E9 面板写明入库时机 = 剧情压缩时自动入库，检索工具调用时也会入库', clientSrc.includes('入库时机：剧情压缩时自动入库，检索工具调用时也会入库'))
+}
+
+{
+  // ★ 2026-09-20 第五档（本任务）：文案人话 + 逐条条目 + 三色语义。每条都带灵敏度自证。
+  const vf = sliceFnBody(clientSrc, 'VectorFlow')
+  check('E15 取到 VectorFlow 函数体（判据有对象可比）', typeof vf === 'string' && vf.length > 500, vf === null ? 'null' : String(vf.length))
+  // ⛔ 任务红线：用户可见文案（连同注释里的口径）不许出现内部词。
+  const BANNED = /候选池|隔离|闸|命中/
+  check('E15 ⛔「向量」档不出现内部词（候选池/隔离/闸/命中）', typeof vf === 'string' && !BANNED.test(vf))
+  check('E15 ★反证（塞进内部词 ⇒ 判据必须红）', typeof vf === 'string' && !BANNED.test(vf) && BANNED.test(vf + ' 隔离把候选池清空了'))
+  // 逐条条目卡：id + 过滤 + 折叠 + 与「摘要」页签一一对应（同一份读法）
+  const entriesJudge = (s) => s.includes("id: 'dma-vector-entries'")
+    && s.includes('只看本周目')
+    && s.includes("'展开其余 ' + String(filteredItems.length - shownItems.length) + ' 条'")
+    && s.includes('与「摘要」页签按文件名一一对应')
+    && s.includes("readFileText(archivePath + '/summaries/index.json'")
+  sensitive('E16 逐条条目卡：过滤（只看本周目）+ 折叠 + 与「摘要」页签按文件名一一对应（同一份读法）',
+    entriesJudge, '与「摘要」页签按文件名一一对应')
+  // 三色徽标：本周目=绿 / 别的周目=琥珀 / 未标注=灰（不许只用一种颜色糊过去）
+  const badgeJudge = (s) => s.includes("'●本周目'") && s.includes("'●别的周目'") && s.includes("'○未标注周目'")
+    && s.includes('okBadgeStyle') && s.includes('amberBadgeStyle') && s.includes('dimBadgeStyle')
+  sensitive('E17 归属徽标三色语义（绿=本周目 / 琥珀=别的周目 / 灰=未标注）', badgeJudge, "'●别的周目'")
+  // skipped 机器码 → 人话（all-done / no-index 两个真机实况码）
+  const skippedJudge = (s) => s.includes('const VECTOR_SKIPPED_PLAIN = {')
+    && s.includes('这些摘要早都入库了，内容没变')
+    && s.includes('那个周目还没有摘要目录')
+    && s.includes('VECTOR_SKIPPED_PLAIN[skippedCode]')
+  sensitive('E18 skipped 机器码翻人话（all-done / no-index），认不出的原样透出', skippedJudge, '这些摘要早都入库了，内容没变')
+  // 回执动作机器码 → 中文短名（回执行不再裸奔 ingest-now）
+  const rlJudge = (s) => s.includes('const VECTOR_RESULT_LABELS = {') && s.includes('VECTOR_RESULT_LABELS[String(snap.result.action')
+  sensitive('E19 回执动作名翻成按钮上的中文短名', rlJudge, 'VECTOR_RESULT_LABELS[String(snap.result.action')
 }
 
 // ---------------------------------------------------------------------------

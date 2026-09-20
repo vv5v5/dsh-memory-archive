@@ -2423,6 +2423,124 @@ await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返
   } finally { fakeReact.__setPreset(null) }
 })
 
+// ---------------------------------------------------------------------------
+// 「向量」档渲染（2026-09-20 第五档：文案人话 + 四卡布局 + 逐条条目）。
+// 用台子把 active 预置到「向量」（hook 6 = 3），VectorFlow 的 hook 预置成 ready 快照，
+// 不发任何请求（useEffect 在台上是空转）—— 渲染树里要能看到四张卡与人话文案。
+// ---------------------------------------------------------------------------
+const VF_BOUND = 'playthrough-0256fcac-9902-4830-b2eb-86002bb228c8'
+function vfEntriesFixture() {
+  const mk = (index, tags, chars, mf) => ({
+    index, tags,
+    metadataFile: mf || (index + '.json'),
+    chars, text: chars === null ? null : '第' + index + '条正文', textTruncated: false,
+    timestamp: 1789697599742, mtime: 1789697599742, bad: false,
+  })
+  const items = []
+  for (let i = 0; i < 7; i++) {
+    items.push(mk('sum_t-0000-001' + i + '-' + (i + 1) + '.md', ['Suspense', 'pt:playthrough-adacc634-2f2e-4c09-b21a-7ad48d703f2d'], 856 + i * 11))
+  }
+  items.push(mk('sum_s-0240-0253-6.md', ['Suspense', 'Important', 'pt:playthrough-adacc634-2f2e-4c09-b21a-7ad48d703f2d'], 1204))
+  items.push(mk('probe_2', ['verify'], 64))                                   // 非摘要条目：楼层显示 —
+  items.push(mk('sum_z.md', [], null))                                        // 正文读不到的那条
+  return { items, total: 10, truncated: false, unreadable: 1 }
+}
+function vfSnapFixture() {
+  const t = Date.parse('2026-09-20T15:42:00+08:00')
+  return {
+    status: 'ready',
+    info: {
+      collectionId: 'dsh-memory', at: t,
+      isolation: { enabled: true, bound: VF_BOUND, boundSource: 'config', total: 51, deniedCount: 51, boundCount: 0 },
+      ingest: { state: { running: false, finishedAt: t, skipped: 'no-index', reason: '没有入库：那个周目的摘要目录里还没有 index.json' } },
+    },
+    result: null,
+    live: { vector: { exists: true, count: 51, mtime: t }, bm25: { exists: true, bytes: 144605, mtime: t }, ingestState: { running: false, finishedAt: t, skipped: 'no-index' } },
+    entries: vfEntriesFixture(),
+    staleMs: 120000,
+    error: '',
+  }
+}
+const vfPreset = (over) => Object.assign({
+  0: vfSnapFixture(), 1: true, 2: '', 3: '', 4: { status: 'idle', message: '' },
+  5: 'all', 6: 8, 7: '', 8: null,
+}, over || {})
+
+await check('★ 向量·四卡渲染（验收）：当前状态 + 库 + 向量条目 + 参与检索；红字人话；周目徽标三色；折叠按钮；完整 UUID 不上界面', () => {
+  fakeReact.__setPreset(Object.assign(basePreset('read', {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), { ReadArea: { 0: 'vector' }, VectorFlow: vfPreset() }))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const text = visibleText(tree)
+    for (const t of ['当前状态', '库', '向量条目', '参与检索']) assert.ok(text.includes(t), '缺卡片标题: ' + t + ' ||全文|| ' + text.slice(0, 1500))
+    assert.ok(text.includes('本库 51 条都不属于当前周目（0256fcac），当前周目 0 条 ⇒ 现在检索不到东西。'), '红字诊断不是任务口径的人话: ' + text.slice(0, 400))
+    assert.ok(text.includes('只看本周目') && text.includes('全部'), '条目过滤按钮缺失')
+    assert.ok(text.includes('●别的周目') && text.includes('○未标注周目'), '归属徽标缺失（三色语义）')
+    assert.ok(text.includes('s-0240-0253-6.md'), '条目里看不到摘要名 s-0240-0253-6.md')
+    assert.ok(text.includes('展开其余 2 条'), '折叠按钮缺失（10 条只显示 8 条）')
+    assert.ok(text.includes('1 条正文读不到'), '正文读不到的条数没有如实摆出来')
+    assert.ok(text.includes('还没有摘要目录') || text.includes('那个周目还没有摘要目录'), 'skipped:no-index 没翻成人话')
+    assert.ok(text.includes('剧情压缩时自动入库'), '入库时机口径缺失')
+    assert.equal(text.includes(VF_BOUND), false, '⛔ 完整周目 UUID 不许上可见文本（只许在 title 里）')
+    assert.equal(text.includes('候选池') || text.includes('隔离') || text.includes('命中'), false, '⛔ 内部词不许出现在界面')
+  } finally { fakeReact.__setPreset(null) }
+})
+
+await check('★ 向量·只看本周目（bound 0 条）⇒ 如实空态指向红字；正文坏 ⇒ 徽标照摆', () => {
+  const host = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }
+  fakeReact.__setPreset(Object.assign(basePreset('read', host, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }),
+    { ReadArea: { 0: 'vector' }, VectorFlow: vfPreset({ 5: 'bound' }) }))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const text = visibleText(tree)
+    assert.ok(text.includes('本周目 0 条：列出的 10 条都不是当前周目的（见上方红字）。'), '只看本周目的空态不是如实说法: ' + text.slice(0, 600))
+    assert.equal(text.includes('s-0240-0253-6.md'), false, '过滤成只看本周目后不该还列出别的周目的条目')
+  } finally { fakeReact.__setPreset(null) }
+})
+
+await check('★ 向量·库文件缺失与无快照的空态（⛔ 不白屏、不编数字）', () => {
+  const host = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }
+  // ① 库文件缺失：live.vector.exists=false、entries=null ⇒ 「⚠缺失」+「还没有落盘」
+  const snapMissing = vfSnapFixture()
+  snapMissing.live.vector = { exists: false, count: null, mtime: null }
+  snapMissing.live.bm25 = { exists: false, bytes: null, mtime: null }
+  snapMissing.entries = null
+  fakeReact.__setPreset(Object.assign(basePreset('read', host, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }),
+    { ReadArea: { 0: 'vector' }, VectorFlow: vfPreset({ 0: snapMissing }) }))
+  try {
+    const text = visibleText(fakeReact.createElement(comp, { wide: true }))
+    assert.ok(text.includes('⚠缺失'), '缺库没有 ⚠缺失 徽标')
+    assert.ok(text.includes('向量库文件还没有落盘'), '缺库时条目卡没有如实说明')
+    assert.equal(text.includes('共 51 条'), false, '缺库状态不该还显示旧条数')
+  } finally { fakeReact.__setPreset(null) }
+  // ② 无快照（info=null）⇒ 空态原句 + 条目卡整个不出现
+  const snapNone = { status: 'ready', info: null, result: null, live: null, entries: null, staleMs: null, error: '' }
+  fakeReact.__setPreset(Object.assign(basePreset('read', host, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }),
+    { ReadArea: { 0: 'vector' }, VectorFlow: vfPreset({ 0: snapNone }) }))
+  try {
+    const text = visibleText(fakeReact.createElement(comp, { wide: true }))
+    assert.ok(text.includes('还没有状态快照：开一条这个周目的会话，或点『立即入库』。'), '无快照空态原句缺失')
+    assert.equal(text.includes('向量条目'), false, '无快照时条目卡不该出现（没有可列的东西）')
+  } finally { fakeReact.__setPreset(null) }
+})
+
 // ===========================================================================
 // 「角色扮演记忆库」那一块（20260919）：读的是**别人（社区 RP 预设）写出来的文件**。
 // 纪律与大纲那条完全同款（防剧透门 + 零 useEffect），所以判据照那份形状再写一遍。

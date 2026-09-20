@@ -28,6 +28,7 @@ DSH 的[上下文压缩](https://github.com/deepseek-ai/deepseek-harness)（`com
 | **压缩后自动收纳** + 孤儿清理（摘要进库、账本防重、被删切片的对账与隔离） | ✅ |
 | **OOC 两席**：输入栏的「OOC」前缀按钮 + 划词「质疑」 | ✅ |
 | **一个 skill**：`rp-assistant`（带三份可查资料，见下） | ✅ |
+| **自带的 RP 预设**：`preset/`（组装 + 模块 + 压缩后端），`node preset/install.mjs --apply` 铺到预设目录 | ✅ 可选，随包发布；模块**从本仓现场取** ⇒ 预设与插件不各自漂移 |
 | **两种根**：会话模式（**零依赖**）/ 工作区模式（需 `pmp-dsh-tavern`） | ✅ |
 | **预设生成 / 写入面**（detect · apply · rollback · provision · backups · pack） | ⛔ **已退役**（2026-09-19 用户口径：「不用保持了」）—— 预设目录现在**自己维护**，本插件不再替你改 |
 | **状态子系统**（`state-bridge` 子包 + `state:card` 段 + 5 个状态工具） | ⛔ **已剥离**（2026-09-20）—— 状态改由**周目笔记 `state.md`** 承载，模型按文件开头写的要求自己维护 |
@@ -45,6 +46,18 @@ dsh plugin --profile <你的 profile 名> add ./dsh-memory-archive
 ```
 
 装完**重启一次宿主**：浏览器半侧的 bundle 是宿主启动时组装的。
+
+### 附带的 RP 预设（可选）
+
+本包**自带一份**「角色扮演 · 记忆库版」预设（`preset/`：组装文件 + 几个模块 + RP 专用压缩后端）。
+它不会自动生效（DSH 的预设是文件系统型的），要铺一次：
+
+```bash
+node <profile>/node_modules/dsh-memory-archive/preset/install.mjs          # dry-run：先看会写什么
+node <profile>/node_modules/dsh-memory-archive/preset/install.mjs --apply  # 真写（默认 roleplay 目录）
+```
+
+细节、依赖与限制见 [`preset/README.md`](preset/README.md)。
 
 > 本包**没有构建步骤** —— `lib/` 里就是可直接运行的 JS（`react` 由 DSH 平台的模块 seed 表提供）。
 

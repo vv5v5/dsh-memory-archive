@@ -10,6 +10,11 @@
 
 ### 2026-09-20（状态剥离 · 向量页签 · 压缩链修复 · skill 重塑 · README 重写）
 
+- **Added｜自带的 RP 预设并进本仓**：`preset/`（装配文件 + README + **`install.mjs`**）+ `preset-modules/anima-rag.js`
+  （薄壳：让 `dsh-anima-rag` 那一行随预设目录走，运行期按 `DSH_HOME → profiles/*` 解析真包，解析不到就大声抛错）。
+  `install.mjs` **默认 dry-run**，文件清单**从装配 YAML 现扫**（清单只有一份、不会漂），`mt-compaction-rp.js` 现场生成，
+  已存在且内容不同的文件先备份 `.bak-<时间戳>`。自检：`_selftest-preset-install.mjs`（20 条）。
+  ⇒ 预设**不再单独一个仓库**（原先那个本地仓库 `dsh-roleplay-preset` 已归档）。
 - **Removed｜状态子系统整体剥离**：删掉 `state-bridge` 子包与其在宿主/预设两处的挂载、`state:card` 段（order 50）、
   5 个 `state_*` 工具与对应放行名单；状态改由**周目笔记 `state.md`** 承载（维护要求写在文件自己开头，模型用
   `memory_write` 维护）。旧数据改名归档（`l1-state.removed-20260920/`），⛔ 没有直接删。
