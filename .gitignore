@@ -19,3 +19,6 @@ Thumbs.db
 
 # NOTE: lib/ is intentionally NOT ignored — this package has no build step,
 # lib/ is the published artifact and must be committed.
+
+# 临时改文件的脚手架（一次性脚本，⛔ 不进仓库）
+_tmp-*
