@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-21
+
+> ★ **本版起恢复版本号纪律**（用户 2026-09-21 口径：「这个提交到库里，**从这一条开始写版本号**。
+>   这一条是一个小版本」）：此后**每一批显著变更随一次小版本发布**，CHANGELOG 的条目都归到带版本号的
+>   段落里，不再往 `[Unreleased]` 里堆。本版把此前积压在 `[Unreleased]` 的全部改动一并收进来
+>   （`0.5.2` → `0.6.0`，**小版本**：向后兼容、无破坏性变更）。
+
 > 提示词重整（第一批）：**身份句改写模块** + **装配注入口径按用户定稿调整**。纯调试阶段。
 
 ### 2026-09-20（状态剥离 · 向量页签 · 压缩链修复 · skill 重塑 · README 重写）
@@ -123,6 +130,29 @@
     `_selftest-client.mjs` 的收纳提示席加"空跑不许渲染"+ 反证。
   ⚠️ 改的是**宿主插件**（两个仓库各一半：判定与置位在 `dsh-anima-rag`，提示在 `dsh-memory-archive`）
     ⇒ **要重启宿主**（pid 31384 → **19336**）。
+### 2026-09-21
+
+- **Changed｜提问工具改成 **RP 版**（用户口径：「ask_user_question 问问题工具的定义**能不能改成 rp 版本**，
+  当进行对话，或进行检定，总之**只需要用户给出很少但关键信息**的时候使用」）**：
+  官方那份的 description 是**硬编码常量**（`tool-ask-user/src/index.ts:16`）、**整包零 config**
+  ⇒ 只能**在 preset 作用域注册同名工具遮蔽它**（与 `mt-read.js` 同款手法，⛔ 不碰上游包）：
+  新增 `preset-modules/rp-ask-user.js`，预设里把 `- id: tool-ask-user / @deepseek-ai/dsh-tool-ask-user`
+  换成 `./rp-ask-user.js`；§三 工具清单那一行同步收紧。
+  ★ **只换文案，契约一个字没动**：工具名仍是 `ask_user_question`、参数结构 / `execute` 的
+    `multi_select→multiSelect` 映射 / 出参 `{answers:[{id,selected[],custom?}]}` 全部逐字对齐官方
+    （界面按那套字段渲染，漂一个字段就会"注册正常、面板渲染不出来"）。
+  ★ 真机实测（真机 `:3080`，新建 RP 会话发一轮、读 `request/header`）：工具面仍 **8 个**、
+    `ask_user_question` 的**模型可见说明就是 RP 版中文**、参数键与官方一致。
+  ★ 自检 `_selftest-rp-ask-user.mjs`（**32 条**，进闸 65 → **66**）：文案口径 6 条 + 与官方的字段/必填语义平价
+    + execute 映射 + **schema 方言闸**（每条带反证）。
+  ⚠️⚠️ **两处真机踩到的坑**（都写进模块头注了，别再踩）：
+    ① **schema 方言**：官方是 `defineTool` 的**入参方言**（属性上 `required: true`），而**裸注册要
+       JSON-Schema 方言**（对象级 `required: [...]`，且 `required` **只能挂在 `type:'object'` 上** ——
+       见 `core/tools/src/json-schema.ts:313-321` 的 `allowedFor`）。照官方抄的后果是**整个预设挂不上**
+       （`preset "roleplay" failed to mount: … unsupported JSON schema: …required is not supported on type "array"`）。
+       ★ 28 条"形状/文案"判据**全都抓不住它** ⇒ 是靠一条专钉方言的判据 + 真机探针才发现的。
+    ② **预设里的 `./x.js` 模块改动要重启宿主**：YAML 靠 stamp（新会话即生效），但模块是被宿主
+       `import` 进进程的 ⇒ 不重启就仍用缓存里的旧模块（现象很能骗人：**部署副本已修好、报错却一字未变**）。
 - **Fixed｜`rp-assistant` 的 RP 禁令在合并 skill 时被弄丢了（真机）**：老的那个 `config-kb` 描述里原本写着
   「⛔ 角色扮演（RP）会话里不要调用本技能：演故事时不需要、也不许碰配置与源码 —— 只有用户明确在问
   "装得对不对 / 怎么改配置"时才用」，2026-09-20 把两个 skill 合并成一个时**这句没带过来** ⇒ 技能目录
