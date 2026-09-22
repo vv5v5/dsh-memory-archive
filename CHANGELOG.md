@@ -6,6 +6,39 @@
 
 ## [Unreleased]
 
+### 2026-09-22（自动收纳的门改成**会话优先**：续接会话不再被误杀）
+
+> 现象：用户手动压缩后**摘要出了、但没入库**（周目目录里没有 `archive/`）。取证：卡在「自动收纳」
+> 那道门 —— `runAutoCollect()` 的放行判据是 `autoCollectScope().ids`，而那集合只装
+> `config.root.sessionId`（用户这份是 `null`）∪ catalog 的 `rootSessionId`（= 该周目的**第一场**会话）。
+> 用户实际在玩的是**一路「从这里继续」续接出来的会话**（Tavern `timeline.json` 的 head）⇒ 不在集合里
+> ⇒ 每次 `not-bound-session` 跳过。注意：`target` 指向的周目是**对的**，被判掉的只是"这条会话"；
+> 下游（anima）用同一套纯函数解析这条会话时**认得它**（`source:'session'`）⇒ 卡点只在这道门。
+
+- **Fixed｜放行判据从「会话 id 在不在绑定集合里」改成「这条会话自己解析出的周目 == 目标周目」**：
+  复用文件里**已有**的会话优先入口 `sessionPlaythroughOf()`（读 Tavern `catalog.json` + 各周目
+  `timeline.json`）。`target` 仍由 `autoCollectScope()` 给出（= 面板绑定的那个「角色-周目」，**来源与
+  写入路径一字未动**）。⛔ 没有换成"timeline 里所有会话 id"那种写法 —— 那会绕过"会话优先"，两套判据迟早会漂。
+- **Added｜判据抽成纯函数 `decideAutoCollect(target, hit)`**（`lib/index.js` 导出，台子**直测**判据本身，
+  不再只断言源码字符串）。三条拒绝原因**文字分开**（给用户看的话必须能区分）：
+  `no-bound-target（设置里没选「角色-周目」）`（**原样保留**）／**新** `session-playthrough-unknown
+  （这条会话认不出属于哪个周目：Tavern 的 catalog.json 与各周目 timeline.json 里都没有它）`
+  （旧文案 `bound-session-unknown` 只说得清 catalog 那一半）／**新** `other-playthrough（这条会话属于
+  另一个周目：本会话 = <角色>/<周目>，目标周目 = <角色>/<周目>）`（两边 id 如实带上）。
+- **安全护栏一条不少**：认不出周目的会话（新会话 / 编程会话）仍被拒；属于**另一个**周目的会话仍被拒
+  —— 后者正是原来 `not-bound-session` 想防的事。读不到 catalog（没绑工作区根）也归"认不出"那一类，
+  ⛔ 不因为读不到就放行。
+- 自检：`_selftest-auto-collect.mjs` **ALL PASS**。四类会话的**放行/拒绝矩阵**（真夹具：假 Tavern 工作区
+  `catalog.json` + 两个周目的 `timeline.json`，喂**真执行器**；会话 id 用的是真机事故现场那条的形状）：
+  catalog 的 `rootSessionId` ⇒ 放行（回归）／**续接会话 ⇒ 放行（本单要修的）**／认不出 ⇒ 拒
+  （`session-playthrough-unknown`）／另一个周目 ⇒ 拒（`other-playthrough`，两边 id 都在）+ 纯函数直测
+  （矩阵 + 半截入参等边界）。**反证**：把判据**真·改回**旧写法（拷一份 `lib` 副本改那两处再 import）跑
+  **同一套夹具** ⇒ 续接会话必红（`not-bound-session（这个会话不属于绑定的周目）`，与真机
+  `auto-collect.json` 里那条**逐字一致**），而 catalog root 仍放行 ⇒ 证明这条判据会咬人、且改它没放松护栏。
+  全量门 **67 个文件 0 失败**。
+- ⚠️ **生效方式**：改的是 `lib/index.js`（宿主进程里的模块）⇒ 要重新部署 **并重启宿主**才在真机上生效；
+  ⛔ 本仓不替人部署（真机是否真的开始收纳，由派单方部署后只读核 `auto-collect.json` 定论）。
+
 ## [0.7.0] - 2026-09-22
 
 > 本版两件事：① **自动压缩触发阈值**（记忆库面板新一档「压缩」+ 每轮现读，见下一条）；
@@ -47,8 +80,6 @@
   全量门 **67 个文件 0 失败**。
 - ⚠️ **生效方式**：改了 `mt-compaction-rp.js` 这个**模块** ⇒ 要 `_materialize-preset-modules.mjs --apply`
   重新铺盘 **并重启宿主**才在真机上生效（⛔ 本仓不替人铺盘）。
-- ⚠️ **生效方式**：改了 `mt-compaction-rp.js` 这个**模块** ⇒ 要重新铺盘
-  （`_materialize-preset-modules.mjs --apply`）**并重启宿主**才在真机上生效；⛔ 本仓不替人铺盘。
 
 ### 2026-09-21（自动压缩触发阈值：面板 + 每轮现读的阈值）
 
