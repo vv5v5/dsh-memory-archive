@@ -1,13 +1,17 @@
 /**
- * A2 自检台：lib/collect-scan.js —— 行为级；手搓 Map + 临时台账目录，零宿主、零 Tavern、零 LLM。
+ * A2 自检台：lib/collect-scan.js —— 行为级；手搓 Map + 临时台账目录，零宿主、零真 Tavern、零 LLM。
  * 运行：node _selftest-collect-scan.mjs（结束自动删掉自建临时目录）。
  * 第 1/5/6 条的反证（故意改坏 collect-scan.js 一行 ⇒ 必须变红）由运行者手工执行并留档。
+ * 第 12 节（20260922 手动/HTTP 那条路的 base）是唯一例外：它跑**真 HTTP 的假 Tavern**
+ * （`_selftest-fake-tavern.mjs`，契约级）做端到端，并拷一份 `lib` 副本把那两处改回旧写法做反证
+ * —— 基线仍然是零宿主、零真 Tavern（副本跑完即删，⛔ 本仓的 lib 一字未动）。
  * 隐私：fixture 全是明显假的占位正文；自检输出/台账/collect-scan.js 三处对 fixture 前 12 字零命中（第 8 条锁死）。
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   findShadowRegions,
   regionContentHash,
@@ -20,7 +24,14 @@ import {
   scanConstants,
   selectModelSummary,
   normalizeSummaryEventDoc,
+  routeTavernBase,
+  reqLikeFromBase,
+  makeA1Tavern,
+  collectOnce,
+  handleCollectScan,
+  handleCollectAuto,
 } from './lib/collect-scan.js'
+import { createFakeTavern } from './_selftest-fake-tavern.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const workRoot = mkdtempSync(join(here, '.st-tmp-')) // 只落在仓库内，finally 里删干净
@@ -475,6 +486,200 @@ try {
   check('11f', '静态：collect-scan 的 deps.instruction 透传在位',
     scanSrc.includes("instruction: typeof instruction === 'string' ? instruction : ''"),
     'collect-scan.js 缺 deps.instruction 透传')
+
+  // ═══ 12. ★ 20260922：手动/HTTP 那条路的 Tavern 基址（`base`）════════════════════
+  //
+  //   真机事故（逐字证据在派单任务书 §1）：`POST /collect/scan`（干跑）返回
+  //   `{"ok":false,"error":{"code":"TAVERN_UNREACHABLE","message":"Tavern 工作区请求失败：fetch failed"}}`，
+  //   而同一个 URL 换 `/collect/targets`（A1）是好的、同一个地址 curl 也是 200。
+  //   代码上的差：自动那条路（lib/index.js）**传了** base，HTTP 路由（runCollectRoute）**没传**
+  //   ⇒ 内核推不出基址 ⇒ A1 的兜底分支给出 `http://127.0.0.1`（**没有端口**）⇒ 打 80 端口。
+  //
+  //   这一节四层，每条都能直测（⛔ 不是源码字符串断言）：
+  //     ① 路由那一步（routeTavernBase：真 A1 取法）—— 相「Host ⇒ 基址」/ 相「socket.localPort 兜底」
+  //     ② 内核那一步（reqLikeFromBase → makeA1Tavern）—— **假 backend 把 `createTavernClient({baseUrl})`
+  //        的入参记下来断言**（客户端用真 A1 的，只有入参被记账 ⇒ 不是"顺手的假对象"）
+  //     ③ 端到端：真路由（handleCollectScan/handleCollectAuto）+ 真 A1 客户端 + **真 HTTP 的假 Tavern**
+  //     ④ 反证：把 base 那一行挖掉（旧写法）+ 内核的收紧改回旧写法 ⇒ ①②③ 必红，且红出的形态
+  //        与真机那条 `fetch failed` 对得上
+  const a1 = await import('./lib/collect.js') // 真 A1：取法与客户端都用真的，只把入参记下来
+  const spyBackend = (recorded) => ({
+    tavernBaseFromReq: a1.tavernBaseFromReq,
+    createTavernClient: (opts) => { recorded.push(opts); return a1.createTavernClient(opts) },
+  })
+  /** 内核那一步的合成：base → 合成 req → 客户端（把 createTavernClient 的入参记进 recorded）。 */
+  const baseToClient = (recorded, base) => makeA1Tavern(spyBackend(recorded), reqLikeFromBase(base))
+
+  // ── ① 相 1：路由收到 `Host: 127.0.0.1:3080` ⇒ 传给客户端的基址 == http://127.0.0.1:3080 ──
+  //    ⚠️ socket.localPort 故意给 9999（本机没服务）：证明取法是 **Host 优先**，⛔ 不是"随便挑一个"。
+  //    反证（§3-3）：把 base 那一行挖掉 ⇒ 基址变 `http://127.0.0.1`（无端口）⇒ **本条必红**（见 12i/12j）。
+  {
+    const rec = []
+    const base = await routeTavernBase({ headers: { host: '127.0.0.1:3080' }, socket: { localPort: 9999 } })
+    baseToClient(rec, base)
+    check('12a', '★ 相：Host=127.0.0.1:3080 ⇒ createTavernClient 的 baseUrl 逐字等于 http://127.0.0.1:3080',
+      base === 'http://127.0.0.1:3080' && rec.length === 1 && rec[0].baseUrl === 'http://127.0.0.1:3080',
+      JSON.stringify({ base, baseUrl: rec[0] && rec[0].baseUrl }))
+    check('12b', '★ 相：Host 优先于 socket.localPort（兜底那条没被用上）',
+      String(rec[0] && rec[0].baseUrl) === 'http://127.0.0.1:3080', String(rec[0] && rec[0].baseUrl))
+  }
+
+  // ── ② 相 2：Host 缺失、但 socket.localPort = 3080 ⇒ `http://127.0.0.1:3080`（A1 的老口径，照抄别改）──
+  {
+    const rec = []
+    const base = await routeTavernBase({ headers: {}, socket: { localPort: 3080 } })
+    baseToClient(rec, base)
+    check('12c', '★ 相：没有 Host 头 ⇒ 用 socket.localPort 兜底 ⇒ http://127.0.0.1:3080（A1 老口径照抄）',
+      base === 'http://127.0.0.1:3080' && rec[0].baseUrl === 'http://127.0.0.1:3080',
+      JSON.stringify({ base, baseUrl: rec[0] && rec[0].baseUrl }))
+  }
+
+  // ── 相 3：自动收纳那条路给的 base（`http://127.0.0.1:<webServer.port>`）照旧被接受（无回归）──
+  {
+    const rec = []
+    baseToClient(rec, 'http://127.0.0.1:3112')
+    check('12d', '★ 相：自动收纳给的 base（http://127.0.0.1:<port>）照旧被接受 —— 收紧契约没伤到另一条路',
+      rec[0].baseUrl === 'http://127.0.0.1:3112', String(rec[0] && rec[0].baseUrl))
+  }
+
+  // ── ③ 端到端：真路由 + 真 A1 客户端 + 真 HTTP 的假 Tavern ─────────────────────
+  //   真机形状：同一个宿主既是面板端点、又是 Tavern 工作区面。请求头的 Host 指到假 Tavern 的端口
+  //   ⇒ 插件必须**打到那个端口**才可能出 plan（打到 80 = 真机那个 fetch failed）。
+  //   ⚠️ DSH_HOME 指到临时目录：这条链会读台账（干跑只读不写）—— ⛔ 绝不碰真机 home。
+  const CHAR12 = 'char-scan-base-0001'
+  const PT12 = 'playthrough-scan-base-0001'
+  const fake12 = createFakeTavern()
+  await fake12.start()
+  fake12.files.set('catalog.json', JSON.stringify({
+    schemaVersion: 1,
+    playthroughs: [{
+      id: PT12,
+      path: `${CHAR12}/${PT12}/timeline.json`,
+      ext: { pmpDshTavern: { characterId: CHAR12, rootSessionId: 'session-12' } },
+    }],
+  }) + '\n')
+  const bySeq12 = new Map([
+    [0, { surface: 'shadowed', text: FIX[0], type: 'user/message' }],
+    [1, { surface: 'shadowed', text: FIX[1], type: 'assistant/message' }],
+  ])
+  const ctx12 = {
+    get: (name) => (name === 'sessionQuery' ? { readSession: async () => ({}), filterEvents: async () => [] } : null),
+  }
+  /** 假 req：只要 `headers.host` / `socket.localPort` / 可 for-await 的 body —— 与真 IncomingMessage 同形。 */
+  const mkReq12 = (host, localPort, bodyObj) => {
+    const raw = Buffer.from(JSON.stringify(bodyObj), 'utf8')
+    return {
+      headers: host === undefined ? {} : { host, 'content-type': 'application/json' },
+      socket: { localPort },
+      async *[Symbol.asyncIterator]() { yield raw },
+    }
+  }
+  const body12 = { sessionId: 'session-12', target: { characterId: CHAR12, playthroughId: PT12 } }
+  const surfaces12 = async () => bySeq12
+  const log12 = { warn() {} }
+  process.env.DSH_HOME = mkdtempSync(join(workRoot, 'dsh12-'))
+  {
+    const sent = []
+    await handleCollectScan(ctx12, mkReq12('127.0.0.1:' + fake12.port, 9999, body12),
+      (status, body) => sent.push({ status, body }), log12, surfaces12, '')
+    check('12e', '★★ 端到端：/collect/scan 干跑**出 plan**（真机那次的症状是 fetch failed）',
+      sent.length === 1 && sent[0].status === 200 && sent[0].body.ok === true
+      && Array.isArray(sent[0].body.regions) && sent[0].body.regions.some((r) => r.floorCount === 2),
+      JSON.stringify(sent.map((s) => ({ status: s.status, ok: s.body && s.body.ok, error: s.body && s.body.error }))))
+    check('12f', '★★ 端到端：Tavern 请求真的打到 Host 指的那个端口（同源）—— 打到 80 就是真机那个 fetch failed',
+      fake12.requests.length > 0 && fake12.requests.every((r) => r.host === '127.0.0.1:' + fake12.port),
+      JSON.stringify({ n: fake12.requests.length, hosts: [...new Set(fake12.requests.map((r) => r.host))] }))
+  }
+  // /collect/auto（面板的「收进归档」/补收）走的是同一个 runCollectRoute ⇒ base 也必须是它
+  {
+    const sent = []
+    await handleCollectAuto(ctx12, mkReq12('127.0.0.1:' + fake12.port, 9999, body12),
+      (status, body) => sent.push({ status, body }), log12, surfaces12, '')
+    check('12g', '★★ 端到端：/collect/auto 规划+落库也通（archived=1，写进假 Tavern）',
+      sent.length === 1 && sent[0].status === 200 && sent[0].body.ok === true && sent[0].body.archived === 1,
+      JSON.stringify(sent.map((s) => ({ status: s.status, ok: s.body && s.body.ok, archived: s.body && s.body.archived, error: s.body && s.body.error }))))
+  }
+
+  // ── ④ 反证（§3-3）：把 base 那一行挖掉（旧写法）+ 内核的收紧改回旧写法 ⇒ 上面三条必红 ──
+  //   做法照 `_selftest-auto-collect.mjs` 第 9 节：拷一份 lib 到临时目录、只改那两处、import 那份副本，
+  //   喂**同一套夹具**跑同一条链。⛔ 不改本仓的 lib（改的是副本），跑完删掉。
+  {
+    const tmp12 = mkdtempSync(join(tmpdir(), 'dma-scan-base-revert-'))
+    cpSync(join(here, 'lib'), join(tmp12, 'lib'), { recursive: true })
+    writeFileSync(join(tmp12, 'package.json'), JSON.stringify({ type: 'module' }) + '\n', 'utf8')
+    const p12 = join(tmp12, 'lib', 'collect-scan.js')
+    let src12 = readFileSync(p12, 'utf8')
+    const before12 = src12
+    src12 = src12
+      // 旧写法①：路由**不传 base**（真机上漏的就是这一行）
+      .replace('    const base = await routeTavernBase(req)\n', '')
+      .replace('      auto: auto === true,\n      base,\n      collectSurfaces,', '      auto: auto === true,\n      collectSurfaces,')
+      // 旧写法②：内核拿不到 base 时静默退化成 `null` ⇒ A1 兜底分支给出 `http://127.0.0.1`（无端口）
+      .replace('  const reqLike = reqLikeFromBase(base)',
+        "  const reqLike = typeof base === 'string' && base !== '' ? { headers: { host: base.replace(/^https?:\\/\\//, '') } } : null")
+    check('12h', '反证夹具就位：副本里那两处确实改回旧写法（⛔ 原文件一字未动）',
+      src12 !== before12 && !src12.includes('  const reqLike = reqLikeFromBase(base)')
+      && !src12.includes('    const base = await routeTavernBase(req)\n') && src12.includes("typeof base === 'string' && base !== ''")
+      && readFileSync(join(here, 'lib', 'collect-scan.js'), 'utf8').includes('  const reqLike = reqLikeFromBase(base)'), '')
+    writeFileSync(p12, src12, 'utf8')
+    const old12 = await import(pathToFileURL(p12).href)
+
+    // 反证 A：旧写法下 reqLike === null ⇒ 基址退化成 http://127.0.0.1（**没有端口**）⇒ 打 80 端口
+    const recOld = []
+    old12.makeA1Tavern(spyBackend(recOld), null)
+    console.log('    · 旧写法 reqLike=null ⇒ createTavernClient({baseUrl:' + JSON.stringify(recOld[0] && recOld[0].baseUrl) + '})')
+    check('12i', '★★ 反证：旧写法基址退化成 http://127.0.0.1（**无端口**）⇒ 打 80 端口',
+      recOld[0] && recOld[0].baseUrl === 'http://127.0.0.1', String(recOld[0] && recOld[0].baseUrl))
+    check('12j', '★★ 反证：§3-1 那条判据在旧写法下**必红**（同一个断言：baseUrl === http://127.0.0.1:3080 ⇒ false）',
+      recOld[0] && recOld[0].baseUrl !== 'http://127.0.0.1:3080', String(recOld[0] && recOld[0].baseUrl))
+
+    // 反证 B：旧写法走同一条端到端链路 ⇒ 不再是 plan，而是没头没脑的失败
+    const sentOld = []
+    await old12.handleCollectScan(ctx12, mkReq12('127.0.0.1:' + fake12.port, 9999, body12),
+      (status, body) => sentOld.push({ status, body }), log12, surfaces12, '')
+    console.log('    · 旧写法走真 HTTP ⇒ ' + JSON.stringify(sentOld[0] && { status: sentOld[0].status, error: sentOld[0].body && sentOld[0].body.error }))
+    check('12k', '★★ 反证：旧写法端到端**不是 plan**（形态与真机那条对得上：TAVERN_UNREACHABLE / fetch failed）',
+      sentOld.length === 1 && sentOld[0].body && sentOld[0].body.ok === false
+      && /TAVERN_UNREACHABLE|TAVERN_HTTP_|TAVERN_BAD_SHAPE/.test(String(sentOld[0].body.error && sentOld[0].body.error.code)),
+      JSON.stringify(sentOld[0] && sentOld[0].body))
+    check('12l', '★★ 反证：旧写法那条错误里**没有一个字**指出"基址推不出来" —— 这就是"失败形态不可读"本身',
+      !String(sentOld[0] && sentOld[0].body && sentOld[0].body.error && sentOld[0].body.error.message).includes('推不出宿主自己的地址'), '')
+    rmSync(tmp12, { recursive: true, force: true })
+    check('12m', '副本已删（⛔ 不给仓库留垃圾）', !existsSync(tmp12), '')
+  }
+
+  // ── ⑤ 反证（§3-4）：base 拿不到 ⇒ **可读错误 SCAN_BASE_UNKNOWN**，⛔ 不拿 http://127.0.0.1 去连 ──
+  {
+    const codes = []
+    for (const bad of [undefined, null, '', '   ', 'http://127.0.0.1', 'https://localhost', 'http://127.0.0.1:0', 'http://127.0.0.1:70000']) {
+      try { reqLikeFromBase(bad); codes.push('(没抛)') } catch (e) { codes.push(e.code) }
+    }
+    check('12n', '★ 反证：base 拿不到 / 只剩主机名 / 端口越界 ⇒ 一律 SCAN_BASE_UNKNOWN（8 种入参）',
+      codes.every((c) => c === 'SCAN_BASE_UNKNOWN'), JSON.stringify(codes))
+    let badMsg = ''
+    try { reqLikeFromBase('http://127.0.0.1') } catch (e) { badMsg = String(e.message) }
+    check('12o', '★ 反证：文案说清"推不出宿主自己的地址 / 本轮没连 Tavern"（⛔ 不是 fetch failed）',
+      badMsg.includes('推不出宿主自己的地址') && badMsg.includes('本轮没连 Tavern') && !badMsg.includes('fetch failed'), badMsg)
+    // 内核那一层：不给 base ⇒ 直接可读地抛（⛔ 不往下走去连 Tavern）
+    let kernErr = null
+    try {
+      await collectOnce(ctx12, { sessionId: 'session-12', target: { characterId: CHAR12, playthroughId: PT12 } })
+    } catch (e) { kernErr = e }
+    check('12p', '★ 反证：内核拿不到 base ⇒ SCAN_BASE_UNKNOWN（⛔ 不拿 http://127.0.0.1 去连、不报 fetch failed）',
+      !!kernErr && kernErr.code === 'SCAN_BASE_UNKNOWN' && !String(kernErr.message).includes('fetch failed'),
+      JSON.stringify({ code: kernErr && kernErr.code, message: kernErr && kernErr.message }))
+    // 路由那一层：请求里既没有 Host、也没有 localPort ⇒ 503 + 同一句话（HTTP 响应也是人话）
+    const sentNoBase = []
+    await handleCollectScan(ctx12, mkReq12(undefined, undefined, body12),
+      (status, body) => sentNoBase.push({ status, body }), log12, surfaces12, '')
+    console.log('    · 推不出地址时路由的响应 ⇒ ' + JSON.stringify(sentNoBase[0]))
+    check('12q', '★ 反证：路由响应 503 + SCAN_BASE_UNKNOWN（面板上是一句人话，⛔ 不是 fetch failed）',
+      sentNoBase.length === 1 && sentNoBase[0].status === 503 && sentNoBase[0].body && sentNoBase[0].body.error
+      && sentNoBase[0].body.error.code === 'SCAN_BASE_UNKNOWN'
+      && sentNoBase[0].body.error.message.includes('推不出宿主自己的地址'),
+      JSON.stringify(sentNoBase[0] && sentNoBase[0].body))
+  }
+  await fake12.stop()
 
 } finally {
   // 8d 的判定必须在全部输出之后做：自检自己的输出也不能带 fixture 前 12 字

@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+### 2026-09-22（手动/HTTP 那条路**漏传 Tavern 基址** ⇒ 面板的「收纳」与补收全走不通）
+
+> 现象：面板点「收纳」只见 `{"ok":false,"error":{"code":"TAVERN_UNREACHABLE","message":"Tavern 工作区请求失败：fetch failed"}}`。
+> 取证：**不是 Tavern 连不上** —— 同一个地址 curl / node fetch 都是 200，同一个 URL 换 `/collect/targets`（A1）也是好的。
+> 差在 `base`：内核 `collectOnce()` 需要一个 `opts.base` 才能推同源基址，**自动那条路传了**（`lib/index.js` 的
+> `runAutoCollect`），**HTTP 那条路漏了**（`runCollectRoute`）⇒ `reqLike = null` ⇒ A1 的 `tavernBaseFromReq`
+> 走兜底分支 ⇒ `http://127.0.0.1`（**没有端口**）⇒ 请求打到 80 端口 ⇒ 没头没脑的 `fetch failed`。
+
+- **Fixed｜`runCollectRoute` 补上 base**：照 A1 的取法从**当前请求**推同源基址（新增 `routeTavernBase(req)`，
+  内部就是 `collect.js` 的 `tavernBaseFromReq` —— Host 头优先，兜底 `127.0.0.1:<socket.localPort>`），
+  ⛔ 不自己拼字符串、⛔ 不写死端口。`/collect/scan`（只规划）与 `/collect/auto`（规划+落库）共用这一条路由
+  ⇒ 面板的「收纳」与「收进归档」（补收）一起恢复。
+- **Fixed｜失败的形态变可读（新增 `SCAN_BASE_UNKNOWN`）**：内核 `collectOnce` 的契约收紧成"**必须给得出基址**"
+  —— 拿不到就抛可读错误（「推不出宿主自己的地址（…），本轮没连 Tavern。」），⛔ **不再**静默退化成
+  `http://127.0.0.1` 让上层报 `fetch failed`。判据 = 基址里有没有一个可用端口（两条正常来路 —— HTTP 路由从
+  Host 头推、自动收纳从 `webServer.port` 推 —— 都必然带端口）。HTTP 状态 503（与
+  `SCAN_COLLECT_BACKEND_MISSING` / `SESSION_QUERY_UNAVAILABLE` 同族：宿主侧缺能力，与请求内容无关）。
+- **不动**：plan/apply 的语义（`/collect/scan` 仍只规划不落库、`/collect/auto` 仍规划+落库）、台账幂等、
+  放行门（`decideAutoCollect`）、落库路径与 A1 的交互，一字未改；自动收纳那条路本来就是对的，没碰。
+- 自检：`_selftest-collect-scan.mjs` 第 12 节（**76 通过 / 0 失败**）—— 四层都能**直测**，⛔ 没有一条是源码字符串断言：
+  ①「路由收到 `Host: 127.0.0.1:3080` ⇒ `createTavernClient({baseUrl})` 的入参逐字 == `http://127.0.0.1:3080`」
+  （用**假 backend** 记账，客户端本身用真 A1 的）；②「Host 缺失、`socket.localPort = 3080` ⇒ 退化成
+  `http://127.0.0.1:3080`」（A1 老口径照抄）；③**端到端**：真路由 + 真 A1 客户端 + 真 HTTP 的假 Tavern
+  （Host 指到假 Tavern 的端口）⇒ `/collect/scan` **出 plan**、`/collect/auto` **落库 archived=1**，且假 Tavern
+  收到的每个请求的 Host 都等于那个端口；④**反证**（照 `_selftest-auto-collect.mjs` 第 9 节的手法：拷一份 `lib`
+  副本把那两处改回旧写法再 import，喂**同一套夹具**跑同一条链）⇒ 基址真退化成 `http://127.0.0.1`（无端口）
+  ⇒ 第①条判据必红，同一条端到端链返回的错误对象 `{"code":"TAVERN_UNREACHABLE","message":"Tavern 工作区请求
+  失败：fetch failed"}` **与真机那条逐字一致**（证明这条判据会咬人）。另钉「base 拿不到 / 只剩主机名 /
+  端口越界 ⇒ 一律 `SCAN_BASE_UNKNOWN`（8 种入参）+ 路由 503 + 文案可读」。全量门 **67 个文件 0 失败**。
+- ⚠️ **生效方式**：改的是 `lib/collect-scan.js`（宿主进程里的模块）⇒ 要重新部署 **并重启宿主**才在真机上生效；
+  ⛔ 本仓不替人部署（真机干跑 `/collect/scan` 是否真的出 plan，由派单方部署后核）。
+
 ### 2026-09-22（自动收纳的门改成**会话优先**：续接会话不再被误杀）
 
 > 现象：用户手动压缩后**摘要出了、但没入库**（周目目录里没有 `archive/`）。取证：卡在「自动收纳」
