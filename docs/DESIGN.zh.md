@@ -53,6 +53,12 @@ packages/preset/agent-presets/presets/standard/agent.cordis.yml:137-155
 在 256k 窗口上它的默认行为是「攒到 **204,800** token 才压、压完还留 **40,960**」，
 与「原文层留十几层」的直觉差了将近一个数量级。⇒ 这是后来必须换成绝对 `retainTokens` 的原因（见 §1.4）。
 
+> ★ 2026-09-21 注记（后来的第二次改动）：**又改回了比例式** —— 因为面板要让玩家自己调阈值，
+> 而阈值是比例、保留量是绝对值在窗口变化时会打架。现在预设写 `thresholdRatio: 0.15` + `retainRatio: 0.05`，
+> 由插件那层在读取处夹紧（`retainRatio = min(YAML 值, thresholdRatio × 0.7)`，恒小于阈值）。
+> 与 `retainTokens: 8000` 的关系是**行为近似**：160k 窗口下恰好等价，窗口更小则保留更少。
+> 详见 `preset/agent.cordis.yml` 的「策略数字」那段与 CHANGELOG 的 [Unreleased]。
+
 ### 1.2 「折叠」的机制是 surface 遮蔽 —— 这是整个项目的立足点
 
 DSH 的事件流是**只追加**的真相源；「模型看得见的那一面」（surface）是它上面的一层**投影**。
@@ -146,7 +152,7 @@ session-query/session-query/src/documents.ts:56-73   classifySurface() → 'curr
   isolate: { compaction: true, toolResultPruner: true }
   config:
     - id: compaction-rp           # ← 我们的 RP 归档模板
-      config: { thresholdRatio: 0.15, retainTokens: 8000, summaryLanguage: auto }
+      config: { thresholdRatio: 0.15, retainRatio: 0.05, summaryLanguage: auto }  # 2026-09-21：retainTokens 8000 → retainRatio 0.05（见上注记）
 
 # standard preset（随包，编程模式）
 - id: compaction

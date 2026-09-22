@@ -6,6 +6,95 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-22
+
+> 本版两件事：① **自动压缩触发阈值**（记忆库面板新一档「压缩」+ 每轮现读，见下一条）；
+> ② **压缩链真机事故修复** —— 摘要请求"刚发就废"、45 轮静默失败、上下文一路涨。
+> ⚠️ 行为变更：预设 YAML 的 `retainTokens: 8000` → `retainRatio: 0.05` 是**近似**（下一条里逐字写明）。
+
+### 2026-09-22（压缩链真机事故：根因「缺 source」→ 请求形状修好 + 兜底保留）
+
+> 现象：用户报「自动压缩好像没触发」。取证：其实**每轮都触发、但每次都立刻失败** ——
+> `compaction/end` 带 `error: Cannot read properties of undefined (reading 'kind')`，从 turn 25 起
+> 连续 **45 轮**，上下文因此涨到 32%/1M 从没被压过一次。而且这个失败**是静默的**
+> （官方只在宿主控制台 `logger.warn` 一句，而宿主是控制台窗口起的）。
+
+- **Fixed｜根因 = 我们重建的摘要消息**丢了 `source`**：官方 llm runtime 的 `forAdapter` 对**每条
+  assistant 消息**无守卫地读 `message.source.kind` ⇒ 少一条就在**调用 provider 之前**抛 TypeError，
+  被包成 `code=UNKNOWN` 的 error finish（**零内容块** = 那条 `finish#undefined/reason=error` 的流序列）。
+  真机验证链：三档梯子上 **R1（无 source）每次都炸 / R2（+source）必成**；
+  `_probe-foradapter-20260922.mjs` 用**上游自己的库**逐字复现（全 user 正常；只加一条无 source 的
+  assistant ⇒ 适配器一次都没被调到、流里只有那条 error finish）。
+- **Changed｜请求形状定稿 = 两档（⛔ 不再保留"无 source"那一档）**：
+  · **主档** = RP 形状，**每条消息都带 source**（会话消息搬**原来的**那一个；我们自己那几条统一给
+    plugin source；**连"原来没有 source"的消息也补一个** —— 上游硬要求 ⇒ **不变量优先于"形状如实"**）；
+  · **兜底** = 官方形状（`super.summarize`：`input.messages` 原样 + 有 `tools` 就传 + 官方指令）；
+  · 两档都落盘（`logCompactionNote` 写"谁走通的"；失败写 `trigger=summarize-rp / -official`，
+    仍带 `streamTrace` 与 `requestShape`）；两档全失败 ⇒ 抛兜底那条（⛔ 不吞）。
+  ★ **真机复核（最终形状）**：`NOTE summarize-rp 成功：每条消息都带 source` **×3**、**零失败条目**、
+  **没用到兜底** ⇒ 摘要继续用 **RP 归档指令**（不是官方那条）。
+- **Removed｜诊断脚手架**：三档梯子的 `withSource` 开关与"无 source"那一档已删
+  （**已知坏的形状不该留在代码里**）；`renderSummaryInput` / `buildRpSummaryMessages` 各只剩一种行为。
+- **Added｜压缩失败不再静默**（这次能查到全靠它）：失败会往
+  `<DSH_HOME>/dsh-memory-archive/compaction-failures.log` 追加「消息 + 堆栈 + `failureDetail` +
+  `streamTrace`（流里的 chunk 序列）+ `requestShape`（每条消息的 role/source/块类型）」，带截断与轮转；
+  另加 `readFinish()`（取 finish 这一步本身会抛也兜住）与 `describeMessages()`。自检台与运行器
+  一律把 `DSH_HOME` 钉到临时目录（⛔ 不许往真机 `~/.dsh` 写）。
+- 自检：`_selftest-compaction-threshold.mjs` **205 通过 / 0 失败**（S6 两档静态锚 + 反证；S8 真引擎 +
+  假 `ctx.llm.stream`：主档全带 source / 主档被拒走兜底 / 两档全失败抛兜底 / 两档形状各就各位；
+  S10 纯函数直测「请求里 0 个 MISSING」+ 反证）；`_selftest-mt-compaction.mjs` **ALL PASS**
+  （8a 加了**代际表**：部署副本缺这一代标记 ⇒ 大声 SKIP 并写明铺盘命令，⛔ 不静默放过）。
+  全量门 **67 个文件 0 失败**。
+- ⚠️ **生效方式**：改了 `mt-compaction-rp.js` 这个**模块** ⇒ 要 `_materialize-preset-modules.mjs --apply`
+  重新铺盘 **并重启宿主**才在真机上生效（⛔ 本仓不替人铺盘）。
+- ⚠️ **生效方式**：改了 `mt-compaction-rp.js` 这个**模块** ⇒ 要重新铺盘
+  （`_materialize-preset-modules.mjs --apply`）**并重启宿主**才在真机上生效；⛔ 本仓不替人铺盘。
+
+### 2026-09-21（自动压缩触发阈值：面板 + 每轮现读的阈值）
+
+> 新增能力，**向后兼容**（默认开 + 默认 15% = 预设里原来那个 `thresholdRatio: 0.15` 同一个数 ⇒
+> 装上就是原来那个行为）。⚠️ 预设 YAML 里 `retainTokens: 8000` → `retainRatio: 0.05` 是**行为近似**，
+> 不是等价 —— 差异逐字写在下面。
+
+- **Added｜记忆库面板新一档「压缩」**（`lib/client.js`）：与 摘要 / 原文 / 剧情大纲 / 向量 平级
+  （会话模式也与「会话事件」并列 —— 它读的是**本会话**的实时占用，不依赖 Tavern 归档）。
+  内容三块：①**实时读数**（每 4 秒现读宿主，面板关掉就停）—— 主「当前 42%」= DSH 自带的那个
+  上下文百分比，副「触发判定 47%（含输出 token）」= **真正被拿去比阈值的那个数**，
+  第三行「窗口 128k · 预设阈值 15% · 阈值 19200 token」；②**控件**（滑块 5–90 步 5 + 数字框互相同步
+  + 「用面板的阈值」开关 + 保存）；③**如实说明**三条（逐字：`改完之后立刻生效。` /
+  `触发阈值是估算的，因为输出token也参与计算，因此触发会略早于设置值。` /
+  `另外如果上下文超限，会无视阈值强制压缩。` —— 措辞 2026-09-21 用户定稿）。
+  ⛔ 客户端不自己算任何百分比，读不到就红字「读不到（原因）」。
+- **Added｜两个宿主端点**（`lib/index.js` · 实现全在新模块 `lib/compaction-threshold.js`）：
+  `GET /compaction/state?sessionId=…`（只读：`percent`/`triggerPercent`/`usedTokens`/`triggerTokens`/
+  `contextWindow`/`presetThresholdRatio`/`readError`/`notes`；两个服务一律 `ctx.get('…')` 懒取，
+  拿不到就照常 200 + 字段如实 null）与 `POST /compaction/config`
+  （body `{usePanelThreshold?, thresholdPercent?}`：①写 `config.json` ②**点改部署预设 YAML** 的
+  `thresholdRatio` = `thresholdPercent/100`，先数出现次数、≠1 就拒绝改、改前备份 `.bak-<时间戳>`、
+  **写后回读校验**；返回 `{config:{ok,reason}, yaml:{ok,path,reason}}` —— 两件事各自如实）。
+- **Added｜配置段 `autoCompact: { usePanelThreshold: true, thresholdPercent: 15 }`**（`defaultConfig()`，
+  进 `publicConfig()`；`thresholdPercent` 收成 5–90 的整数、步长 5，**越界夹紧并如实回报**，不抛）。
+- **Changed｜压缩后端从「只覆盖 summarize()」变成「覆盖 summarize() + compactIfNeeded()」**
+  （`lib/mt-compaction.js` 的生成物）：新增的覆写**每轮现读** `config.json` 的 `autoCompact`
+  ⇒ 面板改完**正在玩的这一场下一轮就生效**（不用重开周目、不用重启宿主）。官方源码在注册自动压缩处
+  逐字写着 `compactIfNeeded` 是动态分派的、子类覆写会在事件时被尊重 —— 这就是用的那条缝。
+  覆写体只换"拿哪个阈值"，随后 `super.compactIfNeeded(...)` 原样走官方实现；
+  读不到 / JSON 坏 / 没有这一段 / 开关关着 ⇒ **用预设 YAML 原值**（⛔ 绝不退回官方默认 0.8）。
+  新增公开属性 `officialConfig` / `baseConfig` / `panelThresholdReason`（⛔ 不用 `#` 私有成员：
+  cordis 的服务 Proxy 过不了它，第一次压缩就会抛「Receiver must be an instance…」）。
+- **Changed｜预设 `preset/agent.cordis.yml`：`retainTokens: 8000` → `retainRatio: 0.05`**
+  （比例式、与窗口无关）。⚠️ **近似不是等价**：0.05 × 160k = 8000 **恰好相等**；窗口更小则保留更少
+  （128k ⇒ 6,400），更大则更多（256k ⇒ 12,800）。读取处再夹一层
+  `retainRatio = min(YAML 值, thresholdRatio × 0.7)` ⇒ **恒小于 thresholdRatio**
+  （玩家把阈值调到 5% 也不会撞官方 `retainRatio must be less than thresholdRatio` 那条不变量）。
+- 自检：新增 `_selftest-compaction-threshold.mjs`（**163 条**：四个纯函数 + 预设写盘 + 生成物三件事 +
+  路径等价 + **端到端二分实测**「面板 15% → 20% ⇒ 触发点 19200 → 25600」）；`_selftest-client.mjs`
+  加 6 条压缩档断言（含反证）；`_selftest-mt-compaction.mjs` 的「只覆盖 summarize」按新事实改成
+  「覆盖 summarize + compactIfNeeded，且覆写体调了 super」。
+- ⚠️ 生效方式：**面板阈值**那条是"每轮现读"（改完下一轮就生效）；**预设 YAML** 那条是 stamp 制
+  （新会话 / 新分叉才吃）；改了 `mt-compaction-rp.js` 这个**模块**要**重启宿主**才生效
+  —— 三条通路生命周期不同，⛔ 别混。
+
 ## [0.6.1] - 2026-09-21
 
 > 补丁版：**RP 人设三处改动**（与角色卡对齐 + 除掉旧口径残留）。纯提示词，无代码路径变化。

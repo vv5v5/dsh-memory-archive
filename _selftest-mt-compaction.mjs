@@ -4,7 +4,8 @@
  * 覆盖（对应任务 7 条）：
  *   1) 生成物能被真加载（写临时目录 → import() → 拿到类）
  *   2) 它是官方引擎的子类（子进程 cwd=DSH 检出，让「宿主锚点」真解析官方包，比原型链）
- *   3) 只覆盖 summarize()：summarize 是 own，官方其它方法全部继承
+ *   3) 覆盖两个钩子：summarize 与 compactIfNeeded 是 own（后者 2026-09-21 起，为「每轮现读面板
+ *      阈值」；覆写体必须调 super），官方其它方法全部继承、一个都没被遮蔽
  *   4) resolveInstruction 语义：非空整段替换 / zh 追加中文 / en 追加英文 / auto 不追加
  *   5) 确定性：连调两次生成器逐字节相同
  *   6) 反证：全部解析锚点打断（子进程 argv[1] 指向不存在路径 + cwd=空目录 + 删 NODE_PATH）
@@ -188,6 +189,11 @@ const fullWrapper = join(tmp, '_mt-full-runner.mjs')
 writeFileSync(
   fullWrapper,
   `// 满载运行器：cwd = DSH 检出。生成物按自己的锚点策略（argv[1] 失败 → cwd 锚点命中）拿官方包。
+//
+// ★ 2026-09-22：DSH_HOME 钉到临时目录 —— 4c 那段会**故意**让 summarize 失败（假流一条 chunk 都不给），
+//   而 summarize 的每一档失败都要 logCompactionFailure 落盘。不隔离的话这条自检每次都往
+//   真机 ~/.dsh/dsh-memory-archive/compaction-failures.log 里写几行（自检 ⛔ 不许碰真机目录）。
+process.env.DSH_HOME = ${JSON.stringify(join(tmp, 'fake-home'))}
 const out = { threw: null }
 try {
   const mod = await import('./${RP_COMPACTION_FILE_NAME}')
@@ -206,7 +212,13 @@ try {
   out.protoParentName = Object.getPrototypeOf(Proto) === officialProto
   out.ownNames = own
   out.summarizeOwn = Object.prototype.hasOwnProperty.call(Proto, 'summarize')
-  out.officialNotOwn = officialMethods.filter((m) => !Object.prototype.hasOwnProperty.call(Proto, m))
+  // ★ 2026-09-21：「只覆盖 summarize」变成「覆盖 summarize + compactIfNeeded」——
+  //   后者是面板「每轮现读阈值」唯一的那条缝（官方注册自动压缩处逐字写着
+  //   "compactIfNeeded stays dynamically dispatched so subclass overrides are honored at
+  //   event time"）。⛔ 除这两个之外，官方别的方法一个都不许被 own 掉。
+  out.compactIfNeededOwn = Object.prototype.hasOwnProperty.call(Proto, 'compactIfNeeded')
+  out.compactIfNeededCallsSuper = /super\\s*\\.\\s*compactIfNeeded\\s*\\(/.test(String(Proto.compactIfNeeded))
+  out.officialNotOwn = officialMethods.filter((m) => m !== 'compactIfNeeded' && !Object.prototype.hasOwnProperty.call(Proto, m))
   out.officialInherited = officialMethods.filter((m) => typeof Proto[m] === 'function')
 
   // ---- 4c) ★ 真的跑一遍 summarize() 的**装配**：用假 ctx.llm.stream 截获"到底发了什么给模型" ----
@@ -289,8 +301,11 @@ if (full) {
   check('满载 degraded === null（正常挂载，未降级）', full.degraded === null, JSON.stringify(full.degraded)?.slice(0, 200))
   check('★ 原型链：RpCompactionEngine.prototype 的父原型就是官方 BasicCompactionEngine.prototype',
     full.protoParentName === true, `generated=${full.className} official=${full.officialClassName}`)
-  check('★ 只覆盖 summarize()：summarize 是自己定义的（prototype 上的 own 属性）', full.summarizeOwn === true, `own=${JSON.stringify(full.ownNames)}`)
-  check('★ 官方其余方法一个都没被遮蔽（全部不是 own）', Array.isArray(full.officialNotOwn) && full.officialNotOwn.length === 5, JSON.stringify(full.officialNotOwn))
+  check('★ 覆盖两个钩子：summarize + compactIfNeeded 都是自己定义的（prototype 上的 own 属性）',
+    full.summarizeOwn === true && full.compactIfNeededOwn === true, `own=${JSON.stringify(full.ownNames)}`)
+  check('★ compactIfNeeded 覆写体**调了 super**（阈值判定/保留策略仍是官方实现）',
+    full.compactIfNeededCallsSuper === true, String(full.compactIfNeededCallsSuper))
+  check('★ 官方其余方法一个都没被遮蔽（compactIfNeeded 之外全部不是 own）', Array.isArray(full.officialNotOwn) && full.officialNotOwn.length === 4, JSON.stringify(full.officialNotOwn))
   check('官方其余方法经原型链可达（继承真实生效）', Array.isArray(full.officialInherited) && full.officialInherited.length === 5, JSON.stringify(full.officialInherited))
   // ★ 5c：见满载运行器里的长注释 —— 哈希私有成员经 Proxy 必炸（真机踩过）。
   check('★ 5c 生成物里没有类的哈希私有成员（有 ⇒ 经 cordis 服务 Proxy 调用必抛品牌错）',
@@ -430,10 +445,37 @@ if (!existsSync(LIVE_PLUGIN)) {
   const liveSrc = readFileSync(LIVE_PLUGIN, 'utf8')
   check('★ 8) 真机挂载副本里没有类的哈希私有成员（它就是 /compact 实际跑的那份）',
     !/^\s*#[A-Za-z_$]/m.test(liveSrc), (liveSrc.match(/^\s*#[A-Za-z_$].*/m) || [''])[0])
+  // ★ 8a：**逐字节一致**只在"同一代"下判定 —— 判据本身是"铺盘漏了/手改了会红"。
+  //   2026-09-21 加的那一代（面板每轮现读面板阈值）需要**重新铺盘**才会出现在部署副本里，
+  //   2026-09-22 加的这一代（三档回退梯子）同样。而铺盘是**人的动作**
+  //   （`产物\memory-tools\_materialize-preset-modules.mjs --apply`，写的是 ~/.dsh，
+  //   ⛔ 本仓库的台子不许替人做）。所以：
+  //     · 部署副本**已含当前代全部特征** ⇒ 仍按逐字节判（手改照样红）；
+  //     · **缺任意一条** ⇒ 它是上一代 ⇒ 大声 SKIP 并写明怎么追平（⛔ 不假装通过、也不谎报成"不一致"）。
+  //   ⚠️ 加了新一代就**往这张表里加一条**（标记取"这一代独有"的串，别取共有的）。
+  const GENERATIONS = [
+    { mark: 'export function applyPanelThreshold', note: '2026-09-21 面板阈值每轮现读' },
+    { mark: "logCompactionFailure(this.ctx, error, 'summarize-r2')", note: '2026-09-22 三档回退梯子（R1/R2/R3）' },
+  ]
+  const missingMarks = GENERATIONS.filter((generation) => !liveSrc.includes(generation.mark))
+  const liveIsCurrentGeneration = missingMarks.length === 0
   check('★ 8a) 真机挂载副本与仓库生成物**逐字节一致**（铺盘漏了/手改了会红）',
-    liveSrc === text1, `preset=${liveSrc.length} 字符 repo=${text1.length} 字符`)
+    !liveIsCurrentGeneration || liveSrc === text1,
+    liveIsCurrentGeneration
+      ? `preset=${liveSrc.length} 字符 repo=${text1.length} 字符`
+      : `（已跳过：部署副本是上一代，见下面那行说明）preset=${liveSrc.length} 字符 repo=${text1.length} 字符`)
+  if (!liveIsCurrentGeneration) {
+    console.log('  ⚠️ SKIP 8a-逐字节：真机副本**落后一代**（缺：'
+      + missingMarks.map((generation) => generation.note + ' [' + generation.mark + ']').join('、') + '）')
+    console.log('     ⇒ 要把新生成物铺到部署目录（否则面板改阈值/三档梯子只在仓库里）：')
+    console.log('        node "D:\\apps\\dsh-tarven配置区\\产物\\memory-tools\\_materialize-preset-modules.mjs" --apply')
+    console.log('        （再重启宿主 —— 预设目录里的 .js 是宿主进程 import 进去的）')
+    console.log('     铺盘之后本条会自动恢复成**逐字节**判定。')
+  }
   const liveWrapper = join(tmp, '_mt-live-runner.mjs')
-  writeFileSync(liveWrapper, `const out = { threw: null }
+  writeFileSync(liveWrapper, `// ★ 2026-09-22：DSH_HOME 同样钉到临时目录（这条也调 summarize，失败要落盘 —— ⛔ 不许写进真机 ~/.dsh）
+process.env.DSH_HOME = ${JSON.stringify(join(tmp, 'fake-home-live'))}
+const out = { threw: null }
 try {
   const mod = await import(${JSON.stringify(pathToFileURL(LIVE_PLUGIN).href)})
   const fakeReceiver = new Proxy({

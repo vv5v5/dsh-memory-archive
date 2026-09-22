@@ -1110,6 +1110,10 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     // 「向量」页签（2026-09-20）：状态只读 + 动作请求单（动作由按会话挂载的 dsh-anima-rag 执行）
     ['GET', '/vector/state'],
     ['POST', '/vector/action'],
+    // 「压缩」档（2026-09-21）：本会话实时占用只读（每 4 秒轮询）+ 阈值保存（config.json 与
+    // 部署预设 YAML 两件事各自如实）。⛔ 客户端不自己算百分比 ⇒ 只读这两条。
+    ['GET', '/compaction/state'],
+    ['POST', '/compaction/config'],
     // v3 消费端（2026-09-16）：维护抽屉的「v3 外部组合」面板读投影 + 两个显式动作
     // （面板那条 PUT /config 走的是表里已有的 ['PUT','/config']，这里两条是新端点）
     ['GET', '/v3'],
@@ -2529,14 +2533,20 @@ function outlineArrowBody(code, marker) {
 // 已知代价：带 `://` 的行后半截会被行注释剥法吃掉，只会漏报不会误报，对本块判据无影响）
 const outlineCodeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
 
-await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返回恰好 [摘要, 原文, 剧情大纲, 向量]（★ 2026-09-20：摘「状态」档、加「向量」档）；会话模式无此档', () => {
+await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返回恰好 [摘要, 原文, 剧情大纲, 向量, 压缩]（★ 2026-09-20：摘「状态」档、加「向量」档；★ 2026-09-21：加「压缩」档）；会话模式只有 [会话事件, 压缩]', () => {
   const cs = outlineFnBody(src, 'computeSources')
   assert.ok(cs, '缺 computeSources 函数')
   assert.ok(
-    cs.includes("return [['summaries', '摘要'], ['floors', '原文'], ['outline', '剧情大纲'], ['vector', '向量']]"),
+    cs.includes("return [['summaries', '摘要'], ['floors', '原文'], ['outline', '剧情大纲'], ['vector', '向量'], ['compact', '压缩']]"),
     '档位返回不是逐字约定形状',
   )
-  // 渲染断言：工作区就绪读视图，tab 标签按序恰为四档
+  // ★ 2026-09-21：「压缩」档读的是**本会话**的实时占用（不依赖 Tavern 归档）⇒ 会话模式与
+  //   Tavern 不可达时也给它；⛔ 但工作区那几档（摘要/原文/剧情大纲/向量）不许跟着跑过去。
+  assert.ok(
+    cs.match(/return eventsSessionId \? \[\['events', '会话事件'\], \['compact', '压缩'\]\] : \[\]/g)?.length === 2,
+    '会话模式 / Tavern 不可达两条退路都该是 [会话事件, 压缩]',
+  )
+  // 渲染断言：工作区就绪读视图，tab 标签按序恰为五档
   const readyHost = {
     healthStatus: 'ready',
     health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
@@ -2550,11 +2560,13 @@ await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返
     const clickables = []
     collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && typeof n.props.children === 'string', clickables)
     const labels = clickables.map((n) => n.props.children)
-    const order = labels.filter((l) => ['摘要', '原文', '剧情大纲', '向量'].includes(l))
-    assert.deepEqual(order, ['摘要', '原文', '剧情大纲', '向量'], '档位顺序或成员不对: ' + order.join(','))
+    const order = labels.filter((l) => ['摘要', '原文', '剧情大纲', '向量', '压缩'].includes(l))
+    assert.deepEqual(order, ['摘要', '原文', '剧情大纲', '向量', '压缩'], '档位顺序或成员不对: ' + order.join(','))
     assert.equal(labels.includes('状态'), false, '⛔「状态」档已摘除，不许回来')
     // ★ 2026-09-20：「向量」档与 摘要/原文/剧情大纲 同层（用户口径「和摘要原文平级」）
     assert.equal(labels.includes('向量'), true, '缺「向量」档入口')
+    // ★ 2026-09-21：「压缩」档（自动压缩触发阈值控制面板）同样与它们同层
+    assert.equal(labels.includes('压缩'), true, '缺「压缩」档入口')
   } finally { fakeReact.__setPreset(null) }
   // 会话模式：不该出现这一档（入口只在工作区模式与 摘要/原文/状态 同层）
   const sessHost = {
@@ -2571,6 +2583,8 @@ await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返
     collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && typeof n.props.children === 'string', clickables)
     assert.equal(clickables.some((n) => n.props.children === '剧情大纲'), false, '会话模式不该有剧情大纲入口')
     assert.equal(clickables.some((n) => n.props.children === '向量'), false, '会话模式不该有向量入口（它与摘要原文同层，都在工作区模式）')
+    // ★ 2026-09-21：「压缩」档在会话模式**也有**（它读的是"本会话"的实时占用，不依赖 Tavern 归档）
+    assert.equal(clickables.some((n) => n.props.children === '压缩'), true, '会话模式也应有「压缩」档入口')
   } finally { fakeReact.__setPreset(null) }
 })
 
@@ -2837,6 +2851,126 @@ await check('★ 记忆库·打开文件夹（2026-09-20；同日补空态）：
     '成败两条播报缺一条（不许静默）')
   assert.ok(body.includes("data.created === true") && body.includes("data.fallbackTo === 'workspace-root'"),
     '回执没按 created / fallbackTo 如实播报')
+})
+
+// =======================================================================
+// 20260921 压缩单：第六档「压缩」（自动压缩触发阈值控制面板）
+//
+// 三条纪律逐条钉（都带反证）：
+//   ① ⛔ 客户端**不自己算百分比** —— 只读宿主算好的 percent / triggerPercent，
+//      源码里不许出现任何原始 token 字段（usedTokens / pressureTokens / surfaceTokens / …）；
+//   ② 读不到就显示「读不到（原因）」**红字**，⛔ 绝不用 0% 冒充；
+//   ③ 三条如实小字**由宿主给**（notes 数组原样显示），⛔ 不许在客户端另写一份（两份真相会漂）。
+// =======================================================================
+
+function compactFlowBody() {
+  return outlineFnBody(src, 'CompactFlow')
+}
+/** 常量与小工具（COMPACT_POLL_MS / compactTokenText / compactPercentText）写在组件**外面** ⇒
+ *  判据要取「常量起 → 组件体结束」这一整段（与组件体分开取，免得把外部定义漏掉）。 */
+function compactSection() {
+  const body = compactFlowBody()
+  assert.ok(body, '缺 CompactFlow 组件')
+  const start = src.indexOf('const COMPACT_POLL_MS')
+  const end = src.indexOf(body) + body.length
+  assert.ok(start >= 0 && end > start, '压缩档那一段的边界找不到')
+  return src.slice(start, end)
+}
+
+await check('★ 压缩·档与端点（验收1）：ComputeSources 里有 compact 档、ReadArea 里接了 CompactFlow、只读宿主两条端点', () => {
+  const body = compactFlowBody()
+  assert.ok(body, '缺 CompactFlow 组件')
+  const ra = outlineFnBody(src, 'ReadArea')
+  assert.ok(ra.includes("cur === 'compact'"), 'ReadArea 没有 compact 档分支')
+  assert.ok(ra.includes('e(CompactFlow, { sessionId:'), 'ReadArea 没把 sessionId 传给 CompactFlow')
+  // 实时读数走 GET /compaction/state（带 sessionId）；保存走 POST /compaction/config
+  assert.ok(body.includes("requestJson(url)") && body.includes("'/compaction/state' + (sessionId ? '?sessionId=' + encodeURIComponent(sessionId) : '')"),
+    '实时读数没有按"带 sessionId 的 /compaction/state"取')
+  assert.ok(body.includes("mutateJson(HOST_API_BASE + '/compaction/config', 'POST', body,"), '保存没走 POST /compaction/config')
+  // ★ 反证：把档分支挖掉 ⇒ 同一条判据必红
+  assert.equal(ra.replace("cur === 'compact'", '').includes("cur === 'compact'"), false, '反证失败：挖掉后仍能命中')
+})
+
+await check('★ 压缩·轮询（验收2）：3–5 秒一次、面板关掉就停（清理函数里 clearTimeout）', () => {
+  const body = compactSection()
+  const m = body.match(/const COMPACT_POLL_MS = (\d+)/)
+  assert.ok(m, '缺 COMPACT_POLL_MS 常量')
+  const ms = Number(m[1])
+  assert.ok(ms >= 3000 && ms <= 5000, `轮询间隔 ${ms}ms 不在 3–5 秒区间`)
+  assert.ok(body.includes('timer.current = setTimeout('), '没有走 setTimeout 轮询')
+  assert.ok(/return \(\) => \{[\s\S]*?clearTimeout\(timer\.current\)/.test(body), '卸载时没清定时器（面板关掉还在转）')
+  assert.ok(body.includes('alive.current = false'), '没有活着标志（卸载后回调仍会写 state）')
+})
+
+await check('★ 压缩·⛔ 不自己算百分比（验收3）：源码里不许出现任何原始 token 字段（含反证）', () => {
+  const body = compactFlowBody()
+  for (const field of ['usedTokens', 'triggerTokens', 'pressureTokens', 'surfaceTokens', 'sampledSurfaceTokens', 'totalTokens']) {
+    assert.equal(body.includes(field), false, '压缩档里出现了原始 token 字段 ' + field + '（百分比只能读宿主算好的）')
+  }
+  assert.ok(body.includes('data.percent') && body.includes('data.triggerPercent'), '没有直接用宿主给的 percent / triggerPercent')
+  // ★ 反证：把宿主给的 percent 换成"本地按窗口算" ⇒ 同一条判据必红
+  const naive = body.replace('data.percent', 'Math.round((data.usedTokens / data.contextWindow) * 100)')
+  assert.ok(naive.includes('usedTokens'), '反证失败：这条判据抓不住"本地自己算百分比"的写法')
+})
+
+await check('★ 压缩·读不到就红字（验收4）：主/副两行各有「读不到（原因）」分支；⛔ 不许显示 0%', () => {
+  const body = compactSection()
+  assert.ok(body.includes("'读不到' + (readError !== '' ? '（' + readError + '）' : '')"), '没有"读不到（原因）"的红字分支')
+  assert.ok(body.includes('style: errorStyle'), '读不到那一支不是红字（errorStyle）')
+  assert.ok(body.includes('compactPercentText') && body.includes('Number.isFinite(percent) ? String(percent)'),
+    'percent 的取用没有"不是数就 null"的判据（容易被 0 冒充）')
+  // ★ 反证：把 null 判据换成"不是数就当 0" ⇒ 同一条判据必红
+  const zeroed = body.replace('if (!Number.isFinite(n)) return \'—\'', '')
+  assert.equal(zeroed.includes("if (!Number.isFinite(n)) return '—'"), false, '反证失败：挖掉后仍能命中')
+  // 渲染断言：没有 sessionId ⇒ 出「读不到 / 还不知道本会话」红字，且**一个 0% 都不出现**
+  const readyHost = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }
+  fakeReact.__setPreset(Object.assign(
+    basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }),
+    { ReadArea: { 0: 'compact' } },
+  ))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const text = visibleText(tree)
+    assert.ok(text.includes('自动压缩触发阈值'), '压缩档没渲染出标题')
+    assert.ok(text.includes('还不知道本会话是哪一个') || text.includes('读不到'), '没有传 sessionId 时没有如实说明')
+    assert.ok(text.includes('0%') === false, '出现了 0%（⛔ 读不到不许用 0% 冒充）')
+  } finally { fakeReact.__setPreset(null) }
+})
+
+await check('★ 压缩·控件（验收5）：滑块 5–90 步 5 + 数字框互相同步 + 开关 + 保存；如实小字由宿主给（notes 原样显示）', () => {
+  const body = compactSection()
+  assert.ok(body.includes('const COMPACT_MIN_PERCENT = 5') && body.includes('const COMPACT_MAX_PERCENT = 90') && body.includes('const COMPACT_STEP_PERCENT = 5'),
+    '控件范围/步长常量不是 5–90/5')
+  assert.ok(body.includes("id: 'dma-compact-range'") && body.includes("type: 'range'") && body.includes("step: COMPACT_STEP_PERCENT"), '缺滑块')
+  assert.ok(body.includes("id: 'dma-compact-percent'") && body.includes("type: 'number'"), '缺数字框')
+  assert.ok(body.includes("id: 'dma-compact-switch'") && body.includes("type: 'checkbox'"), '缺「用面板的阈值」开关')
+  assert.ok(body.includes("id: 'dma-compact-save'"), '缺保存按钮')
+  // 互相同步：两个控件都读同一份 percent state，且变更都走同一个 onPercent
+  assert.ok((body.match(/onChange: \(ev\) => onPercent\(ev\.target\.value\)/g) || []).length === 2, '滑块与数字框没有共用同一个同步函数')
+  assert.ok(body.includes('const onPercent = (raw) => {'), '缺 onPercent（同步 + 夹紧）')
+  // 保存体：两个字段都带
+  assert.ok(body.includes('const body = { usePanelThreshold: usePanel }') && body.includes('body.thresholdPercent = n'), '保存体缺字段')
+  // 如实小字：由宿主 notes 渲染，客户端不另写一份
+  assert.ok(body.includes('notes.map((line, i) =>'), '没有渲染宿主给的 notes')
+  assert.equal(body.includes('略早'), false, '⛔ 客户端自己写了"略早"那段小字（必须由宿主给，免得两份漂）')
+  // ★ 反证：把 notes.map 换成写死一句 ⇒ 同一条判据必红
+  const hard = body.replace('notes.map((line, i) =>', "'写死一句说明'.map((line, i) =>")
+  assert.equal(hard.includes('notes.map((line, i) =>'), false, '反证失败：挖掉 notes.map 后仍能命中')
+  // 两件事各自如实：config / yaml 两半分别显示
+  assert.ok(body.includes("'config.json：'") && body.includes("'预设 YAML：'"), '没把 config 与 yaml 两半分开显示')
+})
+
+await check('★ 压缩·失败也说话（验收6）：整体 ok:false 时从 err.payload 里把两半摊开，⛔ 不静默', () => {
+  const body = compactFlowBody()
+  assert.ok(body.includes("const payload = error && error.payload ? error.payload : null"), '抛错时没读 err.payload（两半的原因会丢）')
+  assert.ok(body.includes("setSave({ busy: false, ok: false, text: errText(error), detail: payload })"), '失败没进 detail（界面上看不到两半）')
+  assert.ok(body.includes('void load()'), '失败后没有回读一次真实状态（界面会停在旧数）')
 })
 
 console.log('== 总结：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')
