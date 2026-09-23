@@ -2626,9 +2626,11 @@ function vfSnapFixture() {
     error: '',
   }
 }
+// ★ 2026-09-22：多了槽位 5 = 排队类动作的**后台跟踪 id**（'' = 没在跟踪；删除不走它，删除是当次回执）。
+//   ⚠️ 这个夹具是**按位置**喂 useState 的 ⇒ 组件里新增一个 useState 就得在这里补一槽（并顺移后面几槽）。
 const vfPreset = (over) => Object.assign({
-  0: vfSnapFixture(), 1: true, 2: '', 3: '', 4: { status: 'idle', message: '' },
-  5: 'all', 6: 8, 7: '', 8: null,
+  0: vfSnapFixture(), 1: true, 2: '', 3: '', 4: { status: 'idle', message: '' }, 5: '',
+  6: 'all', 7: 8, 8: '', 9: null,
 }, over || {})
 
 await check('★ 向量·四卡渲染（验收）：当前状态 + 库 + 向量条目 + 参与检索；红字人话；周目徽标三色；折叠按钮；完整 UUID 不上界面', () => {
@@ -2665,7 +2667,7 @@ await check('★ 向量·只看本周目（bound 0 条）⇒ 如实空态指向�
     configError: '',
   }
   fakeReact.__setPreset(Object.assign(basePreset('read', host, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }),
-    { ReadArea: { 0: 'vector' }, VectorFlow: vfPreset({ 5: 'bound' }) }))
+    { ReadArea: { 0: 'vector' }, VectorFlow: vfPreset({ 6: 'bound' }) }))
   try {
     const tree = fakeReact.createElement(comp, { wide: true })
     const text = visibleText(tree)

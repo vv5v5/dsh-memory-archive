@@ -6,6 +6,191 @@
 
 ## [Unreleased]
 
+### 2026-09-22（面板「删除向量库 / 删除 BM25 库」**点了就删**；「立即入库 / 重建」排队但**不再冻面板**）
+
+> 现象（用户原话）：「**是这个流程反直接，直接冻面板 60s，然后告诉我要下一轮？改成直接删**」。
+> 真机实测：点「删除」⇒ 宿主只写一张请求单，动作要等该周目会话的**下一轮开始前**才由 anima 执行，
+> 面板转 60 秒然后说"还没执行"。而删除根本不需要 anima 的引擎 —— 它就是**改名留档 + 忘账本**，
+> 全是宿主平面做得到的事。
+
+- **Changed｜删除两个动作改成宿主平面**当场做完**（`lib/index.js` 的 `handleVectorAction` +
+  `lib/vector-panel.js` 新增 `planDelete` / `deleteMessage` / `deleteNow`）**：`delete-vector` /
+  `delete-bm25` ⛔ 不再写请求单，当次就地：读快照拿落点（读不到 ⇒ 可读错误，⛔ 不猜路径）⇒ 目标不存在
+  就照 anima 老口径回「本来就不存在（顺手忘掉账本 N 条）」（**仍忘账本**、⛔ 不报失败）⇒ 存在就
+  `renameSync(target, target + '.removed-<ISO时间戳>')`（**改名留档，⛔ 绝不 rm**）⇒ 忘账本 ⇒
+  把回执写进 `panel-result.json` ⇒ 消费掉同名旧请求单 ⇒ `{ok:true, deleted:true, …回执}` 随本次响应回去。
+  语义/文案/`safeCollectionName`/`removedStamp` 全部**逐字对齐** `dsh-anima-rag` 的 `executePanelAction`
+  （那边一行未动，两边行为一致）。
+- **Added｜忘账本只忘"本会话周目"那几个摘要文件名**：客户端只递"是哪个周目"（`playthroughId`），
+  清单由宿主自己去读那份归档的 `summaries/index.json`（`summariesDirOfPlaythrough`：工作区根 + catalog
+  的既有知识，⛔ 不另造解析）；⛔ 不收客户端递来的文件名清单。**清单为空 / 读不到 / 没说是哪个周目 ⇒
+  一条都不忘并如实播报**（anima 2026-09-20 那条教训：宁可不错忘别的周目）。
+- **Changed｜「立即入库 / 重建」保留排队，但不再冻面板**（`lib/client.js` 的 `VectorFlow`）：提交后
+  **立刻**显示"已排队…不用在这儿等，按钮可以继续用"并**放开 `busy`**；回执改成**后台低频跟踪**
+  （10s 一次、30 分钟放手，⛔ 不占 `busy`、不挡按钮），对上 id 就更新横幅与「最近一次动作」。
+  旧的"2s 轮询 / 60s 上限 / 超时说还没执行"整块退役。
+- **Fixed｜"删完不许有两个真相"**：快照（`vector-info.json`，anima 写）在删除后可能还是旧的 ⇒
+  `readVectorState` 新增 `deletedAfterInfo`（最近一张回执是删除、且比快照新）⇒ 面板如实标
+  「这份状态快照是删除之前的，条数与归属统计都过期了」（橙字，`dma-vector-stale-after-delete`），
+  库存行改以**现算**结果为准（库不在就说库不在），⛔ 不拿旧条数骗人；⛔ 宿主**绝不写**那份快照。
+- 自检：`_selftest-vector-panel.mjs` 新增 H/I/J 三节（任务书 §3 的八条：纯计划两对 + 五对含反证 +
+  真 HTTP 两条行为），并改写 E5/E8/E14/E2/F2 等旧判据 —— 全部按新口径钉死（删除那一支**里有
+  `startTracking` 就必红**、请求体里**带文件名清单就必红**、全文 `rmSync` 只要多一处就必红、
+  回执键集合与 anima 源码逐字比对）。台子 122 ⇒ **188 条全绿（0 失败）**；`_selftest-client.mjs` 的
+  VectorFlow 位置夹具同步补一槽（track），**119 通过 / 0 失败**；全量门 **67 个文件 0 失败**。
+- ⚠️ 生效方式同前：改的是宿主进程里的模块 ⇒ 要重新部署**并重启宿主**。
+
+### 2026-09-22（归档摘要**按段切片**：一条摘要拆成「一个叙事段一条」—— 检索的粒度就是「一条文件」）
+
+> 现象（用户原话）：「**摘要没做切分吗，我看到是一大段一条。但内部是有分段的。这回影响向量检索吗**」
+> —— **影响**。检索侧的粒度就是「**一个摘要文件 = 一条切片**」（`dsh-anima-rag` 的 `autoIngestOnce`
+> 把整文件读成一条 `slices.push`、**入库侧不切块**）：真机 `mt-0000-0167.md` 是 **1690 字一条**，
+> 而它内部其实有 **45 个叙事段**（每段一行「第N天 时段: …」）⇒ 45 段挤成一个向量点（语义被平均掉）、
+> 命中就把 1690 字整段灌进提示词、再长还会撞 embedding 的长度上限被截断。旧管线本来就是**按段切**的
+> （anima 那边的账本键是 `s-0000-0019-1.md` / `-2` / `-3`）—— 上一单把粒度做粗了。
+
+- **Added｜A1 加一条**追加式**能力 `summaries: [{id?, text, model?, meta?}, …]`**（`lib/collect.js`，
+  本单唯一允许改的既有文件，且**只许追加**）：一次调用 = 楼层**只写一遍** + **每份一张 `.md`** +
+  `index.json` **追加 N 条** entry + `manifest.summaries.count` = 追加后的条目数（口径不变，只是 +N）。
+  落点口径仍只有 `summaryPathOf` 一处（每份传自己的 `id`；N 份的路径都登记进 `expectedRevisions`；
+  两份落到同一路径 / 缺 id ⇒ `COLLECT_INVALID`，⛔ 不替你改名）。`summary`（单份）那条老路**逐字未动**
+  ——内部统一成「一份的数组」，N=1 时 plan 的键序 / `hash` / `willWrite` / `expectedRevisions` 与落盘
+  字节**逐字节相同**（一次性对照脚本：`plan 键序 / plan 全文 / written 清单 / 假 Tavern 盘上每个文件`
+  四项全 SAME）。两路都传 ⇒ `COLLECT_INVALID`（⛔ 不猜该用哪个）。
+- **Changed｜结构化那一路**逐段落盘**（`lib/collect-scan.js`）：`beautifyModelSummary` 除拼好的正文外
+  还回**段数组** `segments: [{text, tags}, …]`（判据仍只此一处，⛔ 不在 `planScan` 里再解析一遍 JSON）；
+  `planScan` 据此**一次提交 N 份**：`id = mt-<from4>-<to4>-<N>`（**多段带后缀、只有一段不带**，
+  与改造前的落盘形状一致）、`text` = 那一段的散文、`tags` = **那一段自己的**收编结果（⛔ 不再是各段
+  并集）、`fromFloor/toFloor` = 区间范围（各段共用 —— 模型的分段与楼层没有一一对应，如实共用）。
+  ★ `applyScan` 的**现取计划**（`replanForRegion`）也照原样带 N 份：只带 `region.summary` 会让落库
+  **静默缩回 1 份**（自检 17i 就是这个 bug 的反证）。
+- **保留｜机械兜底（`compaction/prune`）与 fail-open（解析不出的整篇原文）两路照旧一条**
+  （没有"段"可分，⛔ 不硬造分段）。
+- **Changed｜字节上限从「区间级一份」改成「逐段各自判」**（`MODEL_SUMMARY_MAX_BYTES`）：某一段超限 ⇒
+  **那一段**如实回落机械条目 + 播报 `model-summary-too-big`（其余段照常），⛔ 不截断模型正文；
+  全段都超限才整条回落（与改造前同形）。**区间级那条旧判据随之退役**（⛔ 不许两套判据并存）。
+  对外的 `warnings` / `skipped` 原因码枚举**一个字没变**。
+- 自检：`_selftest-collect-scan.mjs` 新增第 17 节（任务书 §3 的六对）与第 18 节（逐段字节上限）——
+  每条都走**真链路**（`collectOnce` → `planScan`/`applyScan` → 真 A1 → **真 HTTP 的假 Tavern**），
+  断言的是 `index.json` 里**真实追加了几条**、`.md` 里**逐字**是什么；反证一律**真把旧写法改回副本里
+  跑一遍**（副本 A 落盘改回拼成一条 / B tags 改回并集 / C 现取计划丢段 / D 两路并存的守卫挖掉 /
+  E 逐段判据换回区间级）。`_selftest-collect.mjs` 新增 A14–A18（A1 侧：3 份 ⇒ 索引 +3 与
+  `manifest.count`、逐段判重、老路形状钉死）与突变 `MUTATE=9`。台子 **155 + 17 条全绿**，
+  全量门 **67 个文件 0 失败**。
+- ⚠️ 生效方式同前几单：改的是宿主进程里的模块 ⇒ 要重新部署 **并重启宿主**；且真机已归档的那两条摘要
+  要**先清掉**再重收（`alreadyArchived` 只认区间正文哈希，不清就会跳过、旧的一整段摘要留着）。
+
+### 2026-09-22（归档摘要**美化**（JSON → 散文）+ tags **标签化**：不再直接落 JSON、tags 收得进来）
+
+> 现象（用户原话）：「**现在摘要里显示的直接是 json，做一下美化吧……tag 做一下标签化**」。
+> 真机取证（`<周目>/archive/summaries/mt-0000-0167.md` 逐字）：落盘的「摘要正文」就是模型那份 JSON
+> （`[ { "summary": "第1天 清晨: …", "tags": { "vibe": "Serious", "special": [], "important": false } }, { … } ]`，
+> 2750 字符，外壳/键名/花括号全在里面），而 **tags 一个字都没收**（真机两条摘要都记了 `tags-empty`）——
+> 因为这份 tags 是**逐段嵌在 JSON 里的对象**，而取 tags 的老路 `extractTagsLine` 找的是
+> 「正文**末尾**的 `tags:` 行」，一个都匹配不上。
+
+- **Fixed｜归档正文美化（JSON → 散文）**（`lib/collect-scan.js` 新增纯函数 `beautifyModelSummary`）：
+  拿到模型原文后走 `parseSummaryOutput(raw, {instruction})`（**回声闸门就在它内部**，⛔ 不再另写一条
+  判据），解析出结构化条目 ⇒ 正文 = 各段 `summary` 散文按 `'\n'` 连接（每段一行；「第1天 清晨: 」这类
+  分段前缀原样保留，⛔ 不再包一层）。⛔ 正文里不出现 JSON 外壳（`"summary"` / `"tags"` / 花括号 /
+  方括号一个都不落），⛔ 不加任何元信息头（本模块铁律：这段文字之后要被 embed 进向量库）。
+- **Fixed｜tags 标签化（结构化收编 + 合并去重）**：各段的 `tags` 对象逐个走 `lib/ami-tags.js` 的
+  `validateTags` → `flattenTags`，各段结果**合并去重**（顺序 = 首次出现顺序）。⚠️ 多段时 `vibe` 可能
+  不止一个 ⇒ 取**并集**（⛔ 别只取第一段、⛔ 别自创"选一个 dominant"——那是指令让**模型**选的，
+  不是收编方的活）。收编不进的如实播报：有剔除 ⇒ `tags-partial`；最终为空 ⇒ `tags-empty`（枚举沿用）。
+- **保留｜老路兜底**：模型输出**不是**结构化 JSON（纯散文）时，`extractTagsLine`（正文末尾 `tags:` 行）
+  那条路**留着没删** —— 两条路都走不到才判空。
+- **Fixed｜fail-open（本模块铁律）**：解析不出 JSON / 解析出来 items 为空 / 各段 `text` 全空 ⇒
+  **正文照旧用模型原文**（`kind` 仍是 `'model-summary'`，⛔ **不许**因此回落机械条目、⛔ 更不许丢），
+  并如实加一条 warning（`summary-plain`，文案说明"没解析成结构化条目，正文用了模型原文"）。
+  ⛔ 一个字节都不丢（含尾部空格）。
+- **Changed｜字节上限按落盘的那份正文判**：`model-summary-too-big` 以前量的是**模型原文**，现在量的是
+  **美化后的散文**（美化让它变小；fail-open 时仍是原文，与旧行为一致）。原因码枚举与回落行为不变；
+  `lib/collect.js`（A1）与 `lib/ami-tags.js` 一字未动。
+- 自检：`_selftest-collect-scan.mjs` 新增第 16 节（任务书 §3 的五对，相 + 反证；反证一律**真把旧写法
+  改回副本里跑一遍**：副本 A 正文用原文 / 副本 B tags 走老路 / 副本 C 把 fail-open 改成"丢"）；
+  第 14 节的**真机形状夹具**（279 seq / 一次压缩）改喂**真机那份形状的 JSON 摘要** ⇒
+  改造前 = 正文是 JSON（272 字节、含 `"summary"`）+ `tags: []` + `tags-empty`；
+  改造后 = 正文是散文（117 字节、无外壳）+ `tags: ['Serious','Romantic','Important']`。
+  台子 **130 通过 / 0 失败**，全量门 **67 个文件 0 失败**。
+- ⚠️ 生效方式同前两单：改的是 `lib/collect-scan.js` ⇒ 要重新部署 **并重启宿主**；且真机那两条已归档的
+  摘要要**先清掉**（`alreadyArchived` 只认区间正文哈希，不清就会跳过、旧的 JSON 正文留着）。
+
+### 2026-09-22（回声闸门**误伤正常摘要**：按「命中**行数**」判 ⇒ 改成按「命中**字数**」判）
+
+> 现象（真机干跑，就在上一单部署后）：区间切法与摘要取法都修对了，两条真区间的摘要却都回落
+> `mechanical / prompt-echo` —— 也就是模型摘要被回声闸门**拒收**，落盘的仍是机械截断桩。
+> 取证（`_diag-prompt-echo.mjs`，真机那份 `compaction/summary` 的正文）：那份摘要是**完全正常**的
+> 归档条目（`[{"summary":"第1天 清晨: …","tags":{…}}]`，2750 字符、45 行），但它的 45 行里有 **27 行
+> 是 JSON schema 行**（`"tags": {` / `"special": [],` / `"important": false`）—— 指令**规定**了输出这个
+> 形状，这些行自然逐字在指令里 ⇒ 命中 27/45 = **0.60 ≥ 0.5** ⇒ 被判回声。**误伤，不是真回声。**
+
+- **Fixed｜命中判据从"行数过半"改成"**字数**过半"**（`lib/summarize.js` 的 `looksLikePromptEcho`）：
+  同一份摘要按字数只有 **229/2082 = 0.11**（另一条 26/199 = 0.13），而真回声（模型把指令原文当摘要
+  回吐）比例 ~1.0 ⇒ 阈值 0.5 两边分得干干净净。分支①（整段逐字出现在指令里）与"≥8 字的行"过滤不变；
+  `instruction` 为空仍恒 false（不瞎猜）。选项名 `minLineRatio` → `minEchoMassRatio`（⛔ 没留旧名兼容）。
+- 自检：`_selftest-summarize.mjs` 新增三条 —— **相**：形状合规、正文原创的 JSON 摘要 ⇒ **不**是回声；
+  **反证**：同一份夹具在**旧判据**（命中行数 ≥ 0.5）下算出 **0.80** ⇒ 证明确是这条判据在误伤；
+  **相**：真回声（指令连续 3 行当输出）在新判据下**仍然**判得出。全台 **37 条全过**。
+- ⚠️ 生效方式同上一单：改的是 `lib/summarize.js` ⇒ 要重新部署 **并重启宿主**。
+
+### 2026-09-22（收纳的内容切割：区间 = **一次压缩一段**、摘要 = **那次压缩自己的模型摘要**、楼只收真对话）
+
+> 现象（用户原话）：「**内容切割问题，摘要收纳的直接是聊天记录，原文更是全部都有**」。
+> 真机取证：一次压缩把 seq 9–1068 整段压掉（该 `compaction/summary` 的 `shadowedSeqs` 共 266 个，
+> min 9 / max 1068），本该落 **1 条** RP 摘要；实际被切成 **208 个区间** ⇒ 落成 147 条 **80 字/楼的
+> 机械截断桩**（就是把聊天记录截了一段）+ 61 条跳过；214 个「楼」里还混着 **44 条 agent 机制**
+> （38 条 `memory_write` 工具调用、2 条 `read`、2 条插件注入的技能清单、1 条官方英文 checkpoint 前言）。
+> 病根三条：① 分段判据是「seq 相邻即归一段」；② 摘要来源走宿主的**检索文档**（`filterEvents`），
+> 那种文档**结构上没有 `data`** ⇒ 压缩事件的 `shadowedSeqs`/`summary` 永远取不到（208/208 全回落
+> `no-model-summary`）；③ 同一条便宜路径也拿不到 `source.kind` ⇒ 2026-09-20 加的插件注入守卫**是死的**。
+
+- **Fixed｜分段判据换成「一次压缩一段」**（`lib/collect-scan.js` 新增 `findShadowRegionsFromEvents`）：
+  权威 = 会话日志里的**替换事件**（`compaction/summary` / `compaction/prune`），**一条替换 = 一个区间**，
+  区间的 seq 集合 = **它自己的 `shadowedSeqs`**，顺序照抄（面顺序，⛔ **不排序**；`shadowedRange` 是
+  「面位置跨度」不是数字区间，只在 `shadowedSeqs` 缺席时才做兜底展开）。⛔ 旧的 `findShadowRegions`
+  （`seq === cur.toSeq + 1` 即归一段）已删；区间之间的 seq 重合如实记 warning（⛔ 不擅自去重）。
+- **Fixed｜摘要来源换成「区间自己那条压缩的模型摘要」**：区间 → 该 `compaction/summary` 的
+  `data.summary`（ContentBlock[] 取文本块）⇒ `summaryKind: 'model-summary'`。**原因码枚举不变**
+  （`no-model-summary` / `ambiguous-coverage` / `model-summary-too-big` / `prompt-echo`），但**机械兜底
+  不再是常态**：只有 `compaction/prune` 的区间（官方那一段本来就没有摘要，会大声播报点名 prune）、
+  摘要文本为空、超单文件字节上限、判成压缩指令回声才回落（覆盖不唯一 = 同一段 seq 集合被两条替换
+  事件声称）。`loadSummaryEventsViaHost` / `normalizeSummaryEventDoc` / `findCoveringSummaryEvents`
+  一并退役（那条路结构上给不出负载），换成 `normalizeReplacementEventDoc` + 新的 `selectModelSummary(region)`。
+- **Fixed｜「楼」只收真对话**（`mapRegionToFloors`，三条**结构性**排除，⛔ 不用文本前缀/正则猜）：
+  ① 压缩的**替换节点**（紧跟 `compaction/summary|prune` 之后的那条 `user/message` = 官方英文 checkpoint
+  前言，官方源码原话 "That adjacency is contractual"）；② **插件注入的 user 消息**（`data.source.kind`
+  不是 `'user'` —— `'plugin'` 运行上下文快照/后处理提示词、`'skill-catalog'` 技能清单），这条守卫
+  以前**是死的**，现在喂原始事件**真的有牙**；③ **工具事件**（`tool/call` / `tool/result`）—— 既不单独
+  成楼、⛔ **也不再把正文并进前一条楼**（旧行为）。另外 `assistant/message` 的正文**只取文本块**
+  （⛔ 不再用宿主那个把工具调用渲染成文本的抽取口径），取完为空（全是工具调用/思维链块）⇒ **不成楼**
+  —— 真机那 38 条 `memory_write`、2 条 `read` 正是这么混进来的。`source.kind` 缺失（老日志）⇒ 照旧
+  当玩家消息（⛔ 不许因为"认不出"就丢掉真发言）。
+- **Changed｜注入面换人（新增 `deps.loadRawEvents`）**：`lib/index.js` 新增 `createRawEventLoader(ctx)`
+  —— 就是 `loadSessionLog(ctx, sq, sid)` 的包装（活注册表 → 宿主持久化 → `readSession` 退路），
+  由 `/collect/scan`·`/collect/auto` 两条分派行与压缩后自动收纳钩子注入。⛔ 宿主那个便宜的
+  `collectSurfaces()` **一行未改**（它还有两个别的消费者：最近几楼、未被遮蔽字数），只是**不再是**
+  归档的数据来源。读不出事件 = 可读地抛 `SCAN_SESSION_UNREADABLE`；空数组 = 这份会话真的没有事件
+  （如实 0 区间），⛔ 不拿空数组冒充"没内容"。分叉会话的 `inheritedEventCount` 如实带进 warning；
+  继承内容**照收**（那也是本会话的剧情），同一份内容靠台账 `contentHash` 幂等跳过、不会收两遍。
+- **台账/幂等**：`regionContentHash` 的原料随「楼」的口径变化 ⇒ 同一份会话重扫给出的是**新的一套**
+  区间集合与哈希；⛔ **没写**"旧哈希也认"的兼容路径（旧台账与旧归档由派单方清）。
+- **不动**：门（`decideAutoCollect`）、plan/apply 语义（`/collect/scan` 仍只规划、`/collect/auto` 仍规划+落库）、
+  落库路径与文件形状（`archive/floors/NNNN.json`、`archive/summaries/index.json`、`mt-<from>-<to>.md`）、
+  HTTP 端点表与状态码、A1 `lib/collect.js` —— 一字未改。
+- 自检：`_selftest-collect-scan.mjs` **107 通过 / 0 失败**。新增第 13 节（任务书 §3 的六对：相 + **反证**，
+  反证一律**真把旧写法改回去跑一遍** —— 拷一份 `lib` 副本注入旧 `findShadowRegions` / 挖掉那三条排除判据
+  再 `import`，喂同一套夹具）与第 14 节（**真机形状夹具**：一次压缩的 279 个 `shadowedSeqs` / 208 段，
+  跑完整 `planScan` ⇒ 改造前 **209 区间 / 全部 mechanical·no-model-summary**、改造后 **2 个区间**
+  （1 条 summary = `model-summary`、1 条 prune = 机械兜底），楼里再无工具/注入/checkpoint 面）；
+  另加第 15 节（`createRawEventLoader` 的行为 + 三条接线锚）。全量门 **67 个文件 0 失败**。
+- ⚠️ **生效方式**：改的是 `lib/collect-scan.js` 与 `lib/index.js`（宿主进程里的模块）⇒ 要重新部署
+  **并重启宿主**才在真机上生效；⛔ 本仓不替人部署、不碰真机 home，真机干跑由派单方部署后核。
+- ⚠️ **留给派单方的一个风险（本单不改）**：区间变大之后，`maxFloorsPerRegion`（默认 200）**头一次会
+  真的咬人** —— 一次压缩落成的楼数若 > 200，该区间整段进 `skipped: too-big`（其余区间照常）。
+  本单夹具里那一次压缩是 166 楼（未触线）；真机那条是 214 楼（含 44 条机制楼，剔除机制面后应在
+  200 以下，但**我量不到真机**）⇒ 部署后干跑时请顺带看一眼 `skipped` 里有没有 `too-big`。
+
 ### 2026-09-22（手动/HTTP 那条路**漏传 Tavern 基址** ⇒ 面板的「收纳」与补收全走不通）
 
 > 现象：面板点「收纳」只见 `{"ok":false,"error":{"code":"TAVERN_UNREACHABLE","message":"Tavern 工作区请求失败：fetch failed"}}`。

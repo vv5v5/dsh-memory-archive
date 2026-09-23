@@ -81,6 +81,42 @@ function sliceFnBody(code, name) {
   return null
 }
 
+/** 同上，但取的是 `const <name> = (…) => { … }` 那种箭头函数体（`submit` 就是这种写法）。 */
+function sliceArrowBody(code, name) {
+  const sig = code.indexOf('const ' + name + ' = (')
+  if (sig < 0) return null
+  const open = code.indexOf('=> {', sig)
+  if (open < 0) return null
+  let depth = 0
+  for (let j = open + 3; j < code.length; j++) {
+    const c = code[j]
+    if (c === '{') depth++
+    else if (c === '}') {
+      depth--
+      if (depth === 0) return code.slice(open + 4, j + 1)
+    }
+  }
+  return null
+}
+
+/** 从 `anchor`（形如 `if (isDelete) {`）起花括号配对取那个块的**内容** —— 判据能"只在这一支里"断言。 */
+function braceBlockOf(code, anchor) {
+  const at = code.indexOf(anchor)
+  if (at < 0) return null
+  const open = code.indexOf('{', at)
+  if (open < 0) return null
+  let depth = 0
+  for (let j = open; j < code.length; j++) {
+    const c = code[j]
+    if (c === '{') depth++
+    else if (c === '}') {
+      depth--
+      if (depth === 0) return code.slice(open + 1, j)
+    }
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // A) 常量逐字
 // ---------------------------------------------------------------------------
@@ -415,9 +451,10 @@ sensitive(
   "['vector', '向量']",
 )
 sensitive(
-  'E2 ReadArea 有 vector 分支渲染 VectorFlow（传入 archivePath：条目要与「摘要」页签对上）',
-  (s) => s.includes("cur === 'vector'") && s.includes('e(VectorFlow, { archivePath: archivePath, scrollBind: scrollBind })'),
-  "} else if (cur === 'vector') {",
+  'E2 ReadArea 有 vector 分支渲染 VectorFlow（传入 archivePath：条目要与「摘要」页签对上；'
+  + '传入 playthroughId：删除时告诉宿主该忘哪个周目的账本）',
+  (s) => s.includes("cur === 'vector'") && s.includes('e(VectorFlow, { archivePath: archivePath, playthroughId: playthroughId ||'),
+  'e(VectorFlow, { archivePath: archivePath, playthroughId: playthroughId ||',
 )
 {
   // 红字诊断（用户踩的坑：库里条目全不是当前周目）：条件（boundCount===0 && total>0）+ 人话文案 + id，三样都要在
@@ -441,16 +478,52 @@ sensitive(
     check('E4c 武装表含 ' + key, clientSrc.includes(key + ': { action:'))
   }
 }
+// ★★ 2026-09-22（本任务）：轮询口径整个换了 —— 删除**当场做完**（不进跟踪），排队类只后台低频跟踪。
 sensitive(
-  'E5 轮询口径：2s 一次、最多 60s',
-  (s) => s.includes('const VECTOR_POLL_MS = 2000') && s.includes('const VECTOR_POLL_LIMIT_MS = 60000'),
-  'const VECTOR_POLL_LIMIT_MS = 60000',
+  'E5 排队类动作改成**后台低频跟踪**（10s 一次 / 30 分钟放手），⛔ 不再有"冻面板 60s"那套',
+  (s) => s.includes('const VECTOR_TRACK_MS = 10000') && s.includes('const VECTOR_TRACK_LIMIT_MS = 30 * 60000'),
+  'const VECTOR_TRACK_LIMIT_MS = 30 * 60000',
+)
+{
+  // ★ 反证（旧口径整块必须消失）：60 秒上限与那句"还没执行"一个都不许留在档里。
+  const vf = sliceFnBody(clientSrc, 'VectorFlow')
+  const oldJudge = (body) => typeof body === 'string' && !body.includes('VECTOR_POLL_LIMIT_MS') && !body.includes('还没执行')
+  check('E5b ⛔ 旧的"60s 轮询 + 超时说还没执行"整块已消失（删掉的是冻面板那件事）', oldJudge(vf))
+  check('E5b ★反证（把那套旧写法塞回去 ⇒ 判据必须红）',
+    oldJudge(vf + "\nconst VECTOR_POLL_LIMIT_MS = 60000\nsetOut({ message: '还没执行：这个动作要在该周目下一轮对话开始前才会进行' })") === false)
+}
+sensitive(
+  'E5c 排队之后立刻放开面板：横幅说"已排队…不用在这儿等，按钮可以继续用"',
+  (s) => s.includes('不用在这儿等，按钮可以继续用'),
+  '不用在这儿等，按钮可以继续用',
 )
 sensitive(
-  'E5b 超时如实说"还没执行"+ 指明何时执行、去哪看结果',
-  (s) => s.includes('还没执行：这个动作要在该周目下一轮对话开始前才会进行'),
-  '还没执行：这个动作要在该周目下一轮对话开始前才会进行',
+  'E5d 后台跟踪有一行独立提示（id=dma-vector-tracking，⛔ 不占 busy、不挡按钮）',
+  (s) => s.includes("id: 'dma-vector-tracking'") && s.includes('不用在这儿等，回执来了这一栏会自动更新'),
+  "id: 'dma-vector-tracking'",
 )
+{
+  // ★★ 本单的正面要求：**两个删除动作提交后不许进跟踪**（回执当次就回来了）。
+  //   判据：`submit` 里 `isDelete` 那一支必须**先 return**（在 startTracking 之前），且那一支里没有 startTracking。
+  const sub = sliceArrowBody(clientSrc, 'submit')
+  check('E20 取到 submit 函数体（判据有对象可比）', typeof sub === 'string' && sub.length > 500, sub === null ? 'null' : String(sub.length))
+  const judge = (body) => {
+    if (typeof body !== 'string') return false
+    if (!body.includes("const isDelete = action === 'delete-vector' || action === 'delete-bm25'")) return false
+    if (!body.includes('startTracking(id)')) return false
+    const blk = braceBlockOf(body, 'if (isDelete) {')
+    if (blk === null) return false
+    // 删除那一支里：当次回执要落下来（await load() 把"库不在"这件事实摆出来）+ 直接 return，
+    // ⛔ 绝对不许起跟踪（那就是"点了还转圈"）
+    return blk.includes('return') && blk.includes('await load()') && !blk.includes('startTracking(')
+  }
+  check('E20 ★ 删除不走跟踪（提交后当次显示回执；跟踪只在排队那支里起）', judge(sub))
+  // ★反证：把 startTracking 挪进删除那一支（= 退回"点了还转圈"）⇒ 判据必须红
+  const tampered = typeof sub === 'string' ? sub.replace('if (isDelete) {', 'if (isDelete) { startTracking(id);') : ''
+  check('E20 ★反证（删除那一支里起了跟踪 ⇒ 判据必须红）', judge(tampered) === false)
+  check('E20b 删除那一支把宿主回执的文案摆出来了（已删除/删除失败 + message）',
+    typeof sub === 'string' && sub.includes("(d && d.ok === true ? '已删除' : '删除失败')"))
+}
 sensitive(
   'E6 端点前缀从 HOST_API_BASE 推（⛔ 不手写第二个前缀字面量）',
   (s) => s.includes("HOST_API_BASE + '/vector/state'") && s.includes("HOST_API_BASE + '/vector/action'"),
@@ -488,8 +561,8 @@ sensitive(
   "missing === true ? e('span', { style: amberBadgeStyle }, '⚠缺失') : null",
 )
 sensitive(
-  'E14 提交没拿到回执 id ⇒ 不起轮询（空 id 永远对不上，⛔ 不许白转 60 秒）',
-  (s) => s.includes('if (id === \'\') {') && s.includes('startPolling(id)'),
+  'E14 提交没拿到回执 id ⇒ 不起后台跟踪（空 id 永远对不上，⛔ 不许白转）',
+  (s) => s.includes('if (id === \'\') {') && s.includes('startTracking(id)'),
   'if (id === \'\') {',
 )
 {
@@ -501,13 +574,27 @@ sensitive(
   const vf = sliceFnBody(clientSrc, 'VectorFlow')
   const keyJudge = (body) => typeof body === 'string' && body.length > 0 && !body.includes(KEY_NEEDLE) && !body.includes('retrieval' + '?.' + 'key')
   const bodiesJudge = (body) => typeof body === 'string'
-    && (body.match(/\{ action: /g) || []).length === 2
+    && (body.match(/\{ action: /g) || []).length === 3
     && body.includes('{ action: action }')
+    && body.includes("{ action: action, playthroughId: playthroughId || '' }")
     && body.includes("{ action: 'enable', enabled: next }")
   check('E8 取到 VectorFlow 函数体（判据有对象可比）', typeof vf === 'string' && vf.length > 500, vf === null ? 'null' : String(vf.length))
   check('E8 ⛔「向量」档不碰密钥（档内没有 ' + KEY_NEEDLE + '）', keyJudge(vf))
-  check('E8 ⛔「向量」档发给宿主的请求体恰好两种（{action} / {action,enabled}），⛔ 没有第三种夹带', bodiesJudge(vf))
-  // ★反证：把"夹带 key 的请求体"塞进同一个函数体 ⇒ 两条判据都必须红
+  check('E8 ⛔「向量」档发给宿主的请求体恰好三种（{action} / {action,playthroughId} / {action,enabled}），⛔ 没有第四种夹带', bodiesJudge(vf))
+  // ★★ 硬约束（§2.1④）：删除只许递"是哪个周目"这一个输入，⛔ 绝不递文件名清单（清单是宿主自己的知识）。
+  //   判据写成 f(请求体那一行的文本)，对真源码命中、塞进一个清单字段后必须红。
+  const delBodyOf = (body) => {
+    const m = typeof body === 'string' ? body.match(/\{ action: action, [^}]*\}/) : null
+    return m ? m[0] : ''
+  }
+  const onlyPlaythroughJudge = (body) => {
+    const line = delBodyOf(body)
+    return line.includes('playthroughId: playthroughId') && !/files/i.test(line)
+  }
+  check('E8c ⛔ 删除的请求体只有"是哪个周目"（没有文件名清单 / 路径）', onlyPlaythroughJudge(vf), delBodyOf(vf))
+  check('E8c ★反证（顺手递一份摘要文件名清单 ⇒ 判据必须红）',
+    onlyPlaythroughJudge(vf.replace("playthroughId: playthroughId || ''", "playthroughId: playthroughId || '', summaryFiles: files")) === false)
+  // ★反证：把"夹带 key 的请求体"塞进同一个函数体 ⇒ 三条判据都必须红
   const dirty = vf + "\nconst leak = x." + KEY_NEEDLE + "\nfetch('/x', { body: JSON.stringify({ action: 'leak' }) })"
   check('E8 ★反证（档内夹带 ' + KEY_NEEDLE + ' ⇒ 密钥判据必须红）', keyJudge(vf) === true && keyJudge(dirty) === false)
   check('E8 ★反证（档内多一种请求体 ⇒ 计数判据必须红）', bodiesJudge(vf) === true && bodiesJudge(dirty) === false)
@@ -551,12 +638,30 @@ sensitive(
 // ---------------------------------------------------------------------------
 console.log('\n── F) vector-panel.js 源级 ──')
 {
-  check('F1 ⛔ 只读 anima 那三张文件，从不写它们（源码里对 PANEL_RESULT_FILE/VECTOR_INFO_FILE 只有读）',
+  check('F1 ⛔ 读 anima 那两张文件（快照 / 回执）走的是只读那条路（readJsonSafe）',
     panelSrc.includes('readJsonSafe(join(dir, VECTOR_INFO_FILE))') && panelSrc.includes('readJsonSafe(join(dir, PANEL_RESULT_FILE))'))
-  check('F2 只写 PANEL_REQUEST_FILE（唯一的写目标）',
-    (panelSrc.match(/writeFileSync\(/g) || []).length === 1 && panelSrc.includes('writeFileSync(tmpPath'))
+  // ★★ 2026-09-22：写目标从"只有请求单"变成三份（请求单 / 回执 / 账本）—— 但**快照仍然只读**：
+  //   写 vector-info.json 就是 anima 的手，宿主写它 = 两份真相（本单硬约束）。
+  const writeTargetsJudge = (s) => s.includes('writeFileSync(tmpPath, JSON.stringify(req, null, 2) + \'\\n\', \'utf8\')')
+    && s.includes('writeJsonAtomic(join(dir, PANEL_RESULT_FILE), receipt)')
+    && s.includes('writeJsonAtomic(ledgerPath, Object.assign({}, doc, {')
+    && !/writeJsonAtomic\([^)]*VECTOR_INFO_FILE/.test(s)
+    && !/writeFileSync\([^)]*VECTOR_INFO_FILE/.test(s)
+  check('F2 写目标恰好三份（请求单 / 回执 / 账本），**快照只读**（⛔ 绝不写 vector-info.json）', writeTargetsJudge(panelSrc))
+  check('F2 ★反证（把回执改成往快照里写 ⇒ 判据必须红）',
+    writeTargetsJudge(panelSrc.replace('writeJsonAtomic(join(dir, PANEL_RESULT_FILE), receipt)', 'writeJsonAtomic(join(dir, VECTOR_INFO_FILE), receipt)')) === false)
+  // ⛔ 铁律：删除**只改名归档，绝不 rm** —— 全文的 rmSync 只允许出现在"消费同名旧请求单"那一处。
+  const rmJudge = (s) => (s.match(/rmSync\(/g) || []).length === 1 && s.includes('rmSync(reqPath, { force: true })')
+  check('F2b ⛔ 绝不真删：全文 rmSync 只有一处，且那处删的是**请求单**（不是库）', rmJudge(panelSrc))
+  check('F2b ★反证（把改名换成 rmSync(target) ⇒ 判据必须红）',
+    rmJudge(panelSrc.replace('rmSync(reqPath, { force: true })', 'rmSync(reqPath, { force: true })\n  rmSync(plan.target, { force: true })')) === false)
+  check('F2c 归档那一步是 renameSync(plan.target, plan.dest)（改名留档）',
+    panelSrc.includes('renameSync(plan.target, plan.dest)'))
   check('F3 动作白名单只有一处定义（PANEL_ACTIONS 字面量恰好 1 处）',
     (panelSrc.match(/export const PANEL_ACTIONS =/g) || []).length === 1)
+  check('F3b 删除白名单只有一处定义（PANEL_DELETE_ACTIONS 字面量恰好 1 处）',
+    (panelSrc.match(/export const PANEL_DELETE_ACTIONS =/g) || []).length === 1
+    && panelSrc.includes("export const PANEL_DELETE_ACTIONS = ['delete-vector', 'delete-bm25']"))
   check('F4 ⛔ 源码里没有写死的盘符/用户目录（公开仓库的上架闸门会扫）',
     !panelSrc.includes('C:' + '/') && !panelSrc.includes('D:' + '/'))
 }
@@ -638,6 +743,380 @@ console.log('\n── G) 端点真跑（GET /vector/state、POST /vector/action�
     check('G5 enabled 不是布尔 ⇒ 400（⛔ 不把 "yes" 当 true）', badEn.status === 400 && badEn.json?.error?.code === 'BAD_REQUEST', badEn.text.slice(0, 160))
     check('G6 方法口径：GET /vector/action ⇒ 405、POST /vector/state ⇒ 405',
       (await call('/vector/action')).status === 405 && (await call('/vector/state', 'POST', {})).status === 405)
+  } finally {
+    await new Promise((r) => server.close(r))
+    if (before === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = before
+  }
+}
+
+// ---------------------------------------------------------------------------
+// H) 删除的**纯计划**（§3 的 1、2）—— ⛔ 一次都不碰文件系统
+// ---------------------------------------------------------------------------
+console.log('\n── H) planDelete 纯计划（不碰盘） ──')
+const H_VROOT = join(tmpRoot, 'h-vectors')
+const H_BROOT = join(tmpRoot, 'h-bm25')
+const H_STAMP_NOW = Date.UTC(2026, 8, 22, 10, 30, 0)   // 固定时刻 ⇒ dest 里的时间戳可逐字断言
+const H_STAMP = '2026-09-22T10-30-00'
+{
+  const pv = mod.planDelete({
+    action: 'delete-vector', dataRoots: { vectorRoot: H_VROOT, bm25Root: H_BROOT }, collectionId: 'dsh-memory',
+    summaryFiles: ['s-1.md'], ledgerEntries: { 's-1.md': {} }, now: H_STAMP_NOW,
+  })
+  check('H1 相｜向量删除：目标 = <vectorRoot>/<集合名>', pv.ok === true && pv.target === join(H_VROOT, 'dsh-memory'), pv.target)
+  check('H1b 相｜dest = 目标 + .removed-<时间戳>（与 anima 的 stamp 口径逐字同款）',
+    pv.dest === pv.target + '.removed-' + H_STAMP, pv.dest)
+  check('H1c 集合名归一就是 anima 那条正则（非法字符换 _，中文留着）',
+    mod.safeCollectionName('dsh memory/v2') === 'dsh_memory_v2' && mod.safeCollectionName('dsh-memory') === 'dsh-memory'
+    && mod.safeCollectionName('中文名·x') === '中文名_x')
+  // ★ 纯的证明：磁盘上先摆一个**真的**库目录，调一次 planDelete 之后它必须原封不动
+  mkdirSync(join(H_VROOT, 'dsh-memory'), { recursive: true })
+  writeFileSync(join(H_VROOT, 'dsh-memory', 'index.json'), '{"items":[]}', 'utf8')
+  mod.planDelete({ action: 'delete-vector', dataRoots: { vectorRoot: H_VROOT }, collectionId: 'dsh-memory', summaryFiles: [], ledgerEntries: {}, now: H_STAMP_NOW })
+  check('H1d ★ 纯计划：planDelete 不改文件系统（库目录还在原名下、一个 .removed-* 都没冒出来）',
+    existsSync(join(H_VROOT, 'dsh-memory')) && readdirSync(H_VROOT).filter((n) => n.includes('.removed-')).length === 0,
+    readdirSync(H_VROOT).join('、'))
+
+  // 相：BM25 是**一个文件**（<bm25Root>/<safe>.json），⛔ 不是目录 —— 两者的落点不许写反
+  const pb = mod.planDelete({
+    action: 'delete-bm25', dataRoots: { vectorRoot: H_VROOT, bm25Root: H_BROOT }, collectionId: 'dsh-memory',
+    summaryFiles: [], ledgerEntries: {}, now: H_STAMP_NOW,
+  })
+  check('H2 相｜BM25 删除：目标 = <bm25Root>/<集合名>.json（⛔ 不是目录）',
+    pb.ok === true && pb.target === join(H_BROOT, 'dsh-memory.json') && pb.target.endsWith('.json'), pb.target)
+  check('H2b 相｜两个动作的落点形状确实不同（不是把同一套拼法用两次）',
+    pv.target !== pb.target && !pv.target.endsWith('.json') && pb.target.endsWith('.json'))
+  // ★ 反证（源级）：把"向量=目录 / BM25=.json"那两个分支写反 ⇒ 判据必须红
+  sensitive(
+    'H2c 落点分支照 anima 那条写（delete-vector ⇒ 目录；delete-bm25 ⇒ `${safe}.json`）',
+    (s) => s.includes("const target = action === 'delete-vector' ? join(root, safe) : join(root, `${safe}.json`)"),
+    '? join(root, safe) : join(root, `${safe}.json`)',
+    panelSrc,
+  )
+
+  // 反证（纯函数级）：快照里没有落点 ⇒ 拒绝出计划（⛔ 不许猜一个路径出来）
+  const noRoot = mod.planDelete({ action: 'delete-vector', dataRoots: { vectorRoot: '', bm25Root: H_BROOT }, collectionId: 'dsh-memory', now: H_STAMP_NOW })
+  check('H3 ⛔ 快照里没有 vectorRoot ⇒ 不出计划（reason 说明缺什么），⛔ 不猜路径',
+    noRoot.ok === false && String(noRoot.reason).includes('vectorRoot'), JSON.stringify(noRoot))
+  const noId = mod.planDelete({ action: 'delete-bm25', dataRoots: { bm25Root: H_BROOT }, collectionId: '', now: H_STAMP_NOW })
+  check('H3b ⛔ 快照里没有集合名 ⇒ 不出计划', noId.ok === false && String(noId.reason).includes('集合名'))
+  check('H3c ⛔ 不是删除动作 ⇒ 不出计划（⛔ 入库/重建绝不该走到这条路上）',
+    mod.planDelete({ action: 'rebuild', dataRoots: { vectorRoot: H_VROOT }, collectionId: 'c' }).ok === false)
+  // ⛔ 名单只收纯文件名：带分隔符/`..` 的一律丢（那种名字永远不可能是账本的键）
+  const dirty = mod.planDelete({
+    action: 'delete-vector', dataRoots: { vectorRoot: H_VROOT }, collectionId: 'c',
+    summaryFiles: ['ok.md', 'ok.md', '', '../escape.md', 'a\\b.md', 'C:/x.md', 42, null],
+    ledgerEntries: { 'ok.md': {}, '../escape.md': {}, 'a\\b.md': {} }, now: H_STAMP_NOW,
+  })
+  check('H3d ⛔ 名单只留纯文件名（去重 + 丢掉带斜杠/`..`/非字符串的），forgetCount 只数真命中的',
+    JSON.stringify(dirty.forgetFiles) === JSON.stringify(['ok.md']) && dirty.forgetCount === 1, JSON.stringify(dirty.forgetFiles))
+}
+
+// ---------------------------------------------------------------------------
+// I) 删除：**当场执行**（§3 的 3、4、5、6）—— 假 home + 假数据根，⛔ 不碰真机
+// ---------------------------------------------------------------------------
+console.log('\n── I) deleteNow 当场执行（改名留档 + 忘账本 + 回执） ──')
+
+/** 造一个假 home（`dsh-anima-rag/` 三张文件 + 数据根 + 那个周目的 summaries/index.json）。 */
+function makeHome(name, { vectorExists = true, bm25Exists = true, summaryFiles = [], ledgerEntries = {}, infoAt = 1000 } = {}) {
+  const home = join(tmpRoot, name)
+  const anima = join(home, 'dsh-anima-rag')
+  const vroot = join(home, 'vectors')
+  const broot = join(home, 'bm25')
+  const ws = join(home, 'ws', 'char-a', 'playthrough-a', 'archive', 'summaries')
+  mkdirSync(anima, { recursive: true })
+  mkdirSync(broot, { recursive: true })
+  mkdirSync(ws, { recursive: true })
+  if (vectorExists) {
+    mkdirSync(join(vroot, 'dsh-memory'), { recursive: true })
+    writeFileSync(join(vroot, 'dsh-memory', 'index.json'), JSON.stringify({ version: 1, items: [{ metadata: { index: 'sum_s-0001-0010-1.md' } }] }), 'utf8')
+    writeFileSync(join(vroot, 'dsh-memory', 'u-1.json'), '{"text":"原始正文"}', 'utf8')
+  } else {
+    mkdirSync(vroot, { recursive: true })
+  }
+  if (bm25Exists) writeFileSync(join(broot, 'dsh-memory.json'), 'bm25-bytes', 'utf8')
+  writeFileSync(join(anima, 'vector-info.json'), JSON.stringify({
+    version: 1, at: infoAt,
+    dataRoots: { vectorRoot: vroot, bm25Root: broot, sessionRoot: join(home, 'sessions') },
+    collectionId: 'dsh-memory',
+    isolation: { enabled: true, bound: 'playthrough-a', boundSource: 'session', total: 1, boundCount: 1, deniedCount: 0 },
+    vector: { exists: vectorExists, count: vectorExists ? 1 : 0, mtime: 1 },
+    bm25: { exists: bm25Exists, bytes: 10, mtime: 1 },
+    ledger: { entries: Object.keys(ledgerEntries).length, updatedAt: 'x' },
+  }), 'utf8')
+  writeFileSync(join(anima, 'ingest-ledger.json'), JSON.stringify({ version: 1, updatedAt: '2026-01-01T00:00:00.000Z', entries: ledgerEntries }), 'utf8')
+  writeFileSync(join(ws, 'index.json'), JSON.stringify({ version: 1, entries: summaryFiles.map((file) => ({ file })) }), 'utf8')
+  return { home, anima, vroot, broot, ws }
+}
+
+// I1 相｜目标在 ⇒ 改名留档（⛔ 绝不真删）+ 忘账本只忘本周目的 + 回执落盘 + 快照一个字节都不动
+{
+  const h = makeHome('del-home-1', {
+    summaryFiles: ['s-0001-0010-1.md', 's-0011-0020-1.md'],
+    ledgerEntries: {
+      's-0001-0010-1.md': { sig: 'a|1', at: 1 },
+      's-0011-0020-1.md': { sig: 'b|2', at: 2 },
+      's-9000-9010-9.md': { sig: 'c|3', at: 3 },     // ← 别的周目的（⛔ 一条都不许动）
+      'import-batch-1.json': { sig: 'd|4', at: 4 },  // ← 导入清单（也不是摘要）
+    },
+  })
+  const infoBefore = readFileSync(join(h.anima, 'vector-info.json'), 'utf8')
+  const bodyBefore = readFileSync(join(h.vroot, 'dsh-memory', 'u-1.json'), 'utf8')
+  const out = mod.deleteNow({ homeDir: h.home, action: 'delete-vector', summariesDir: h.ws, now: H_STAMP_NOW })
+  check('I1 deleteNow ⇒ ok/deleted + 回执（ok:true）', out.ok === true && out.deleted === true && out.receipt.ok === true, JSON.stringify(out.receipt || out))
+  check('I1b 回执键集合**逐字同构** anima 那份（version/id/action/ok/message/counts/at，一个不多一个不少）',
+    JSON.stringify(Object.keys(out.receipt).sort()) === JSON.stringify(['action', 'at', 'counts', 'id', 'message', 'ok', 'version']),
+    JSON.stringify(Object.keys(out.receipt)))
+  check('I1c 文案照 anima 那两句（已归档为 <归档名>（没删）… 忘掉账本 2 条 ⇒ 下次入库会重新长出来）',
+    out.receipt.message === `已归档为 dsh-memory.removed-${H_STAMP}（没删），并忘掉账本 2 条 ⇒ 下次入库会重新长出来`,
+    out.receipt.message)
+  check('I1d counts.forgotten = 2（只数本周目真命中的那两条）', out.receipt.counts?.forgotten === 2, JSON.stringify(out.receipt.counts))
+  // ★★ 铁律：改名留档 —— 原名下没了，但**内容还在**（.removed-<时间戳> 里读得回原样）
+  check('I2 ⛔ 绝不真删：目标已不在原名下，但 `.removed-<时间戳>` 里躺着（改名留档）',
+    !existsSync(join(h.vroot, 'dsh-memory')) && existsSync(join(h.vroot, `dsh-memory.removed-${H_STAMP}`)))
+  check('I2b ★ 归档里的正文一个字节都没变（读得回原来那份）',
+    readFileSync(join(h.vroot, `dsh-memory.removed-${H_STAMP}`, 'u-1.json'), 'utf8') === bodyBefore
+    && readFileSync(join(h.vroot, `dsh-memory.removed-${H_STAMP}`, 'index.json'), 'utf8').includes('sum_s-0001-0010-1.md'))
+  // ★ 账本：只忘本周目的那两条（别的周目 + 导入清单一条不少）
+  const led = JSON.parse(readFileSync(join(h.anima, 'ingest-ledger.json'), 'utf8'))
+  check('I3 ★ 账本只忘本会话周目的那两条', !('s-0001-0010-1.md' in led.entries) && !('s-0011-0020-1.md' in led.entries))
+  check('I3b ⛔ 别的周目的条目一条不少（宁可不错忘）+ 导入清单也在',
+    led.entries['s-9000-9010-9.md']?.sig === 'c|3' && led.entries['import-batch-1.json']?.sig === 'd|4',
+    JSON.stringify(Object.keys(led.entries)))
+  check('I3c 账本形状照 anima save()（version/updatedAt/entries，updatedAt 刷新了）',
+    led.version === 1 && typeof led.updatedAt === 'string' && led.updatedAt !== '2026-01-01T00:00:00.000Z')
+  // 回执落盘（面板「最近一次动作」读它）
+  const receiptOnDisk = JSON.parse(readFileSync(join(h.anima, 'panel-result.json'), 'utf8'))
+  check('I4 回执写进 panel-result.json（与返回的那份同构）', JSON.stringify(receiptOnDisk) === JSON.stringify(out.receipt))
+  // ★★ "删完不许有两个真相"：宿主**绝不写** anima 的快照
+  check('I5 ⛔ 宿主绝不写 vector-info.json（快照是 anima 的；写它就是两份真相）',
+    readFileSync(join(h.anima, 'vector-info.json'), 'utf8') === infoBefore)
+  // 快照过期这件事必须被**判出来**（面板据此如实标过期，⛔ 不拿旧条数骗人）
+  const st = mod.readVectorState({ homeDir: h.home })
+  check('I5b readVectorState.deletedAfterInfo=true（回执是删除且比快照新 ⇒ 面板标过期）', st.deletedAfterInfo === true)
+  check('I5c ★反证：把快照的 at 改到回执之后（anima 追上来了）⇒ deletedAfterInfo 必须为 false',
+    (() => {
+      const p = join(h.anima, 'vector-info.json')
+      const doc = JSON.parse(readFileSync(p, 'utf8'))
+      writeFileSync(p, JSON.stringify(Object.assign({}, doc, { at: H_STAMP_NOW + 60000 })), 'utf8')
+      const st2 = mod.readVectorState({ homeDir: h.home })
+      writeFileSync(p, infoBefore, 'utf8')
+      return st2.deletedAfterInfo === false
+    })())
+}
+
+// I6 反证｜目标不存在 ⇒ 照 anima 老口径「本来就不存在」+ **仍要忘账本** + ⛔ 不许报失败
+{
+  const h = makeHome('del-home-2', {
+    vectorExists: false,
+    summaryFiles: ['s-0001-0010-1.md', 's-0011-0020-1.md'],
+    ledgerEntries: { 's-0001-0010-1.md': { sig: 'a|1', at: 1 }, 's-0011-0020-1.md': { sig: 'b|2', at: 2 }, 's-9000-9010-9.md': { sig: 'c|3', at: 3 } },
+  })
+  const out = mod.deleteNow({ homeDir: h.home, action: 'delete-vector', summariesDir: h.ws, now: H_STAMP_NOW })
+  check('I6 目标不存在 ⇒ ok:true（⛔ 不报失败）+ 文案是「本来就不存在（顺手忘掉账本 2 条）」',
+    out.ok === true && out.deleted === true && out.receipt.ok === true
+    && out.receipt.message === '本来就不存在（顺手忘掉账本 2 条）', out.receipt.message)
+  const led = JSON.parse(readFileSync(join(h.anima, 'ingest-ledger.json'), 'utf8'))
+  check('I6b ★ 不在也**照样忘账本**（否则下次入库会以 all-done 跳过，删掉的东西永远回不来）',
+    !('s-0001-0010-1.md' in led.entries) && !('s-0011-0020-1.md' in led.entries) && led.entries['s-9000-9010-9.md'] !== undefined)
+  check('I6c 一个 .removed-* 都没冒出来（本来就没东西可归档）',
+    readdirSync(h.vroot).filter((n) => n.includes('.removed-')).length === 0)
+}
+
+// I7 相｜账本只忘本周目的 + 反证｜"清单为空就 clear()"那种写法必须红
+{
+  const others = { 's-8000-8010-8.md': { sig: 'z|1', at: 1 }, 's-9000-9010-9.md': { sig: 'z|2', at: 2 } }
+  const h = makeHome('del-home-3', { summaryFiles: [], ledgerEntries: Object.assign({ 's-0001-0010-1.md': { sig: 'a|1', at: 1 } }, others) })
+  const ledBefore = readFileSync(join(h.anima, 'ingest-ledger.json'), 'utf8')
+  const out = mod.deleteNow({ homeDir: h.home, action: 'delete-bm25', summariesDir: h.ws, now: H_STAMP_NOW })
+  check('I7 这个周目没有摘要（清单为空）⇒ 文案说「忘掉账本 0 条」（⛔ 不编一个数）',
+    out.receipt.message === `已归档为 dsh-memory.json.removed-${H_STAMP}（没删），并忘掉账本 0 条 ⇒ 下次入库会重新长出来`,
+    out.receipt.message)
+  check('I7b BM25 落点是一个**文件**：原文件没了、`.json.removed-<时间戳>` 在',
+    !existsSync(join(h.broot, 'dsh-memory.json')) && existsSync(join(h.broot, `dsh-memory.json.removed-${H_STAMP}`)))
+  // ★ 关键：清单为空时**一条都不许忘**（别的周目一条不少）—— 这条是 anima 2026-09-20 真机踩过的坑
+  const keepOthers = (entriesObj) => JSON.stringify(Object.keys(entriesObj).sort())
+  const after = JSON.parse(readFileSync(join(h.anima, 'ingest-ledger.json'), 'utf8'))
+  check('I7c ★ 清单为空 ⇒ 账本一个字节都没动（别的周目一条不少）',
+    readFileSync(join(h.anima, 'ingest-ledger.json'), 'utf8') === ledBefore && keepOthers(after.entries) === keepOthers(Object.assign({ 's-0001-0010-1.md': 1 }, others)),
+    JSON.stringify(Object.keys(after.entries)))
+  // ★反证：那种"清单为空就整本清掉"的写法（anima 早先那版）⇒ 上面那条判据必红
+  const buggyClear = () => ({})   // 模拟 `if (names.length === 0) entries.clear()`
+  check('I7c ★反证（"清单为空就 clear()"那种写法 ⇒ 整本被清掉 ⇒ 判据必红）',
+    keepOthers(buggyClear()) !== keepOthers(Object.assign({ 's-0001-0010-1.md': 1 }, others)))
+}
+
+// I8 反证｜摘要清单读不到 / 没说是哪个周目 ⇒ 一条都不忘 + 如实播报（⛔ 不静默、不猜）
+{
+  const h = makeHome('del-home-4', {
+    summaryFiles: ['s-0001-0010-1.md'],
+    ledgerEntries: { 's-0001-0010-1.md': { sig: 'a|1', at: 1 }, 's-9000-9010-9.md': { sig: 'c|3', at: 3 } },
+  })
+  const out = mod.deleteNow({ homeDir: h.home, action: 'delete-vector', summariesDir: '', now: H_STAMP_NOW })
+  check('I8 没说是哪个周目 ⇒ 删除照做（归档成功），但**一条账本都没忘**',
+    out.ok === true && out.receipt.counts.forgotten === 0 && out.receipt.message.includes('忘掉账本 0 条'))
+  check('I8b ★ 如实播报为什么没忘（"没忘账本："那句必须出现）', out.receipt.message.includes('没忘账本：'), out.receipt.message)
+  check('I8c 账本里那两条原封不动（⛔ 宁可不错忘别的周目）',
+    JSON.parse(readFileSync(join(h.anima, 'ingest-ledger.json'), 'utf8')).entries['s-0001-0010-1.md'] !== undefined)
+  // 清单文件读不到（目录给了但没有 index.json）⇒ 同样"一条都不忘 + 如实播报"
+  const h2 = makeHome('del-home-5', { summaryFiles: ['s-0001-0010-1.md'], ledgerEntries: { 's-0001-0010-1.md': { sig: 'a|1', at: 1 } } })
+  rmSync(join(h2.ws, 'index.json'), { force: true })
+  const out2 = mod.deleteNow({ homeDir: h2.home, action: 'delete-vector', summariesDir: h2.ws, now: H_STAMP_NOW })
+  check('I8d summaries/index.json 读不到 ⇒ 一条都不忘 + 播报里带原因（含 index.json）',
+    out2.receipt.counts.forgotten === 0 && out2.receipt.message.includes('index.json') && out2.receipt.message.includes('没忘账本：'),
+    out2.receipt.message)
+}
+
+// I9 回执同构（§3 的 6）：从 **anima 源码**里抄键名比对（⛔ 不 import 它）
+{
+  const animaRoot = process.env.DMA_ANIMA_ROOT || join(repo, '..', 'dsh-anima-rag')
+  const animaFile = join(animaRoot, 'lib', 'panel-request.js')
+  if (!existsSync(animaFile)) {
+    console.log(`SKIP I9 anima 侧 panel-request.js 不在（${animaRoot}）—— 回执同构这一步没跑`)
+  } else {
+    const aSrc = readFileSync(animaFile, 'utf8')
+    const body = (aSrc.match(/export function makePanelResult\([\s\S]*?\n\}/) || [''])[0]
+    // 只取 **return 那个对象字面量**的键（形参表里的 id/action/ok… 不算 —— 它们本来就要有）
+    const ret = body.slice(body.indexOf('return {'))
+    const keysFromAnima = (ret.match(/(\w+)\s*[:,]/g) || []).map((x) => x.replace(/[\s:,]/g, ''))
+    const want = keysFromAnima.filter((k) => ['version', 'id', 'action', 'ok', 'message', 'counts', 'at'].includes(k))
+    const mine = Object.keys(mod.makeResult({ id: 'i', action: 'delete-vector', ok: true, message: 'm', counts: { forgotten: 1 } }))
+    check('I9 ★ 回执键集合与 anima 的 makePanelResult 逐字一致（从它源码里抄的键名，⛔ 没 import）',
+      want.length > 0 && JSON.stringify(want) === JSON.stringify(mine), `anima=${JSON.stringify(want)} 本仓=${JSON.stringify(mine)}`)
+    check('I9b ★反证（本仓若漏一个键 —— 比如 counts —— 就与 anima 不一致）',
+      JSON.stringify(want) !== JSON.stringify(mine.filter((k) => k !== 'counts')))
+    check('I9c 版本号也是 1（anima 那份写的是 version: 1）', mod.makeResult({ id: 'i', action: 'x', ok: false, message: '' }).version === 1)
+  }
+  // 删除的文案也要与 anima 源码里那两句同款（抄的是它的措辞，⛔ 不 import）
+  const animaIdx = join(process.env.DMA_ANIMA_ROOT || join(repo, '..', 'dsh-anima-rag'), 'lib', 'index.js')
+  if (existsSync(animaIdx)) {
+    const src = readFileSync(animaIdx, 'utf8')
+    check('I9d 文案与 anima executePanelAction 里那两句同款（本来就不存在 / 已归档为…（没删））',
+      src.includes('本来就不存在（顺手忘掉账本 ${forgotten0} 条）')
+      && src.includes('（没删），并忘掉账本 ${forgotten} 条 ⇒ 下次入库会重新长出来')
+      && src.includes("const dest = `${target}.removed-${stamp}`")
+      && src.includes("new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)"))
+  }
+}
+
+// ---------------------------------------------------------------------------
+// J) 端点真跑：删除**当次回执** + 旧请求单被消费（§3 的 7、8）
+// ---------------------------------------------------------------------------
+console.log('\n── J) POST /vector/action{delete-*} 真跑（当次回执 / 消费旧单子） ──')
+{
+  const { createServer } = await import('node:http')
+  const JH = join(tmpRoot, 'j-home')
+  const JANIMA = join(JH, 'dsh-anima-rag')
+  const JV = join(JH, 'vectors')
+  const JB = join(JH, 'bm25')
+  const JWS = join(JH, 'ws')
+  const JSUM = join(JWS, 'char-a', 'playthrough-a', 'archive', 'summaries')
+  mkdirSync(JANIMA, { recursive: true })
+  mkdirSync(join(JV, 'dsh-memory'), { recursive: true })
+  mkdirSync(JB, { recursive: true })
+  mkdirSync(JSUM, { recursive: true })
+  mkdirSync(join(JH, 'pmp-dsh-tavern'), { recursive: true })
+  writeFileSync(join(JV, 'dsh-memory', 'index.json'), '{"items":[]}', 'utf8')
+  writeFileSync(join(JB, 'dsh-memory.json'), 'bm25', 'utf8')
+  writeFileSync(join(JANIMA, 'vector-info.json'), JSON.stringify({
+    version: 1, at: 1000,
+    dataRoots: { vectorRoot: JV, bm25Root: JB, sessionRoot: join(JH, 'sessions') },
+    collectionId: 'dsh-memory',
+    isolation: { enabled: true, bound: 'playthrough-a', boundSource: 'session', total: 0, boundCount: 0, deniedCount: 0 },
+    vector: { exists: true, count: 0, mtime: 1 }, bm25: { exists: true, bytes: 4, mtime: 1 },
+    ledger: { entries: 3, updatedAt: 'x' },
+  }), 'utf8')
+  writeFileSync(join(JANIMA, 'ingest-ledger.json'), JSON.stringify({
+    version: 1, updatedAt: '2026-01-01T00:00:00.000Z',
+    entries: { 's-0001-0010-1.md': { sig: 'a|1', at: 1 }, 's-0011-0020-1.md': { sig: 'b|2', at: 2 }, 's-9000-9010-9.md': { sig: 'c|3', at: 3 } },
+  }), 'utf8')
+  writeFileSync(join(JSUM, 'index.json'), JSON.stringify({ version: 1, entries: [{ file: 's-0001-0010-1.md' }, { file: 's-0011-0020-1.md' }] }), 'utf8')
+  // 宿主解"哪个周目的 summaries 目录"走的是既有的两条知识：工作区根 + catalog.json
+  writeFileSync(join(JH, 'pmp-dsh-tavern', 'play-workspace.json'), JSON.stringify({ rootPath: JWS }), 'utf8')
+  writeFileSync(join(JWS, 'catalog.json'), JSON.stringify({
+    playthroughs: [{ id: 'playthrough-a', path: 'char-a/playthrough-a/timeline.json', ext: { pmpDshTavern: { characterId: 'char-a', rootSessionId: 'sess-root' } } }],
+  }), 'utf8')
+  const jInfoBefore = readFileSync(join(JANIMA, 'vector-info.json'), 'utf8')
+
+  const before = process.env.DSH_HOME
+  process.env.DSH_HOME = JH
+  const { apply } = await import('./lib/index.js')
+  const routes = []
+  const webServer = { register: (r) => { routes.push(r); return () => {} } }
+  const ctx = { effect: (f) => f(), inject: (_n, cb) => cb(ctx), get: (n) => (n === 'webServer' ? webServer : undefined), webServer }
+  apply(ctx)
+  const PREFIX = '/dsh-memory-archive/api'
+  const route = routes.find((r) => r.path === PREFIX)
+  const server = createServer((req, res) => {
+    const p = new URL(req.url, 'http://x').pathname
+    if (p === PREFIX || p.startsWith(PREFIX + '/')) return route.handler(req, res)
+    res.writeHead(404); res.end('{}')
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const base = `http://127.0.0.1:${server.address().port}${PREFIX}`
+  const call = async (path, method = 'GET', payload) => {
+    const res = await fetch(base + path, {
+      method,
+      headers: payload === undefined ? {} : { 'content-type': 'application/json' },
+      body: payload === undefined ? undefined : JSON.stringify(payload),
+    })
+    const text = await res.text()
+    return { status: res.status, text, json: (() => { try { return JSON.parse(text) } catch { return null } })() }
+  }
+  try {
+    // J1 ★ 删除**当次**就回执（§3 的 7）：⛔ 不再 queued、⛔ 不写请求单
+    const d1 = await call('/vector/action', 'POST', { action: 'delete-vector', playthroughId: 'playthrough-a' })
+    check('J1 POST delete-vector ⇒ 200 ok:true + deleted:true + 回执当次回来（message/counts/at 齐）',
+      d1.status === 200 && d1.json?.ok === true && d1.json?.deleted === true
+      && String(d1.json?.message || '').includes('已归档为') && d1.json?.counts?.forgotten === 2 && Number.isFinite(d1.json?.at),
+      d1.text.slice(0, 240))
+    check('J1b ⛔ 响应里**没有** queued（点了就删，不再"排队等下一轮"）',
+      !('queued' in (d1.json || {})) && !d1.text.includes('queued'), d1.text.slice(0, 200))
+    check('J1c ⛔ 这次动作**没有**写 panel-request.json（删除不走请求单那条路）',
+      !existsSync(join(JANIMA, 'panel-request.json')))
+    check('J1d 磁盘上真改名了：<集合> 没了、`.removed-<时间戳>` 在',
+      !existsSync(join(JV, 'dsh-memory')) && readdirSync(JV).some((n) => n.startsWith('dsh-memory.removed-')))
+    check('J1e 账本只少本周目那两条（别的周目仍在）', (() => {
+      const led = JSON.parse(readFileSync(join(JANIMA, 'ingest-ledger.json'), 'utf8'))
+      return !('s-0001-0010-1.md' in led.entries) && !('s-0011-0020-1.md' in led.entries) && led.entries['s-9000-9010-9.md'] !== undefined
+    })())
+    check('J1f ⛔ 宿主没写快照（vector-info.json 一个字节都没变）', readFileSync(join(JANIMA, 'vector-info.json'), 'utf8') === jInfoBefore)
+    const st1 = await call('/vector/state')
+    check('J1g GET /vector/state 如实标"快照是删之前的"（deletedAfterInfo:true）+ 现算的库已不在',
+      st1.json?.deletedAfterInfo === true && st1.json?.live?.vector?.exists === false, st1.text.slice(0, 200))
+
+    // J2 ★ 旧请求单：**别的动作**的一张都不许动（§3 的 8 的反面）
+    const otherReq = JSON.stringify({ version: 1, id: 'old-rebuild', action: 'rebuild', note: '', at: 1 })
+    writeFileSync(join(JANIMA, 'panel-request.json'), otherReq, 'utf8')
+    const d2 = await call('/vector/action', 'POST', { action: 'delete-bm25', playthroughId: 'playthrough-a' })
+    check('J2 删 BM25（同名请求单是 rebuild）⇒ 那张单子**原封不动**（⛔ 别的动作一根汗毛都不动）',
+      d2.json?.deleted === true && existsSync(join(JANIMA, 'panel-request.json'))
+      && readFileSync(join(JANIMA, 'panel-request.json'), 'utf8') === otherReq)
+    check('J2b BM25 那次也真归档了（文件级落点）',
+      !existsSync(join(JB, 'dsh-memory.json')) && readdirSync(JB).some((n) => n.startsWith('dsh-memory.json.removed-')))
+
+    // J3 ★★ 同名旧请求单被消费（§3 的 8）：否则 anima 下一脚会照它再删一次
+    const sameReq = JSON.stringify({ version: 1, id: 'old-del', action: 'delete-vector', note: '', at: 1 })
+    writeFileSync(join(JANIMA, 'panel-request.json'), sameReq, 'utf8')
+    const d3 = await call('/vector/action', 'POST', { action: 'delete-vector', playthroughId: 'playthrough-a' })
+    check('J3 ★ 同名（delete-vector）旧请求单被消费掉（文件不在了）', d3.json?.deleted === true && !existsSync(join(JANIMA, 'panel-request.json')))
+    check('J3b 这次目标本来就不存在 ⇒ 文案是「本来就不存在」（⛔ 不报失败、照样是 ok）',
+      d3.status === 200 && d3.json?.ok === true && String(d3.json?.message || '').startsWith('本来就不存在'), d3.text.slice(0, 200))
+
+    // J4 快照读不到 ⇒ 可读错误、**一个字节都没动**（⛔ 不许猜路径）
+    const jInfoSaved = readFileSync(join(JANIMA, 'vector-info.json'), 'utf8')
+    rmSync(join(JANIMA, 'vector-info.json'), { force: true })
+    const d4 = await call('/vector/action', 'POST', { action: 'delete-vector', playthroughId: 'playthrough-a' })
+    check('J4 快照读不到 ⇒ 可读错误（VECTOR_INFO_UNAVAILABLE），⛔ 不当成功、⛔ 不猜路径',
+      d4.status === 200 && d4.json?.ok === false && d4.json?.error?.code === 'VECTOR_INFO_UNAVAILABLE'
+      && readdirSync(JV).filter((n) => n.includes('.removed-')).length === 1, d4.text.slice(0, 240))
+    writeFileSync(join(JANIMA, 'vector-info.json'), jInfoSaved, 'utf8')
+
+    // J5 排队那条路一个字没变（入库/重建照旧走请求单 + queued）
+    const d5 = await call('/vector/action', 'POST', { action: 'ingest-now' })
+    check('J5 「立即入库」照旧排队（queued:true + 请求单落盘）—— 只有删除改了判',
+      d5.json?.queued === true && existsSync(join(JANIMA, 'panel-request.json'))
+      && JSON.parse(readFileSync(join(JANIMA, 'panel-request.json'), 'utf8')).action === 'ingest-now')
   } finally {
     await new Promise((r) => server.close(r))
     if (before === undefined) delete process.env.DSH_HOME

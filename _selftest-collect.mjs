@@ -68,6 +68,13 @@ const MUTATIONS = [
     from: "if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') headers.origin = baseOrigin",
     to: 'if (false) headers.origin = baseOrigin // MUT8',
   },
+  // ★ 2026-09-22「摘要按段切片」：挖掉「summary 与 summaries 只能给一个」的守卫 ⇒ 两路并存时会
+  //   **静默挑一个**（A16 必红）。这条守卫是本单新加的，正是"不猜"的落点。
+  {
+    n: 9, assertId: 'A16', label: '两路并存（summary + summaries）的守卫被挖掉 ⇒ 静默挑一个',
+    from: '  if (isPlainObject(input.summary)) bad(SUMMARIES_BOTH_MSG)\n',
+    to: '  // MUT9：守卫被挖掉\n',
+  },
 ]
 
 const MUTATE = process.env.MUTATE ? Number(process.env.MUTATE) : 0
@@ -176,8 +183,10 @@ function floorsBody(root, tag, from, to, extra = {}) {
   }
 }
 
-/** 从假服务盘上读当前归档现状（planCollect 的 observed 口径）。 */
-function observe(fake, root, floorNos) {
+/** 从假服务盘上读当前归档现状（planCollect 的 observed 口径）。
+ *  `summaryPaths`（可选）= 将要写的摘要落点（照生产口径 observeArchive 的第 3 参）：覆盖模式下
+ *  它可能**已经存在**，期望值必须取它的真身 sha —— ★ 2026-09-22「摘要按段切片」时 N 份都传进来。 */
+function observe(fake, root, floorNos, summaryPaths) {
   const idxText = fake.files.has(idxPathOf(root)) ? fake.files.get(idxPathOf(root)) : null
   const manText = fake.files.has(manPathOf(root)) ? fake.files.get(manPathOf(root)) : null
   const floorShas = new Map()
@@ -185,10 +194,15 @@ function observe(fake, root, floorNos) {
     const p = floorPathOf(root, i)
     if (fake.files.has(p)) floorShas.set(i, sha(fake.files.get(p)))
   }
+  const summaryShas = new Map()
+  for (const p of Array.isArray(summaryPaths) ? summaryPaths : []) {
+    summaryShas.set(p, fake.files.has(p) ? sha(fake.files.get(p)) : null)
+  }
   return {
     targetKnown: true,
     existingFloors: new Set(floorNos.filter((i) => fake.files.has(floorPathOf(root, i)))),
     floorShas,
+    summaryShas,
     index: idxText === null ? { exists: false } : { exists: true, doc: JSON.parse(idxText), sha256: sha(idxText) },
     manifest: manText === null ? { exists: false } : { exists: true, doc: JSON.parse(manText), sha256: sha(manText) },
   }
@@ -480,6 +494,140 @@ async function runAssertions(C, fake) {
     assert.ok(/已存在/.test(threw.message), '文案应说"已存在"（实际：' + threw.message + '）')
     assert.ok(!/被改过/.test(threw.message), '⛔ 不该说"被改过"（实际：' + threw.message + '）')
     fake.files.delete(p9)
+  })
+
+  // -------------------------------------------------------------------------
+  // ★★ 2026-09-22「摘要按段切片」：追加式 `summaries`（一次 N 份，各带自己的 id/落点/meta）
+  //   背景（A2 任务书 §1）：检索侧的粒度就是「一个摘要文件 = 一条切片」⇒ 一次压缩的 N 个叙事段
+  //   要落成 N 条，而不是挤成一条。⛔ 老路（只给 `summary`）的形状与字节行为一个字都没动
+  //   （A2/A3/A11/A12 原样跑绿 + A14 把形状钉死）。
+  // -------------------------------------------------------------------------
+
+  /** 一份 `summaries` 夹具：n 段、各自不同的正文/标签（合成占位；⛔ 无真实会话正文）。 */
+  const sumBody = (root, from, to, n, extra = {}) => ({
+    target: { characterId: root.split('/')[0], playthroughId: root.split('/')[1] },
+    range: { fromFloor: from, toFloor: to },
+    floors: [...Array(to - from + 1).keys()].map((k) => ({ floor: from + k, isUser: true, isSystem: false, mes: synMes('slice', from + k), name: synName('u') })),
+    summaries: [...Array(n).keys()].map((i) => ({
+      id: 'mt-' + pad(from) + '-' + pad(to) + '-' + (i + 1),
+      text: synSum('seg' + String(i + 1), from, to),
+      model: 'syn-model',
+      meta: { kind: 'model-summary', tags: ['Tag' + String(i + 1)], eventSeq: 100 + i, shadowedTokenCount: 10 * (i + 1) },
+    })),
+    ...extra,
+  })
+
+  await check('A14', '★ 老路形状钉死：只给 `summary` 的 plan 键集合照旧（⛔ 不多一个 summaries 键）', async () => {
+    const plan = C.planCollect(floorsBody(CC, 'c', 0, 2), { observed: observe(fake, CC, []), now: () => Date.now() })
+    assert.equal(Object.keys(plan).filter((k) => k === 'summaries').length, 0, '老路 plan 里不该有 summaries 键')
+    assert.deepEqual(Object.keys(plan).sort(), [
+      'createdAt', 'dryRun', 'entryMeta', 'entryModel', 'expectedRevisions', 'floorDocs', 'hash', 'indexBeforeSha',
+      'indexExisted', 'indexPath', 'manifestPath', 'manifestUpdate', 'overwrite', 'range', 'summaryId', 'summaryPath',
+      'summaryText', 'target', 'v', 'warnings', 'willUpdate', 'willWrite',
+    ], '老路 plan 的键集合变了：' + Object.keys(plan).sort().join(','))
+    assert.equal(plan.summaryId, mdIdOf(0, 2), '老路的 summaryId 应是不带后缀的 s-<from>-<to>：' + plan.summaryId)
+  })
+
+  await check('A15', '★ 追加式：一次提交 3 份 ⇒ 楼层写一遍 + 索引**追加 3 条** + manifest.count = 3', async () => {
+    // 新周目 D：catalog 里补一条 + 预制 archive/manifest.json（真归档都有），索引不存在（本次新建）
+    const D = 'chard/playthrough-d'
+    const cat = JSON.parse(fake.files.get('catalog.json'))
+    cat.playthroughs.push({ id: 'pt-d', path: D + '/timeline.json', title: synTitle('d'), ext: { pmpDshTavern: { characterId: 'chard', characterName: synName('d'), playthroughNumber: 4 } } })
+    fake.files.set('catalog.json', JSON.stringify(cat) + '\n')
+    fake.files.set(
+      manPathOf(D),
+      JSON.stringify({ schemaVersion: 1, kind: 'dsh-tavern-l2-archive', generatedAt: ISO0, summaries: { dir: 'summaries', index: 'summaries/index.json', count: 0, writer: 'fixture-d' } }, null, 2) + '\n',
+    )
+    const body = sumBody(D, 0, 1, 3)
+    const plan = C.planCollect(body, { observed: observe(fake, D, []), now: () => Date.now() })
+    const segPaths = [1, 2, 3].map((i) => D + '/archive/summaries/mt-0000-0001-' + i + '.md')
+    assert.deepEqual(
+      plan.willWrite.map((w) => w.path).filter((p) => p.includes('/summaries/')).sort(),
+      [...segPaths, idxPathOf(D)].sort(),
+      'willWrite 的摘要路径应为 3 份 + 索引：' + JSON.stringify(plan.willWrite.map((w) => w.path)),
+    )
+    assert.ok(segPaths.every((p) => Object.prototype.hasOwnProperty.call(plan.expectedRevisions, p) && plan.expectedRevisions[p] === null),
+      '每份摘要的落点都要登记 expectedRevisions（照现有多份文件的写法，别漏）：' + JSON.stringify(plan.expectedRevisions))
+    const result = await C.applyCollect(plan, { tavern, now: () => Date.now() })
+    assert.equal(result.ok, true, 'apply ok=false：' + JSON.stringify((result && result.error) || '').slice(0, 160))
+    // 每份正文逐字落盘（按 plan 给的 sha 核）+ 楼层只写一遍（3 个摘要文件 + 2 楼 + 索引，没有重复）
+    for (const w of plan.willWrite) {
+      const r = result.readBack.find((x) => x.path === w.path)
+      assert.ok(r, 'readBack 缺 ' + w.path)
+      assert.equal(r.sha256, w.sha256, 'sha256 不一致 ' + w.path)
+    }
+    assert.equal(fake.files.get(segPaths[0]), synSum('seg1', 0, 1), '第 1 份正文应逐字是那一段')
+    assert.equal(fake.files.get(segPaths[2]), synSum('seg3', 0, 1), '第 3 份正文应逐字是那一段')
+    const after = JSON.parse(fake.files.get(idxPathOf(D)))
+    assert.equal(after.entries.length, 3, '索引应追加 3 条：' + after.entries.length)
+    assert.deepEqual(after.entries.map((e) => e.id), ['mt-0000-0001-1', 'mt-0000-0001-2', 'mt-0000-0001-3'], '条目顺序/ id 不符：' + JSON.stringify(after.entries.map((e) => e.id)))
+    assert.deepEqual(after.entries.map((e) => e.file), ['mt-0000-0001-1.md', 'mt-0000-0001-2.md', 'mt-0000-0001-3.md'], 'file 字段不符')
+    assert.ok(after.entries.every((e) => e.fromFloor === 0 && e.toFloor === 1), '各段共用区间的 from/to：' + JSON.stringify(after.entries.map((e) => [e.fromFloor, e.toFloor])))
+    assert.ok(after.entries.every((e) => e.model === 'syn-model'), 'model 应各段一致')
+    assert.deepEqual(after.entries.map((e) => e.tags), [['Tag1'], ['Tag2'], ['Tag3']], 'tags 应**各段各自**的（⛔ 不是并集）：' + JSON.stringify(after.entries.map((e) => e.tags)))
+    assert.deepEqual(after.entries.map((e) => e.eventSeq), [100, 101, 102], 'meta 白名单字段应逐段带上')
+    assert.ok(after.entries.every((e) => e.sourceHash === sha(synSum('seg' + (after.entries.indexOf(e) + 1), 0, 1)) && e.kind === 'model-summary'), 'sourceHash/kind 不符')
+    const manAfter = JSON.parse(fake.files.get(manPathOf(D)))
+    assert.equal(manAfter.summaries.count, 3, 'manifest.count 应 = 追加后的条目数（3）：' + manAfter.summaries.count)
+    assert.equal(manAfter.summaries.writer, WRITER, 'manifest.writer=' + manAfter.summaries.writer)
+    assert.equal(fake.files.get(floorPathOf(D, 0)).includes('"mes"'), true, '楼层应照常落盘')
+  })
+
+  await check('A16', '★ 两路并存（summary + summaries）⇒ COLLECT_INVALID（planCollect 与 validatePlanInput 两处都拒，⛔ 不猜）', async () => {
+    const both = { ...floorsBody(CC, 'c', 20, 21), summaries: [{ id: 'mt-0020-0021-1', text: synSum('x', 20, 21) }] }
+    let e1 = null
+    try { C.planCollect(both, { observed: observe(fake, CC, []), now: () => Date.now() }) } catch (e) { e1 = e }
+    assert.ok(e1, 'planCollect 应拒')
+    assert.equal(e1.code, 'COLLECT_INVALID', 'planCollect 实际抛 ' + e1.code)
+    assert.ok(/只能给一个/.test(e1.message), '文案应说清"只能给一个"：' + e1.message)
+    let e2 = null
+    try { C.validatePlanInput(both) } catch (e) { e2 = e }
+    assert.ok(e2 && e2.code === 'COLLECT_INVALID', 'validatePlanInput 应拒 COLLECT_INVALID，实际 ' + (e2 && e2.code))
+  })
+
+  await check('A17', '★ summaries 的落点必须互不相同（缺 id / id 重复 ⇒ COLLECT_INVALID，⛔ 不替你改名）', async () => {
+    const dupId = sumBody(CC, 30, 31, 2)
+    dupId.summaries[1].id = dupId.summaries[0].id
+    let e1 = null
+    try { C.validatePlanInput(dupId) } catch (e) { e1 = e }
+    assert.ok(e1 && e1.code === 'COLLECT_INVALID', 'id 重复应拒 COLLECT_INVALID，实际 ' + (e1 && e1.code))
+    const noId = sumBody(CC, 30, 31, 2)
+    for (const s of noId.summaries) delete s.id
+    let e2 = null
+    try { C.validatePlanInput(noId) } catch (e) { e2 = e }
+    assert.ok(e2 && e2.code === 'COLLECT_INVALID', '两份都没 id（缺省落到同一个 s-<from>-<to>.md）应拒，实际 ' + (e2 && e2.code))
+    assert.ok(/同一个摘要文件/.test(e2.message), '文案应说清"落点相同"：' + e2.message)
+  })
+
+  await check('A18', '★ 逐段判重：某一份的 id 已在索引里 / 某一份的正文已存在 ⇒ COLLECT_SUMMARY_EXISTS（不 overwrite）', async () => {
+    const D = 'chard/playthrough-d'
+    const stale = D + '/archive/summaries/mt-0000-0001-2.md' // A15 已落盘并在索引里
+    const freshPath = D + '/archive/summaries/mt-0002-0003-1.md'
+    const body = sumBody(D, 2, 3, 2) // 第 1 份是新的（mt-0002-0003-1），第 2 份故意撞 A15 那条
+    body.summaries[1].id = 'mt-0000-0001-2'
+    // ① 不观察摘要指纹（= 只比对索引）⇒ 撞在**索引**那一支上
+    let e1 = null
+    try { C.planCollect(body, { observed: observe(fake, D, []), now: () => Date.now() }) } catch (e) { e1 = e }
+    assert.ok(e1, '第 2 份的 id 已在索引里 ⇒ 应拒')
+    assert.equal(e1.code, 'COLLECT_SUMMARY_EXISTS', '实际抛 ' + e1.code)
+    assert.ok(/mt-0000-0001-2/.test(e1.message), '文案应点名是哪一份：' + e1.message)
+    // ② 覆盖模式 ⇒ 照常放行；且**逐份**回归自己的期望值（新的 = null，已存在的 = 真身 sha）
+    const plan = C.planCollect({ ...body, overwrite: true }, { observed: observe(fake, D, [], [freshPath, stale]), now: () => Date.now() })
+    assert.ok(plan.willWrite.some((w) => w.path === stale), 'overwrite 应照常计划写那一份')
+    assert.equal(plan.expectedRevisions[freshPath], null, '新那份的期望值应为 null')
+    assert.equal(plan.expectedRevisions[stale], sha(fake.files.get(stale)), '已存在那份的期望值 = 真身 sha')
+    // ③ 只观察**文件**那一支：往盘上放一份「索引里没有、但文件在」的摘要（别人写的孤儿文件）
+    const orphan = D + '/archive/summaries/mt-0007-0008-1.md'
+    fake.files.set(orphan, synSum('orphan', 7, 8))
+    const body3 = sumBody(D, 7, 8, 2) // 第 1 份的落点就是那份孤儿文件（索引里没有它）
+    let e3 = null
+    try {
+      C.planCollect(body3, { observed: observe(fake, D, [], [orphan, D + '/archive/summaries/mt-0007-0008-2.md']), now: () => Date.now() })
+    } catch (e) {
+      e3 = e
+    }
+    assert.ok(e3 && e3.code === 'COLLECT_SUMMARY_EXISTS' && /mt-0007-0008-1\.md/.test(e3.message),
+      '落点已被别的文件占了 ⇒ 应拒并点名（走的是"文件已存在"那一支）：' + JSON.stringify(e3 && [e3.code, e3.message]))
   })
 }
 

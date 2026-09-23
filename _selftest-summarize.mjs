@@ -126,6 +126,45 @@ const importEntry = { id: 'import-abc12345', file: 'import-abc12345.md', fromFlo
   const pGoodJson = parseSummaryOutput('[{"summary":"' + GOOD.split('\n')[0] + '","tags":{"vibe":"Suspense"}}]', { instruction: INSTR })
   check('② ★反证：正常 JSON 摘要不受影响', pGoodJson.ok === true && pGoodJson.items[0].tags.join() === 'Suspense')
 
+  // ★★ 2026-09-22 真机误伤（按行数判 ⇒ 正常摘要被拒收）：结构化输出里 schema 行**本来就逐字
+  //   在指令里**（指令规定了这个形状）⇒ 行命中比例必然虚高。夹具照真机形态造（⛔ 不写真实提示词原文）：
+  //   一份"规定 JSON 形状"的指令 + 一份形状合规、正文原创的摘要 ⇒ 新判据必须**不**判回声；
+  //   反证：把旧判据（命中行数 / 总行数 ≥ 0.5）在同一份夹具上算一遍 ⇒ 必须 ≥0.5（旧判据必误伤）。
+  const SCHEMA_INSTR = [
+    'Return raw JSON array only, one object per narrative segment.',
+    'Each object MUST have these keys, in this order:',
+    '"summary": "<prose in Chinese>"',
+    '"tags": {',
+    '"vibe": "Serious",',
+    '"special": [],',
+    '"important": false',
+    'Never invent facts that are not in the transcript.',
+  ].join('\n')
+  const JSON_SUMMARY = [
+    '[',
+    '  {',
+    '    "summary": "1966年9月1日 上午：顾筱潋在一个陌生的旅馆房间醒来，失去记忆；她用犬齿刺破下唇，用血充当口红。",',
+    '    "tags": {',
+    '      "vibe": "Serious",',
+    '      "special": [],',
+    '      "important": false',
+    '    }',
+    '  }',
+    ']',
+  ].join('\n')
+  const scrubOf = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim().replace(/[[\]{}"',:]+/g, ' ').replace(/\s+/g, ' ').trim()
+  const insScrubbed = scrubOf(SCHEMA_INSTR)
+  const jLines = JSON_SUMMARY.split('\n').map((l) => l.trim()).filter((l) => l.length >= 8)
+  const jHit = jLines.filter((l) => insScrubbed.includes(scrubOf(l)))
+  const oldLineRatio = jHit.length / jLines.length
+  check('② 相：形状合规、正文原创的 JSON 摘要 ⇒ **不**是回声（不按行数判）',
+    looksLikePromptEcho(JSON_SUMMARY, SCHEMA_INSTR) === false,
+    `行命中 ${jHit.length}/${jLines.length} = ${oldLineRatio.toFixed(2)}`)
+  check('② ★反证：同一份夹具在**旧判据**（命中行数 ≥ 0.5）下必被判成回声 ⇒ 证明确是这条判据在误伤',
+    oldLineRatio >= 0.5, `旧判据比例 ${oldLineRatio.toFixed(2)}`)
+  check('② 相：真回声（指令连续 3 行当输出）在新判据下**仍然**判得出',
+    looksLikePromptEcho(window3, INSTR) === true && looksLikePromptEcho(JSON_SUMMARY, SCHEMA_INSTR) === false)
+
   const pNoInstr = parseSummaryOutput(REAL_ECHO)
   check('② 兼容：不给 instruction ⇒ 回声闸门不生效（拿不到指令就只按结构判，不瞎猜）', pNoInstr.ok === true && pNoInstr.items.length === 1)
   check('② 畸形输入不抛', looksLikePromptEcho(null, INSTR) === false && looksLikePromptEcho(REAL_ECHO, null) === false)
