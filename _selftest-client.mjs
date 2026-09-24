@@ -1101,6 +1101,15 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     ['GET', '/auto-collect'],
     // 「角色扮演记忆库」只读出口（20260919）：同一档的上一块 —— 清单（不带 ?file=）与单份正文各一次调用
     ['GET', '/playthrough/rp-memory'],
+    // ★ 2026-09-23（用户口径「给剧情大纲加 1、剧情文本支持设置死区 2、剧情文本支持直接编辑」）：
+    //   这一档第一次开写 —— 三条与上面那条**同源**的新端点（同一份落点候选链 + 同一份 jail 裁决）。
+    ['POST', '/playthrough/rp-memory/write'],              // 直接改（乐观锁 409）
+    ['POST', '/playthrough/rp-memory/deadzones'],          // 划死区 / 解锁（⛔ 不动剧情文本）
+    ['GET', '/playthrough/rp-memory/deadzones/status'],    // 死区现状（只读，面板红字读它）
+    // ★ 2026-09-23（用户口径「**按楼层绑定**的笔记快照：每轮模型修改都记录，能自动跟随回档」）：
+    //   两条同源端点 —— 楼层清单（只读）与「回到这一楼」（手动触同一个恢复函数）。
+    ['GET', '/playthrough/rp-memory/floors'],              // 楼层清单（序号/时间/改了哪几份/当前那一楼）
+    ['POST', '/playthrough/rp-memory/floors/restore'],     // 回到这一楼（带 nodeId + variantId —— 20260923 变体级）
     // 「打开文件夹」（2026-09-20）：剧情大纲档那一颗按钮 —— 动作型，POST；⛔ 客户端不传路径
     ['POST', '/playthrough/reveal'],
     // 「后台收纳状态」只读出口（20260919）：面板 shell.overlay 的提示条读它（dsh-anima-rag 落的文件）
@@ -2717,7 +2726,19 @@ await check('★ 向量·库文件缺失与无快照的空态（⛔ 不白屏、
  * 判据：① RpMemoryFlow 存在且零 useEffect；② 清单取数只在确认回调 reveal 体内；
  * ③ 正文取数只在**点开那一行**的回调 toggleFile 体内；④ 上述两处之外（未确认路径/渲染路径）零取数；
  * ⑤ 确认按钮 dma-rpmem-reveal 的 onClick 恰好接 reveal。
+ * ★ 2026-09-23（死区 + 直接编辑）：新动作（保存 / 划死区 / 取死区现状）各自是**具名回调**，
+ *   同样**只许在这些具名回调体内**出现取数 —— 渲染路径与门外仍然零取数（判据跟着扩名单，⛔ 不放宽）。
  */
+const RP_MEM_FETCH_CALLBACKS = [
+  'const reveal = () => ',
+  'const toggleFile = (name, force) => ',
+  'const loadStatus = () => ',
+  'const saveFile = (name) => ',
+  'const toggleZone = (name, block, want) => ',
+  // ★ 2026-09-23（按楼层绑定的笔记快照）：两块新取数也是**具名回调**（读楼层清单 / 手动"回到这一楼"）
+  'const loadFloors = () => ',
+  'const gotoFloor = (nodeId) => ',
+]
 function rpMemGateContract(code) {
   const body = outlineFnBody(code, 'RpMemoryFlow')
   if (!body) return { ok: false, why: '缺 RpMemoryFlow 组件' }
@@ -2727,12 +2748,16 @@ function rpMemGateContract(code) {
   if (!reveal.includes("requestJson(HOST_API_BASE + '/playthrough/rp-memory'")) {
     return { ok: false, why: '确认回调 reveal 里没有清单取数调用' }
   }
-  const toggle = outlineArrowBody(body, 'const toggleFile = (name) => ')
+  const toggle = outlineArrowBody(body, 'const toggleFile = (name, force) => ')
   if (!toggle) return { ok: false, why: '缺按行取正文的回调 toggleFile' }
   if (!toggle.includes("requestJson(HOST_API_BASE + '/playthrough/rp-memory?file='")) {
     return { ok: false, why: '按行回调 toggleFile 里没有正文取数调用' }
   }
-  const outside = body.replace(reveal, '').replace(toggle, '')
+  let outside = body
+  for (const sig of RP_MEM_FETCH_CALLBACKS) {
+    const seg = outlineArrowBody(body, sig)
+    if (seg !== null) outside = outside.replace(seg, '')
+  }
   if (/requestJson|\.fetch\(/.test(outside)) return { ok: false, why: '门外（未确认路径/渲染路径）出现了取数调用' }
   if (!body.includes("id: 'dma-rpmem-reveal'")) return { ok: false, why: '缺手动确认按钮 id dma-rpmem-reveal' }
   if (!body.includes('onClick: reveal')) return { ok: false, why: '确认按钮的 onClick 没接 reveal（门与请求不是同一个条件）' }
@@ -2791,8 +2816,11 @@ await check('★ 记忆库·门（验收R1）：确认控件 dma-rpmem-reveal �
 await check('★★ 记忆库·两条取数路径（验收R2）：清单只在 reveal、正文只在按行回调；整份代码里该端点恰好 2 次；RP_MEMORY_MISSING 恰好 1 次', () => {
   const v = rpMemGateContract(src)
   assert.equal(v.ok, true, '门结构判据未命中: ' + v.why)
-  const hits = outlineCodeOnly.match(/\/playthrough\/rp-memory/g) || []
-  assert.equal(hits.length, 2, '该端点在代码里出现 ' + hits.length + ' 次（只许清单 + 按行正文这两次）')
+  // ★ 2026-09-23：这一档多了 /write 与 /deadzones 两条**同前缀**的新端点 ⇒ 判据收窄成
+  //   "只数那两条**读**端点"（`/playthrough/rp-memory'` 与 `/playthrough/rp-memory?file=`）：
+  //   ⛔ 别把新端点也算进来，也⛔ 别放宽成"不数了"。
+  const hits = outlineCodeOnly.match(/\/playthrough\/rp-memory(?=['?])/g) || []
+  assert.equal(hits.length, 2, '读端点（清单 + 按行正文）在代码里出现 ' + hits.length + ' 次（只许这两次）')
   const miss = outlineCodeOnly.split('RP_MEMORY_MISSING').length - 1
   assert.equal(miss, 1, 'RP_MEMORY_MISSING 出现 ' + miss + ' 次（只许清单那条空态分支里的一次）')
 })
@@ -2853,6 +2881,305 @@ await check('★ 记忆库·打开文件夹（2026-09-20；同日补空态）：
     '成败两条播报缺一条（不许静默）')
   assert.ok(body.includes("data.created === true") && body.includes("data.fallbackTo === 'workspace-root'"),
     '回执没按 created / fallbackTo 如实播报')
+})
+
+// ★★ 2026-09-23（用户口径「给剧情大纲加 1、剧情文本支持设置死区 2、剧情文本支持直接编辑」）
+//   这一档从"只能看"变成"能划死区 + 能直接改"。判据四条（每条都带反证）：
+//     ① 两个新入口都**排在手动确认之后**（未确认分支里一个都没有）；
+//     ② 面板**不自己算 sha、不自己切块**（乐观锁与死区定位只认宿主给的那两份 —— ⛔ 不两处真相）；
+//     ③ 保存只走"带乐观锁的 POST"那一条：整份代码里写端点**恰好 1 次**（⛔ 没有第二条自动写回的路）；
+//     ④ 红字**只告警、不还原**：文案不定性 + 明说"不会替你改回去"；渲染树里真的画得出来。
+await check('★★ 记忆库·死区 + 直接编辑（2026-09-23）：入口只在确认之后 · 不自己算 sha/切块 · 写端点恰 1 处 · 红字不定性且不还原', () => {
+  const body = outlineFnBody(src, 'RpMemoryFlow')
+  assert.ok(body, '缺 RpMemoryFlow 组件')
+  // ⚠️ 与 R1 同一条教训：判据必须从**渲染块**起算（早退里也出现过 gate === 'loading'）
+  const view = body.slice(body.indexOf("return e('div', { style: colFillStyle }"))
+  const locked = view.slice(view.indexOf("gate === 'locked'"), view.indexOf("gate === 'loading'"))
+  assert.ok(locked.length > 0, '找不到未确认分支（切片失锚）')
+  // ① 未确认之前：编辑框 / 锁标 / 保存 / 红字，一个都不许露头
+  assert.equal(/dma-rpmem-edit|dma-rpmem-zone|dma-rpmem-save|dma-rpmem-editor|deadzone-alert/.test(locked), false,
+    '新入口跑到了"确认之前" —— 未确认前连请求都不该发，更不该有编辑框')
+  // ② 不自己算 sha / 不自己切块：两样都只认宿主给的那一份
+  assert.equal(/crypto\.subtle|createHash\(|\.digest\(/.test(src), false, '客户端里出现了 sha 计算 —— 乐观锁只许用宿主给的 sha256')
+  assert.ok(body.includes("sha256: typeof f.sha256 === 'string' ? f.sha256 : ''"), '正文那份 sha 不是直接取宿主的')
+  assert.ok(body.includes('blocks: Array.isArray(f.blocks) ? f.blocks : null'), '块不是宿主给的（⛔ 面板不许自己切）')
+  assert.equal(/splitBlocks\s*\(/.test(src), false, '面板自己切块了（两处切法迟早漂）')
+  // ③ 保存：只此一处写端点，且**带乐观锁**（file + text + sha256）；⛔ 不带路径、不带目录
+  const saveFn = outlineArrowBody(body, 'const saveFile = (name) => ')
+  assert.ok(saveFn, '缺保存回调 saveFile(name)')
+  assert.ok(saveFn.includes("apiPost(HOST_API_BASE + '/playthrough/rp-memory/write'"), '保存没走 write 端点')
+  assert.ok(saveFn.includes('file: name, text: draft, sha256: pane.sha256'), '保存的请求体不是「file + text + sha256」三件套（乐观锁）')
+  assert.equal(/\bpath\b|\bdir\b|\bbase\b/.test(saveFn.slice(saveFn.indexOf('apiPost'), saveFn.indexOf('setSaving'))), false,
+    '保存那条路把路径/目录塞进了请求')
+  const writes = (outlineCodeOnly.match(/\/playthrough\/rp-memory\/write/g) || []).length
+  assert.equal(writes, 1, '写端点在代码里出现 ' + writes + ' 次（只许保存那一处 —— ⛔ 客户端不许有第二条"替用户写回"的路）')
+  // 这一档不长轮询、不自愈：零 useEffect（R1 已钉）之外再加一条"零定时器"
+  assert.equal(/setInterval|setTimeout/.test(body), false, 'RpMemoryFlow 里出现了定时器（这一档不长轮询、不自动重试）')
+  // ★ 反证：把红字那一支挖掉 ⇒ 同一条判据必红
+  const al = view.indexOf("'data-dma': 'deadzone-alert'")
+  assert.ok(al > 0, '渲染块里没有死区红字支')
+  const dug = view.slice(0, al) + view.slice(view.indexOf(': null,', al))
+  assert.equal(dug.includes('死区内容与快照不符'), false, '反证失败：挖掉红字支后仍能命中')
+  // ④ 文案不定性（用户口径：⛔ 不许断言"模型违规"）+ 明说不会替你改回去
+  assert.ok(body.includes('可能是模型改的，也可能是你在别处改过'), '红字文案没写"两种可能"（不定性）')
+  assert.ok(body.includes('只告警、不会替你改回去'), '红字没说明"不会替你改回去"（用户否掉的那个选项）')
+
+  // ── 渲染断言：把 RpMemoryFlow 摆进 ready 态（照它自己的 hook 序：0 gate / 1 st / 2 openName /
+  //    3 openFolder / 4 pane / 5 editing / 6 draft / 7 saving / 8 zoneBusy / 9 zoneMsg / 10 alert）──
+  const readyHost = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }
+  const SHA_CORE = 'b'.repeat(64)
+  const SHA_OTHER = 'c'.repeat(64)
+  const SHA_NOW = 'd'.repeat(64)
+  const memSt = {
+    files: [{ name: 'index.md', exists: true, bytes: 1234, mtime: 0, deadzones: 2, writable: true }],
+    baseLabel: '周目目录', candidates: [], sharedHint: false, otherEntries: 0, error: '',
+  }
+  const memPane = {
+    status: 'ready', text: '# 索引\n', chars: 120, originalChars: 120, truncated: false,
+    sha256: 'a'.repeat(64), writable: true, deadzones: 2, error: '',
+    blocks: [
+      { index: 0, firstLine: '## 【核心规则】', chars: 30, sha256: SHA_CORE, text: '## 【核心规则】\n- 不许改', dead: true },
+      { index: 1, firstLine: '## 别的段', chars: 10, sha256: SHA_OTHER, text: '## 别的段\n- x', dead: false },
+    ],
+  }
+  const memAlert = {
+    status: 'ready', error: '',
+    data: {
+      ok: true, zones: 2, status: 'changed', docError: null, sharedHint: false, file: '.dma-deadzones.json',
+      items: [
+        { file: 'index.md', label: '', firstLine: '## 【核心规则】', snapSha: SHA_CORE, nowSha: SHA_NOW, blockIndex: 0, state: 'changed' },
+        { file: 'index.md', label: '', firstLine: '## 别的段', snapSha: SHA_OTHER, nowSha: null, blockIndex: null, state: 'ok' },
+      ],
+      lastWatch: { at: '2026-09-23T10:00:00.000Z', status: 'changed' },
+    },
+  }
+  fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+    ReadArea: { 0: 'outline' },
+    RpMemoryFlow: { 0: 'ready', 1: memSt, 2: 'index.md', 4: memPane, 10: memAlert },
+  }))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const s = JSON.stringify(tree)
+    const text = visibleText(tree)
+    // 红字：指得出哪份文件哪一段 + 两个 sha（截断）+ 那句话
+    assert.ok(s.includes('deadzone-alert'), '渲染树里没有死区红字块')
+    assert.ok(text.includes('死区内容与快照不符'), '红字没画出来')
+    assert.ok(text.includes('index.md 的「## 【核心规则】」'), '红字没点名"哪份文件哪一段"')
+    assert.ok(text.includes(SHA_CORE.slice(0, 12)) && text.includes(SHA_NOW.slice(0, 12)), '红字没给出"快照 sha → 现况 sha"')
+    assert.ok(text.includes('只告警、不会替你改回去'), '红字缺"不还原"那句')
+    // 死区块：灰底 + 锁标；活块：给「设为死区」
+    assert.ok(s.includes('dma-rpmem-zone-index.md-0') && s.includes('dma-rpmem-zone-index.md-1'), '块上没有锁标按钮')
+    assert.ok(s.includes('"data-dead":"1"') && s.includes('"data-dead":"0"'), '块的死/活标记没画')
+    assert.ok(text.includes('🔒 死区 · 模型不许改') && text.includes('🔓 解锁') && text.includes('🔒 设为死区'), '锁标文案不全')
+    assert.ok(s.includes('dma-rpmem-edit-index.md'), '文件行上没有「直接改」入口')
+    // 一致时那句安静的绿字：把红字换成一致态再渲染一次
+    fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+      ReadArea: { 0: 'outline' },
+      RpMemoryFlow: {
+        0: 'ready', 1: memSt, 2: 'index.md', 4: memPane,
+        10: { status: 'ready', error: '', data: Object.assign({}, memAlert.data, { status: 'ok', items: [memAlert.data.items[1]] }) },
+      },
+    }))
+    const okText = visibleText(fakeReact.createElement(comp, { wide: true }))
+    assert.ok(okText.includes('与快照一致'), '一致态没有那句安静的绿字')
+    assert.equal(okText.includes('死区内容与快照不符'), false, '一致态不该出现红字（⛔ 不许常红）')
+    // 编辑态：textarea + 保存 + 放弃 + 那段"整份覆盖/乐观锁"的说明
+    fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+      ReadArea: { 0: 'outline' },
+      RpMemoryFlow: { 0: 'ready', 1: memSt, 2: 'index.md', 4: memPane, 5: 'index.md', 6: '## 草稿正文\n', 10: memAlert },
+    }))
+    const editTree = fakeReact.createElement(comp, { wide: true })
+    const es = JSON.stringify(editTree)
+    assert.ok(es.includes('dma-rpmem-editor') && es.includes('dma-rpmem-save') && es.includes('dma-rpmem-cancel'), '编辑态没画出编辑器/保存/放弃')
+    assert.ok(es.includes('"data-editing":"index.md"'), '编辑框没标出正在改哪一份')
+    const editText = visibleText(editTree)
+    assert.ok(editText.includes('整份覆盖') && editText.includes('乐观锁'), '编辑态没写清"整份覆盖 + 乐观锁"')
+    // 撞乐观锁（409）：草稿留着 + 给一颗"重新读取（会丢掉草稿）"，且**明说盘上没被动过**
+    assert.ok(body.includes("id: 'dma-rpmem-reload'"), '没保存成功时没有"重新读取"那颗按钮')
+    fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+      ReadArea: { 0: 'outline' },
+      RpMemoryFlow: {
+        0: 'ready', 1: memSt, 2: 'index.md', 4: memPane, 5: 'index.md', 6: '## 我的草稿\n',
+        7: { status: 'err', code: 'RP_MEMORY_WRITE_STALE', message: '盘上已经变了…', receipt: null },
+        10: memAlert,
+      },
+    }))
+    const staleTree = fakeReact.createElement(comp, { wide: true })
+    const staleText = visibleText(staleTree)
+    assert.ok(JSON.stringify(staleTree).includes('dma-rpmem-reload'), '撞乐观锁时没画出"重新读取"')
+    assert.ok(staleText.includes('盘上一个字节都没动'), '撞乐观锁时没明说"盘上没被动过"')
+    assert.ok(staleText.includes('丢掉我这份草稿'), '"重新读取"没写清它会丢掉草稿（⛔ 不许悄悄丢）')
+  } finally { fakeReact.__setPreset(null) }
+})
+
+// ★★ 2026-09-23（用户口径「**按楼层绑定**的笔记快照：每轮模型修改都记录，能自动跟随回档」）：
+//   面板这一块只做两件事 —— 把宿主算好的**楼层清单**（每一支一行）如实画出来、把「回到这一楼」发出去。
+//   判据四条（每条都带反证）：
+//     ① 取数只在那两个**具名回调**里（⛔ 门外零取数 —— `RP_MEM_FETCH_CALLBACKS` 已把名单钉上）；
+//     ② ⛔ 面板**不直连 Tavern、不自己算"当前第几楼"**（序号/高亮/该不该恢复全是宿主给的）；
+//     ③ 「回到这一楼」**只带 `(nodeId, variantId)`**（⛔ 不带路径、不带 sha —— 路径与判据只能由宿主自己解析）；
+//     ④ 成败与"跳过 / 没写进去"都如实画出来（⛔ 不许部分成功当全成功）+ 明说"不影响会话"。
+await check('★★ 记忆库·楼层快照（2026-09-23 / 同日补单）：按 (楼层, 变体) 传 · 不自己算第几楼 · 列表/高亮/老记录只读/自动回档那句都画得出来；反证：挖掉列表支必红', () => {
+  const body = outlineFnBody(src, 'RpMemoryFlow')
+  assert.ok(body, '缺 RpMemoryFlow 组件')
+  // ① 两个具名回调（门内）—— 名字必须与 RP_MEM_FETCH_CALLBACKS 一致，否则"门外零取数"那条判据会漏
+  const loadFn = outlineArrowBody(body, 'const loadFloors = () => ')
+  assert.ok(loadFn, '缺取楼层清单的回调 loadFloors')
+  assert.ok(loadFn.includes("requestJson(HOST_API_BASE + '/playthrough/rp-memory/floors'"), 'loadFloors 没走 /floors 端点')
+  const gotoFn = outlineArrowBody(body, 'const gotoFloor = (nodeId, variantId) => ')
+  assert.ok(gotoFn, '缺「回到这一楼」的回调 gotoFloor(nodeId, variantId)')
+  assert.ok(gotoFn.includes("apiPost(HOST_API_BASE + '/playthrough/rp-memory/floors/restore'"), 'gotoFloor 没走 /floors/restore 端点')
+  // ③ 请求体**只有 nodeId**（只取那一次调用到回执之间的那一段，⛔ 别把回执渲染算进来）
+  const at = gotoFn.indexOf('apiPost(')
+  const callSeg = gotoFn.slice(at, gotoFn.indexOf('setGotoMsg({', at))
+  assert.ok(callSeg.includes('{ nodeId: nodeId, variantId: variantId }'), 'gotoFloor 的请求体不是 nodeId + variantId')
+  assert.equal(/\bpath\b|\bdir\b|\bbase\b|sha256/.test(callSeg), false, '「回到这一楼」把路径/目录/sha 塞进了请求（宿主只认 nodeId）')
+  // ② ⛔ 不直连 Tavern、⛔ 不自己算楼层序号（只查这一档的组件体 —— 别把别的档算进来）
+  assert.equal(/timeline\.json|catalog\.json|play-workspace/.test(body), false, '面板碰了 Tavern 的文件（⛔ 一律走宿主端点）')
+  assert.equal(/\bseq\s*[-+*/]|parseInt\(\s*[^)]*seq/.test(body), false, '面板自己算楼层序号了（序号只能由宿主给）')
+  // ④ 忙/成功/失败三态都在（⛔ 不许静默、⛔ 不许部分成功当全成功）
+  assert.ok(gotoFn.includes("if (gotoMsg.status === 'busy') return"), '缺忙态门（连点会重复恢复）')
+  assert.ok(body.includes('floor-goto-err') && body.includes('floor-goto-ok'), '回执只画了一半（成败都要如实画）')
+  assert.ok(body.includes("'⚠ 没写进去：'"), '没把"哪几份没写进去"画出来')
+  assert.ok(!/useEffect|setInterval|setTimeout/.test(body), 'RpMemoryFlow 里出现了 useEffect / 定时器（这一档不轮询、不自动重试）')
+
+  // ── 渲染断言：摆进 ready 态（hook 序：…10 alert / 11 floorPane / 12 gotoMsg）──
+  const readyHost = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }
+  const T0 = '2026-09-23T09:00:00.000Z'
+  const T1 = '2026-09-23T10:00:00.000Z'
+  const memSt = {
+    files: [{ name: 'notes.md', exists: true, bytes: 140, mtime: 0, deadzones: 0, writable: true }],
+    baseLabel: '周目目录', candidates: [], sharedHint: false, otherEntries: 0, error: '',
+  }
+  const floorData = {
+    ok: true, base: 'playthrough', baseLabel: '周目目录', sharedHint: false,
+    dir: '.dma-floor-snapshots', docExists: true, docError: null,
+    targets: ['notes.md', 'index.md', 'state.md', 'characters.md', 'world.md'],
+    head: { nodeId: 'qa-3-3-ccc', variantId: 'variant-3', seq: 3 }, orderKnown: true,
+    last: { nodeId: 'qa-3-3-ccc', seq: 3, at: T1 }, lastFloorSeq: 3,
+    deadzonesReadable: true, deadFiles: ['rulebook.md'],
+    legacyFloors: [{ nodeId: 'qa-2-2-bbb', seq: 2 }],
+    floors: [
+      {
+        nodeId: 'qa-1-1-aaa', variantId: 'variant-1', seq: 1, at: T0, updatedAt: T0,
+        current: false, sameNode: false, legacy: false,
+        changed: [{ name: 'notes.md', bytes: 120, delta: null }, { name: 'index.md', bytes: 80, delta: null }],
+        present: ['notes.md', 'index.md'], absent: ['state.md'], deadzone: [],
+      },
+      // ★ 20260923：同一楼 swipe 出来的**另一支**（当前那一支是下面那条）
+      {
+        nodeId: 'qa-3-3-ccc', variantId: 'variant-3-old', seq: 3, at: T0, updatedAt: T0,
+        current: false, sameNode: true, legacy: false,
+        changed: [{ name: 'notes.md', bytes: 90, delta: null }],
+        present: ['notes.md'], absent: [], deadzone: [],
+      },
+      {
+        nodeId: 'qa-3-3-ccc', variantId: 'variant-3', seq: 3, at: T1, updatedAt: T1,
+        current: true, sameNode: true, legacy: false,
+        changed: [{ name: 'notes.md', bytes: 140, delta: 20 }],
+        present: ['notes.md', 'index.md'], absent: [], deadzone: ['index.md'],
+      },
+      // ★ 20260923：上一版形状的**老记录**（只有 nodeId、不知道是哪一支）⇒ 只读、不能恢复
+      {
+        nodeId: 'qa-2-2-bbb', variantId: '', seq: 2, at: T0, updatedAt: T0,
+        current: false, sameNode: false, legacy: true,
+        changed: [], present: ['notes.md'], absent: [], deadzone: [],
+      },
+    ],
+    lastAuto: {
+      at: T1, kind: 'rollback', from: { nodeId: 'qa-2-2-bbb', seq: 2 }, to: { nodeId: 'qa-1-1-aaa', seq: 1 },
+      restored: ['notes.md'], skipped: [], failed: [], blocked: null,
+      message: '检测到回档到第 1 楼（从第 2 楼） ⇒ 已把笔记恢复到第 1 楼的样子（恢复 notes.md）；⛔ 预置那几份没动',
+    },
+    checkedAt: T1,
+  }
+  fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+    ReadArea: { 0: 'outline' },
+    RpMemoryFlow: { 0: 'ready', 1: memSt, 2: 'notes.md', 11: { status: 'ready', data: floorData, error: '' } },
+  }))
+  try {
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const s = JSON.stringify(tree)
+    const text = visibleText(tree)
+    assert.ok(s.includes('dma-rpmem-floor-goto-qa-1-1-aaa-variant-1')
+      && s.includes('dma-rpmem-floor-goto-qa-3-3-ccc-variant-3')
+      && s.includes('dma-rpmem-floor-goto-qa-3-3-ccc-variant-3-old'),
+      '每一支没有「回到这一楼」的按钮（同一楼两支各一个）')
+    assert.ok(s.includes('dma-rpmem-floor-goto-qa-2-2-bbb-legacy'), '老记录那一行没有按钮（要禁用而不是没有）')
+    assert.ok(s.includes('"data-floor":"1"') && s.includes('"data-floor":"3"'), '楼层列表没画出来（序号缺失）')
+    assert.ok(s.includes('"data-floor-current":"1"') && s.includes('"data-floor-current":"0"'), '当前那一楼没标出来（高亮判据缺失）')
+    assert.ok(text.includes('第 1 楼') && text.includes('第 3 楼'), '楼层序号没显示成人话')
+    assert.ok(text.includes('◀ 当前这一楼'), '当前那一楼没有高亮标记')
+    assert.ok(text.includes('notes.md（+20 字节）'), '「改了哪几份（+几字节）」没画出来')
+    assert.ok(text.includes('notes.md（共 120 字节）'), '没有基数的那几份没如实报"共几字节"')
+    assert.ok(text.includes('最近一次自动回档跟随') && text.includes('检测到回档到第 1 楼'), '档顶没有「最近一次自动回档跟随」那一句')
+    assert.ok(text.includes('不影响会话'), '没写清「回到这一楼」不影响会话')
+    assert.ok(text.includes('按块合并') && text.includes('死区') && text.includes('保留盘上现况'),
+      '没把「死区那几份按块合并（保留盘上现况）」说出来（⛔ 不再是"整份跳过"）')
+    assert.ok(text.includes('同一楼的另一支（swipe 掉的）'), '同一楼 swipe 出来的另一支没标出来')
+    assert.ok(text.includes('老记录·不能恢复') && text.includes('老记录：只有楼层、不知道是哪一支'),
+      '老记录那一行没如实标成"只读、不能恢复"')
+    assert.ok(s.includes('"data-floor-legacy":"1"') && s.includes('"data-floor-variant":"variant-3"'),
+      '老记录/变体那两个属性没画出来（面板要靠它标行）')
+    assert.ok(text.includes('这一楼当时没有：state.md'), '没如实说"那一楼当时没有这份"（恢复时不动它）')
+    assert.ok(text.includes('notes.md、index.md、state.md、characters.md、world.md'), '没摆出"只记这 5 份"的名单')
+    // 反证：把列表那一支挖掉 ⇒ 同一条判据必红
+    const dugSrc = body.replace('floorRows.map(floorRow),', '')
+    assert.equal(dugSrc.includes('floorRows.map(floorRow)'), false, '反证失败：挖掉列表支后仍能命中')
+    // 反证：把"档顶那一句自动回档"挖掉 ⇒ 同一条判据必红
+    const dugAuto = body.replace('floorAutoLine,', '')
+    assert.equal(dugAuto.includes('floorAutoLine,'), false, '反证失败：挖掉自动回档那一句后仍能命中')
+    // 失败态：有哪几份没写进去 ⇒ 红字 + 逐条列出来（⛔ 绝不"部分成功当全成功"）
+    fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+      ReadArea: { 0: 'outline' },
+      RpMemoryFlow: {
+        0: 'ready', 1: memSt, 2: 'notes.md',
+        11: { status: 'ready', data: floorData, error: '' },
+        12: {
+          status: 'err', nodeId: 'qa-1-1-aaa',
+          message: '检测到回档到第 1 楼 ⇒ ⚠ 没写进去 notes.md（写盘失败（EPERM））；⛔ 预置那几份没动',
+          detail: {
+            restored: [{ name: 'index.md', bytes: 80, backup: 'index.md.bak-2026-09-23T10-00-00-000Z', created: false }],
+            skipped: [], failed: [{ name: 'notes.md', reason: '写盘失败（EPERM）' }],
+          },
+        },
+      },
+    }))
+    const errTree = fakeReact.createElement(comp, { wide: true })
+    const errText = visibleText(errTree)
+    assert.ok(JSON.stringify(errTree).includes('floor-goto-err'), '失败态没有红字块')
+    assert.ok(errText.includes('⚠ 没写进去：notes.md（写盘失败（EPERM））'), '失败态没逐条列出"哪几份没写进去"')
+    assert.ok(errText.includes('不算全成功'), '失败态没有"不算全成功"那句（⛔ 不许部分成功当全成功）')
+    assert.ok(errText.includes('index.md（原样备份成 index.md.bak-'), '成功那几份没报"原样备份成什么"')
+    // 被拦住而**什么都没做**（死区名单未知）⇒ 红字，⛔ 不许画成"成功"
+    fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+      ReadArea: { 0: 'outline' },
+      RpMemoryFlow: {
+        0: 'ready', 1: memSt, 2: 'notes.md',
+        11: { status: 'ready', data: floorData, error: '' },
+        12: {
+          status: 'ok', nodeId: 'qa-1-1-aaa',
+          message: '检测到回档到第 1 楼 ⇒ ⚠ 死区数据读不出来（名单未知）⇒ 这次不敢恢复（怕碰死区里的文件），笔记保持原样',
+          detail: { restored: [], skipped: [], failed: [], blocked: 'deadzones-unreadable', unchanged: true },
+        },
+      },
+    }))
+    const blockedTree = fakeReact.createElement(comp, { wide: true })
+    assert.ok(JSON.stringify(blockedTree).includes('floor-goto-blocked'), '被拦住而没恢复时没画成警示（⛔ 不许画成成功）')
+    assert.ok(visibleText(blockedTree).includes('这次不敢恢复'), '被拦住时没把"为什么没动"说清')
+  } finally { fakeReact.__setPreset(null) }
 })
 
 // =======================================================================
