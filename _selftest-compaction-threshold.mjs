@@ -712,8 +712,13 @@ console.log('JSON:' + JSON.stringify(out))
     check('★★ 两档的请求形状各就各位：主档 = 我们那条（6 条、system 被摘掉、无 tools、全带 source）；兜底 = 官方形状（5 条、system 原样还在）',
       LF !== undefined && LF.calls.length === 2
       && LF.calls[0].count === 6 && LF.calls[0].firstRole === 'user' && LF.calls[0].allSourced === true && LF.calls[0].hasTools === false
-      && LF.calls[1].count === 5 && LF.calls[1].firstRole === 'system' && LF.calls[1].allSourced === true,
+      && LF.calls[1].count === 5 && LF.calls[1].firstRole === 'system' && LF.calls[1].hasTools === false,
       JSON.stringify(LF && LF.calls))
+    // ⚠️ 2026-09-24 改口径（**说明为什么**）：原来还要求兜底档 `allSourced === true`（每条 message 都带
+    //   `source`）。兜底那一档是**把宿主的消息原样透传**（"官方形状"）—— 它带不带 `source` 是 DSH 的事，
+    //   不是我们能保证的。DSH 换到 0.1.7（session 格式 V4）后消息形状变了（同日已在 Tavern 那边踩过
+    //   V4 的 tool-role 消息），这条就红了；而**主档**（我们自己那套包裹）仍然逐条带 source ⇒ 那一半照旧钉着。
+    //   ⇒ 兜底档只钉"形状 = 官方那套"（5 条 / system 原样在首 / 不是 RP 档 / 无 tools），⛔ 不替 DSH 保证 source。
   }
   rmSync(e2eTmp, { recursive: true, force: true })
 }

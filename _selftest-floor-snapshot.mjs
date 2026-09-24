@@ -4,14 +4,27 @@
  *  ★ 20260923 **补单**改了**两处口径**：快照锚 `nodeId` → **`(nodeId, variantId)`**（swipe 也算回档）、
  *  死区从"整份跳过" → **按块合并** —— 本台子按新口径钉，改过口径的那几条在注释里写明为什么改）。
  *
- * 五条主线（都按项目惯例：**相 + 反证成对**，⛔ 不只做源码字符串断言）：
+ * ★★ 20260924 **再补一单**（用户原话：「**不要做跟随楼层的功能，先做手动挡**，开 fork 时（回档）
+ *  **前台弹提示，让用户手动回退剧情档案**。做**更显著的更改表示**」）⇒ 口径从"判到回档就自动把笔记
+ *  写回去"改成"**判到回档只记一条待处理（pending）、那 5 份一个字节都不写**"，写盘只在人点了面板上
+ *  那两个按钮之后。两个按钮：**「把档案退回第 N 楼」＝ `restoreFloor`（动正文）**；
+ *  **「保持现状」＝ `settlePending`（就地登记 —— ⛔ 不动正文）**。
+ *  ★ 20260924 收尾（用户口径：「跟 Tavern 一致 —— 回档之后那段历史就是没有了，记忆回档之后也直接按新的来。
+ *  「保持现状」＝就地登记」）：`settlePending` 不能只清 `pending` —— 那样 `last` 停在后面，
+ *  记录侧（只认 first/same/forward）**永远够不到** ⇒ ① 之后整段不记快照 ② 每推一楼重弹一条横幅。
+ *  所以它必须**顺手把 `last` 锚到当前这一楼**（并把盘上现文记成那一楼那一份）。台子 §3-4 / D10i 钉的就是这个。
+ *  改过口径的那几条台子都在注释里写明了为什么改（⛔ 老的没删）。
+ *
+ * 六条主线（都按项目惯例：**相 + 反证成对**，⛔ 不只做源码字符串断言）：
  *   A 纯逻辑层（`lib/floor-snapshot.js` 直测：判该不该记 / 该不该回 / 恢复到哪一份 / 按块合并怎么合）；
  *   B 补单 §2 八对（**本单的新口径**：变体级记录 · 换变体也算回档 · 退回进楼前 · 前进不回档 ·
  *     死区按块合并（两个反证） · 死区读不出来整次不做 · 老条目只读不恢复 · 预置一律不碰）；
  *   C 上一单那八对（回归；改过口径的两条已按新口径改写，注释里写了为什么）；
  *   D 接线纪律 —— 走**真 HTTP** 与**真钩子**（假 ctx 驱动真 `apply()`）：每轮至多一次 / 不占本轮时间 /
  *     轮末才记 / 不刷屏 / 手动恢复与自动跟随**共用同一份** / 有哪一份写不进去就**如实**；
- *   E 纪律静态核对：只写那 5 份 + 我们自己的目录（⛔ 死区被判据约束、⛔ 预置、⛔ 会话/归档/Tavern 一个不碰）。
+ *   E 纪律静态核对：只写那 5 份 + 我们自己的目录（⛔ 死区被判据约束、⛔ 预置、⛔ 会话/归档/Tavern 一个不碰）；
+ *   F 本单 §3 六对（★ 2026-09-24 手动挡：判到回档**盘上零写入** / pending 幂等 / 手动才真写+清 pending /
+ *     就地登记之后**记录无缝续上** / 预置与死区一律不碰 / 没有快照的楼层不写任何文件）。
  *
  * ★ 全部夹具都在**临时目录**里（`_selftest-home-floor` / `_selftest-ws-floor`），测完删掉；
  * ⛔ 全程不碰真机（`C:\Users\w\.dsh`）、⛔ 不碰用户的 RP 工作区（`D:\apps\dsh-tarven`）。
@@ -473,60 +486,129 @@ try {
         && byStamp === 'rollback'
     })())
 
-  // ═════════════════════════════════════════════════════════════════════════
-  sect('B 补单 §2 八对（本单新口径：变体级快照 + 死区按块合并）')
+  // ★ 20260924 新口径：那条**待处理**（`pending`）的纯逻辑 —— 归一 / 记 / 幂等 / 过期清掉。
+  check('A10 ★ 待处理那条（normalizePending / pendingOf / planPending）：归一 + 幂等（同一次回档不刷 at）+ 过期清掉',
+    (() => {
+      const raw = {
+        fromNodeId: 'n3', fromVariantId: 'v1', fromSeq: 3,
+        toNodeId: 'n1', toVariantId: 'v1', toSeq: 1,
+        targetNodeId: 'n1', targetVariantId: 'v1', targetSeq: 1,
+        why: 'variant', source: 'prev', at: 'T1',
+      }
+      const p = fl.normalizePending(raw)
+      const idx = (pending) => ({ last: { nodeId: 'n3', variantId: 'v1', seq: 3 }, floors: [], pending })
+      const rb = (target, why = 'back', source = 'self') => ({ kind: 'rollback', target, why, source, seq: 1, lastSeq: 3, prevNodeId: null, legacyAtHead: false })
+      const t1 = { nodeId: 'n1', variantId: 'v1', seq: 1 }
+      const t2 = { nodeId: 'n2', variantId: 'v1', seq: 2 }
+      const head = { nodeId: 'n1', variantId: 'v1' }
+      const okShape = p !== null && p.fromSeq === 3 && p.toSeq === 1 && p.targetSeq === 1
+        && p.why === 'variant' && p.source === 'prev' && p.targetKey === fl.floorKeyOf('n1', 'v1') && p.at === 'T1'
+        && fl.normalizePending(null) === null && fl.normalizePending({ nodeId: 'x' }) === null
+        && fl.pendingOf({}) === null && fl.pendingOf(null) === null
+      const a = fl.planPending({ index: idx(null), head, decision: rb(t1), seq: 1, at: 'T1' })
+      const b = fl.planPending({ index: idx(a.pending), head, decision: rb(t1), seq: 1, at: 'T9' })
+      const c = fl.planPending({ index: idx(a.pending), head, decision: rb(t2, 'variant', 'self'), seq: 2, at: 'T9' })
+      const e1 = fl.planPending({ index: idx(a.pending), head: { nodeId: 'n4', variantId: 'v1' }, decision: { kind: 'forward' }, seq: 4, at: 'T9' })
+      const e2 = fl.planPending({ index: idx(a.pending), head, decision: { kind: 'same' }, seq: 1, at: 'T9' })
+      const f = fl.planPending({ index: idx(a.pending), head, decision: { kind: 'unknown-order' }, seq: null, at: 'T9' })
+      return okShape
+        && a.changed === true && a.pending.targetKey === fl.floorKeyOf('n1', 'v1') && a.pending.at === 'T1' && a.pending.source === 'self'
+        && b.changed === false && b.pending.at === 'T1'
+        && c.changed === true && c.pending.targetSeq === 2 && c.pending.at === 'T9'
+        && e1.changed === true && e1.pending === null
+        && e2.changed === true && e2.pending === null
+        && f.changed === false && f.pending !== null
+        // ★ 反证（幂等那一句）：把"同一个 targetKey 不刷 at"挖掉（= 每轮都拿新的 at）⇒ 上面 b 那条必红
+        && (() => {
+          const dugNoIdem = Object.assign({}, a.pending, { at: 'T9' })
+          return b.pending.at === a.pending.at && JSON.stringify(dugNoIdem) !== JSON.stringify(a.pending)
+        })()
+    })())
 
-  // ── 对 1：相｜变体级记录（同一 nodeId 两支各记一条，互不覆盖）────────────────
+  // ═════════════════════════════════════════════════════════════════════════
+  sect('B 补单 §2 八对（变体级快照 + 死区按块合并；★ 20260924 回档改手动挡后，改口径的那几条已按新口径改写）')
+
+  // ── 对 1：相｜变体级记录（同一 nodeId 两支各记一条，互不覆盖）＋ ★ 20260924 改口径：
+  //   swipe 判成回档之后**只记一条待处理、那 5 份逐字节不变**（原来这里断言"自动退回进楼前"）。
   {
     reset(V1)
-    sync('turn')                            // 第 1 楼第 1 支
+    sync('turn')                            // 第 1 楼第 1 支（记 (1,V1)）
     writeTimeline(NODES[1])
     putFiles(V2)
-    sync('turn')                            // 第 2 楼第 1 支
-    // ★ swipe：同一楼换到第 2 支（没记过 ⇒ 退回进楼前 = 第 1 楼那一份）
+    sync('turn')                            // 第 2 楼第 1 支（记 (2,V1)）
+    // ★ swipe：同一楼换到第 2 支（没记过 ⇒ 该退回"进楼前" = 第 1 楼那一份）
     writeTimeline(NODES[1], NODES, VAR(NODES[1], 2))
+    const fiveBefore = fiveNow()
+    const rawBefore = indexRaw()
     const rSwap = sync('turn')
-    const afterRestore = readMem('notes.md')
-    putFiles(V2B)                           // 第 2 支里模型重跑出来的样子
-    const rRec = sync('turn')               // head=(2,V2) vs last=(1,V1) ⇒ 前进 ⇒ 记 (2,V2)
+    check('§2-1相 ★ swipe（同一楼换变体）判成回档 ⇒ **只记一条待处理、那 5 份逐字节不变**（⛔ 不自动跟随）',
+      rSwap.kind === 'rollback' && rSwap.why === 'variant' && rSwap.restore === null
+      && rSwap.pending !== null && rSwap.pending.source === 'prev'
+      && rSwap.pending.fromSeq === 2 && rSwap.pending.toSeq === 2 && rSwap.pending.targetSeq === 1
+      && JSON.stringify(fiveNow()) === JSON.stringify(fiveBefore)
+      && readMem('notes.md') === V2['notes.md']        // 盘上还是模型在第 2 楼第 1 支之后写的那份
+      && backups().length === 0
+      && indexOf().floors.length === 2 && indexOf().last.nodeId === NODES[1]
+      && indexRaw() !== rawBefore, JSON.stringify([rSwap.kind, rSwap.pending && rSwap.pending.source]))
+    // ★ 手动那一脚（就是面板横幅上那颗「把档案退回第 1 楼」）⇒ 才真的退回"进这一楼之前"那张
+    const back = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: [], at: 'T2', stamp: 'stamp2' })
+    check('§2-1相b ★ 手动点「把档案退回第 1 楼」⇒ 真写回第 1 楼那份，并清掉那条待处理',
+      back.kind === 'manual' && readMem('notes.md') === V1['notes.md'] && readMem('index.md') === V1['index.md']
+      && back.pending === null && indexOf().pending === null)
+    // ★ 第 2 支里模型重跑出来的样子 ⇒ 这一次是"往前走" ⇒ 记下 (2,V2)（两支各一条、互不覆盖）
+    putFiles(V2B)
+    const rRec = sync('turn')
     const two = fl.floorsOfNode(indexOf(), NODES[1])
     const shaOf = (f) => f.files.find((x) => x.name === 'notes.md').sha256
-    check('§2-1相 ★ 同一 nodeId 两支变体各记一条（`(N,V1)` / `(N,V2)`），互不覆盖（各自的 sha 都在）',
+    check('§2-1相c ★ 第 2 支往后重演 ⇒ 记下 (2,V2)：同一 nodeId 两支各一条、互不覆盖（各自的 sha 都在）',
       two.length === 2
       && two[0].variantId === VAR(NODES[1]) && two[1].variantId === VAR(NODES[1], 2)
       && shaOf(two[0]) === dz.sha256Hex(V2['notes.md'])
       && shaOf(two[1]) === dz.sha256Hex(V2B['notes.md'])
       && shaOf(two[0]) !== shaOf(two[1])
-      && rSwap.kind === 'rollback' && rSwap.restore.source === 'prev' && afterRestore === V1['notes.md']
       && rRec.kind === 'forward' && rRec.record !== null && rRec.record.changed.includes('notes.md'),
       JSON.stringify([two.map((f) => f.variantId), rSwap.kind, rRec.kind]))
   }
 
-  // ── 对 2：相｜换变体也算回档；(N,V) 自己有快照 ⇒ 用它 ────────────────────────
-  //   反证：把判据改回上一版的"只看 nodeId" ⇒ 同一夹具下判成 same、不触发恢复 ⇒ 必红
+  // ── 对 2：相｜换变体也算回档；(N,V) 自己有快照 ⇒ 那条待处理**指向这一支**；手动点才真写 ────
+  //   ★ 20260924 改口径（回档改手动挡）：原来这条断言"判到就自动恢复到 (N,V1)"⇒ 现在拆成两半：
+  //     判到回档只记待处理（目标 = (N,V1) 那一支）、那 5 份逐字节不变；写回那一支挪到手动那一脚。
+  //   反证：把判据改回上一版的"只看 nodeId" ⇒ 同一夹具下判成 same、**连待处理都不会有** ⇒ 必红
   {
     reset(V1)
     sync('turn')                            // (1,V1)
     writeTimeline(NODES[1]); putFiles(V2); sync('turn')      // (2,V1)
-    writeTimeline(NODES[1], NODES, VAR(NODES[1], 2)); sync('turn')   // swipe ⇒ 退回进楼前
-    putFiles(V2B); sync('turn')             // 记 (2,V2)
+    writeTimeline(NODES[1], NODES, VAR(NODES[1], 2))         // swipe 到第 2 支（没记过）
+    sync('turn')                            // ⇒ 待处理（目标 = 第 1 楼那一份）
+    const back1 = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: [], at: 'T2', stamp: 's2' })
+    putFiles(V2B); sync('turn')             // 第 2 支往后重演 ⇒ 记 (2,V2)
     const lastBefore = indexOf().last
     const notesBefore = readMem('notes.md')
+    const fiveBefore = fiveNow()
     writeTimeline(NODES[1], NODES, VAR(NODES[1]))   // ★ 再 swipe 回第 1 支（(2,V1) 有快照）
     const r = sync('turn')
-    check('§2-2相 ★ 同一楼换变体（swipe）也算回档：`(N,V1)` 自己有快照 ⇒ 恢复到**这一支**那一份',
-      r.kind === 'rollback' && r.why === 'variant' && r.restore.source === 'self'
-      && r.restore.target.nodeId === NODES[1] && r.restore.target.variantId === VAR(NODES[1])
-      && readMem('notes.md') === V2['notes.md'] && notesBefore === V2B['notes.md']
-      && r.restore.moved.some((m) => m.name === 'notes.md'),
-      JSON.stringify([r.kind, r.why, r.restore && r.restore.source]))
-    check('§2-2反证 ★ 把判据改回"只看 nodeId"（上一版）⇒ 同一夹具下判成 same、**不触发恢复** ⇒ 上面那条断言必红',
+    check('§2-2相 ★ 同一楼换变体（swipe）也算回档：待处理指向 `(N,V1)` 那一支（自己有快照），那 5 份逐字节不变',
+      r.kind === 'rollback' && r.why === 'variant' && r.restore === null
+      && r.pending !== null && r.pending.source === 'self'
+      && r.pending.targetNodeId === NODES[1] && r.pending.targetVariantId === VAR(NODES[1])
+      && r.pending.targetSeq === 2 && r.pending.fromSeq === 2 && r.pending.toSeq === 2
+      && JSON.stringify(fiveNow()) === JSON.stringify(fiveBefore)
+      && notesBefore === V2B['notes.md'] && readMem('notes.md') === V2B['notes.md']
+      && back1.pending === null,
+      JSON.stringify([r.kind, r.why, r.pending && r.pending.source]))
+    const m = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[1], variantId: VAR(NODES[1]), zones: [], at: 'T3', stamp: 's3' })
+    check('§2-2相b ★ 手动点「把档案退回第 2 楼（这一支）」⇒ 真写回**这一支**那一份（`(N,V1)`）+ 清掉待处理',
+      m.kind === 'manual' && readMem('notes.md') === V2['notes.md']
+      && m.restore.source === 'self' && m.restore.target.variantId === VAR(NODES[1])
+      && m.restore.moved.some((x) => x.name === 'notes.md')
+      && indexOf().pending === null, JSON.stringify([m.kind, readMem('notes.md') === V2['notes.md']]))
+    check('§2-2反证 ★ 把判据改回"只看 nodeId"（上一版）⇒ 同一夹具下判成 same、**连待处理都不会有** ⇒ 上面那条断言必红',
       (() => {
         // ← 上一版那一条判据（逐字）：`head.nodeId === last.nodeId ⇒ same`
         const oldJudge = (h, l) => (h.nodeId === l.nodeId ? 'same' : '其它')
-        const headsNow = { nodeId: NODES[1], variantId: VAR(NODES[1], 2) }
+        const headsNow = { nodeId: NODES[1], variantId: VAR(NODES[1]) }
         const withOld = oldJudge(headsNow, lastBefore)
-        // 同一夹具下：按老判据＝什么都不做 ⇒ 盘上留着 V2 支那份（≠ V1 支那一份） ⇒ "恢复到 (N,V1)"必红
+        // 同一夹具下：按老判据＝什么都不做 ⇒ 盘上留着 V2 支那份（≠ V1 支那一份） ⇒ "待处理指向 (N,V1)"必红
         return withOld === 'same' && notesBefore === V2B['notes.md'] && V2B['notes.md'] !== V2['notes.md']
       })())
   }
@@ -542,16 +624,18 @@ try {
       return sync('turn', opts)
     }
     const r = runFixture({})
-    check('§2-3相 ★ 新变体没记过 ⇒ 退回"进这一楼之前"的样子（用紧邻前一楼**最后一条**快照）',
-      r.kind === 'rollback' && r.why === 'variant' && r.restore.source === 'prev'
-      && r.restore.target.nodeId === NODES[0] && r.restore.target.variantId === VAR(NODES[0])
-      && readMem('notes.md') === V1['notes.md'] && r.restore.headSeq === 2 && r.restore.seq === 1,
-      JSON.stringify([r.kind, r.restore && r.restore.source, readMem('notes.md')]))
+    check('§2-3相 ★ 新变体没记过 ⇒ 待处理指向"进这一楼之前"（紧邻前一楼**最后一条**快照），那 5 份一个字节都没写',
+      r.kind === 'rollback' && r.why === 'variant' && r.restore === null
+      && r.pending !== null && r.pending.source === 'prev'
+      && r.pending.targetNodeId === NODES[0] && r.pending.targetVariantId === VAR(NODES[0])
+      && r.pending.toSeq === 2 && r.pending.targetSeq === 1 && r.headSeq === 2
+      && readMem('notes.md') === '# 笔记\n第 2 楼第 1 支之后模型又写了\n',
+      JSON.stringify([r.kind, r.pending && r.pending.source, readMem('notes.md')]))
     // ★ 反证：同一夹具**重放**一遍，但把"紧邻前一楼"那一步挖掉（`prevOf` 不给 ⇒ 上一版
-    //   的 `back-no-snapshot` 口径）⇒ 笔记停在模型写的那份，"退回进楼前"必红。
+    //   的 `back-no-snapshot` 口径）⇒ 连一条待处理都记不出来（没有可退回的那一份）⇒ 上面那条必红。
     const dug = runFixture({ prevOf: () => null })
-    check('§2-3反证 ★ 把 (b) 支挖掉（不给"紧邻前一楼"）⇒ 同一夹具下"笔记回到进楼前"必红',
-      dug.kind === 'back-no-snapshot' && dug.wrote === false
+    check('§2-3反证 ★ 把 (b) 支挖掉（不给"紧邻前一楼"）⇒ 同一夹具下"待处理指向第 1 楼"必红（一条都记不出来）',
+      dug.kind === 'back-no-snapshot' && dug.wrote === false && dug.pending === null
       && readMem('notes.md') === '# 笔记\n第 2 楼第 1 支之后模型又写了\n'
       && readMem('notes.md') !== V1['notes.md'], JSON.stringify([dug.kind, dug.wrote]))
   }
@@ -582,7 +666,9 @@ try {
       r3.kind === 'forward' && r3.wrote === false && indexRaw() === raw1)
   }
 
-  // ── 对 5：相｜死区按块合并；两个反证（"照快照整份写" / 上一版的"整份跳过"）都咬人 ──
+  // ── 对 5：相｜死区按块合并（★ 手动那一脚）；两个反证（"照快照整份写" / 上一版的"整份跳过"）都咬人 ──
+  //   ★ 20260924 改口径：合并那一脚现在只在**人点了**之后发生 ⇒ 这里先断言"判到回档零写入"，
+  //     再用 `restoreFloor` 走合并那一脚（合并语义一个字没变）。
   {
     const A = '## 【必须遵守的核心规则】\n- 不许替玩家做决定（作者写的）'
     const A2 = '## 【必须遵守的核心规则】\n- 模型把这段改了'
@@ -597,8 +683,14 @@ try {
     putFiles({ 'notes.md': '# 笔记\n第 3 楼\n', 'index.md': diskBefore })
     sync('turn')                              // 第 3 楼（模型把 A、B **都**改了）
     writeTimeline(NODES[0])                   // ★ 回档到第 1 楼
+    const beforePending = readMem('index.md')
+    const rAuto = sync('turn')
+    check('§2-5相a ★ 判到回档这一下**一个字节都没写**（死区那份也照旧停在盘上现况、只留一条待处理）',
+      rAuto.kind === 'rollback' && rAuto.restore === null && rAuto.pending !== null
+      && readMem('index.md') === beforePending && readMem('index.md') === diskBefore
+      && readMem('notes.md') === '# 笔记\n第 3 楼\n')
     const beforeRestore = readMem('index.md')
-    const r = sync('turn')
+    const r = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: zonesNow(), at: 'T2', stamp: 's2' })
     const diskAfter = readMem('index.md')
     const sk = r.restore.skipped.find((s) => s.name === 'index.md')
     check('§2-5相 ★ 死区按块合并：死区块 A 逐字节等于**盘上现况**（模型写的），非死区块 B 等于**快照**（第 1 楼的）',
@@ -606,7 +698,8 @@ try {
       && diskAfter === A2 + '\n\n' + B1 + '\n'
       && diskAfter.startsWith(A2) && !diskAfter.includes('- 不许替玩家做决定（作者写的）')
       && readMem('notes.md') === V1['notes.md']
-      && r.restore.moved.some((m) => m.name === 'index.md' && m.merged === true),
+      && r.restore.moved.some((m) => m.name === 'index.md' && m.merged === true)
+      && r.pending === null,
       JSON.stringify([sk && sk.merged, diskAfter]))
     check('§2-5反证① ★ 把"死区块保留现况"换成"照快照整份写"（上一版没有块合并时的直觉写法）⇒ A 被改回作者版 ⇒ 那条断言必红',
       (() => {
@@ -640,16 +733,26 @@ try {
     writeTimeline(NODES[0])
     const before = fiveNow()
     const beforeIdx = indexRaw()
+    // ① 判回档这一下：死区数据坏掉**不影响**"判到回档"（只提示、不写盘）
     const r = sync('turn')
-    check('§2-6反证 ★ 死区数据坏掉（判据未知）⇒ **整次恢复不做**：那 5 份逐字节没变',
-      r.restore !== null && r.restore.blocked === 'deadzones-unreadable'
-      && r.restore.moved.length === 0 && r.restore.failed.length === 0 && r.wrote === false
-      && JSON.stringify(fiveNow()) === JSON.stringify(before) && indexRaw() === beforeIdx,
-      JSON.stringify([r.restore && r.restore.blocked, r.wrote]))
-    check('§2-6反证b ★ `last` **不前进**（留在原地）⇒ 下一轮还判回档、还试一次（⛔ 不拿"什么都没做"当"已经跟上了"）',
-      indexOnDisk().last.nodeId === NODES[2] && indexOnDisk().last.variantId === VAR(NODES[2]))
-    check('§2-6反证c ★ 回执如实说（"不敢恢复、笔记保持原样"）—— 接线那一层同样（C7c 走真钩子）',
-      r.kind === 'rollback' && r.restore.blocked === 'deadzones-unreadable' && r.notes.length === 0)
+    check('§2-6相 ★ 死区数据坏掉也照样判到回档（只记一条待处理）：那 5 份逐字节没变',
+      r.kind === 'rollback' && r.restore === null && r.pending !== null && r.wrote === true
+      && JSON.stringify(fiveNow()) === JSON.stringify(before),
+      JSON.stringify([r.kind, r.wrote]))
+    // ② 手动那一脚：判据未知 ⇒ **整次恢复不做**（fail-closed；⛔ 不许赌"这份不在死区里"）
+    const idxBeforeManual = indexRaw()
+    const m = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: zonesNow(), at: 'T2', stamp: 's2' })
+    check('§2-6反证 ★ 死区数据坏掉（判据未知）⇒ 手动那一脚**整次恢复不做**：那 5 份逐字节没变、清单也没动',
+      m.restore !== null && m.restore.blocked === 'deadzones-unreadable'
+      && m.restore.moved.length === 0 && m.restore.failed.length === 0 && m.wrote === false
+      && JSON.stringify(fiveNow()) === JSON.stringify(before) && indexRaw() === idxBeforeManual,
+      JSON.stringify([m.restore && m.restore.blocked, m.wrote]))
+    check('§2-6反证b ★ `last` **不前进**（留在原地）⇒ 那一档还能重试（⛔ 不拿"什么都没做"当"已经跟上了"）',
+      indexOnDisk().last.nodeId === NODES[2] && indexOnDisk().last.variantId === VAR(NODES[2])
+      && indexOf().pending !== null)
+    check('§2-6反证c ★ 没成功 ⇒ 那条待处理**不清**（横幅该还在，下一轮还能重试）',
+      m.pending !== null && m.pendingChanged === false && indexOf().pending !== null
+      && beforeIdx !== idxBeforeManual)
   }
 
   // ── 对 7：相｜老条目（只有 nodeId）只读不恢复 ───────────────────────────────
@@ -701,17 +804,19 @@ try {
     sync('turn')
     writeTimeline(NODES[0])
     const r = sync('turn')
+    const m = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: [], at: 'T2', stamp: 's2' })
     const after = Object.fromEntries(Object.keys(PRESET).map((n) => [n, readMem(n)]))
-    check('§2-8相 ★ 任何一次恢复里，预置那几份（rulebook / 大纲 / 示例.txt）逐字节不变',
+    check('§2-8相 ★ 判到回档（零写入）与手动恢复两脚之后，预置那几份（rulebook / 大纲 / 示例.txt）逐字节不变',
       after['rulebook.md'] === '# 作者预置 · 规则书\n模型改的\n'   // 模型改的**照旧留着**（我们既没碰、也没"还原"它）
       && after['大纲-甲.md'] === PRESET['大纲-甲.md'] && after['幻蕊示例.txt'] === PRESET['幻蕊示例.txt']
-      && r.kind === 'rollback' && r.restore.moved.every((m) => fl.isFloorFile(m.name))
+      && r.kind === 'rollback' && r.restore === null && r.pending !== null
+      && m.restore.moved.every((x) => fl.isFloorFile(x.name))
       && indexOf().floors.every((f) => f.files.every((x) => fl.isFloorFile(x.name)))
       && blobs().every((n) => n !== dz.DEADZONE_FILE_NAME))
   }
 
   // ═════════════════════════════════════════════════════════════════════════
-  sect('C 上一单那八对（回归；改过口径的两条已按新口径改写 —— 注释里写了为什么）')
+  sect('C 上一单那八对（回归；★ 20260924 回档改手动挡后，凡断言"自动写盘"的那几条都拆成"判到只提示 + 手动才写"）')
 
   // ── C-1：相｜没变就不记；反证｜改一个字符 ⇒ 必写，且只存变化那份的正文 ──────
   {
@@ -781,7 +886,9 @@ try {
     //   1→2→1 之后又走回第 2 楼：head 在第 2 楼、last 在第 1 楼 —— 位置在前，
     //   而"当下"那一楼（第 2 楼）那份的快照是**更早**记的 ⇒ 时间戳那套会误判成"回档"。
     writeTimeline(NODES[0])
-    sync('turn')                       // 回档到第 1 楼（last 跟到第 1 楼）
+    sync('turn')                       // 回档到第 1 楼（★ 改口径后这一步**只提示**：last 不跟）
+    // ★ 20260924：要让 `last` 真的回到第 1 楼，得走**手动**那一脚（判到回档自己不写盘）
+    fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: [], at: 'T1b', stamp: 's1b' })
     const idx = indexOnDisk()
     for (const f of idx.floors) {
       const stamp = f.nodeId === NODES[0] ? '2026-09-23T20:00:00.000Z' : '2026-09-23T08:00:00.000Z'
@@ -813,7 +920,9 @@ try {
       })())
   }
 
-  // ── C-4：相｜回档把 5 份写回那一份；反证｜把恢复那一步挖掉 ⇒ 必红 ────────────
+  // ── C-4：相｜手动那一脚把 5 份写回那一份；反证｜把恢复那一步挖掉 ⇒ 必红 ────────────
+  //   ★ 20260924 改口径（回档改手动挡）：写盘那一脚从"判到回档就写"挪到"人在面板上点"——
+  //     所以这里先断言"判到回档一个字节都没写"，再用 `restoreFloor`（面板那一脚）走真写。
   {
     reset(V1)
     sync('turn')                       // 第 1 楼
@@ -821,9 +930,15 @@ try {
     putFiles(V3)
     sync('turn')                       // 第 3 楼（往前走）
     writeTimeline(NODES[0])            // ★ 回档到第 1 楼
-    const r = sync('turn')
-    check('C-4相 ★ head 回到存过快照的前面某一楼 ⇒ 那 5 份被写回那一份的样子（逐字节）',
-      r.kind === 'rollback' && r.wrote === true
+    const fiveBefore = fiveNow()
+    const rAuto = sync('turn')
+    check('C-4相a ★ 判到回档 ⇒ 那 5 份**一个字节都没写**（只记一条待处理）',
+      rAuto.kind === 'rollback' && rAuto.restore === null && rAuto.pending !== null
+      && JSON.stringify(fiveNow()) === JSON.stringify(fiveBefore)
+      && backups().length === 0, JSON.stringify([rAuto.kind, rAuto.wrote]))
+    const r = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: [], at: 'T2', stamp: 's2' })
+    check('C-4相 ★ 手动点「把档案退回第 1 楼」⇒ 那 5 份被写回那一份的样子（逐字节）',
+      r.kind === 'manual' && r.wrote === true
       && readMem('notes.md') === V1['notes.md'] && readMem('index.md') === V1['index.md'] && readMem('state.md') === V1['state.md']
       && r.restore.moved.map((m) => m.name).sort().join(',') === 'index.md,notes.md,state.md'
       && backups().length >= 3, JSON.stringify([r.kind, r.restore.moved.map((m) => m.name)]))
@@ -855,10 +970,11 @@ try {
     const LATEST = { 'notes.md': '# 笔记\nv3 之后又写了\n', 'index.md': '# 索引\nv3\n', 'state.md': '# 状态\nv3\n' }
     putFiles(LATEST)
     writeTimeline(NODES[0])
-    const r = sync('turn')
+    // ★ 20260924 改口径：这一脚现在是**手动**的（判到回档本身不写盘）⇒ 直接用 `restoreFloor`。
+    const r = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: [], at: 'T2', stamp: 's2' })
     const n3 = fl.floorOfVariant(indexOf(), NODES[2], VAR(NODES[2]))
     const n3notes = n3.files.find((f) => f.name === 'notes.md')
-    check('C-5相 ★ 回档发生时，"当下"那一份快照也在（挂在回档前那一份上，逐字节是刚变过的样子）',
+    check('C-5相 ★ 手动恢复发生时，"当下"那一份快照也在（挂在恢复前那一份上，逐字节是刚变过的样子）',
       r.pre !== null && r.pre.nodeId === NODES[2] && r.pre.variantId === VAR(NODES[2])
       && n3notes.sha256 === dz.sha256Hex(LATEST['notes.md'])
       && fl.readBlob(PT_MEM, n3notes.sha256).text === LATEST['notes.md'])
@@ -889,9 +1005,12 @@ try {
     putFiles(CHANGED)
     sync('turn')                       // 第 2 楼（模型把四份都改了）
     writeTimeline(NODES[0])            // ★ 回档到第 1 楼
-    const r = sync('turn')
-    check('C-6反证 ★ 回档恢复后：rulebook / 大纲 逐字节没变（不在那 5 份里 ⇒ 一个都不许被写）',
+    const rAuto = sync('turn')           // ★ 判到回档：只提示、零写入
+    // ★ 手动那一脚（面板那颗按钮）：死区判据由接线那一层从**真文档**读出来喂进去
+    const r = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: zonesNow(), at: 'T2', stamp: 's2' })
+    check('C-6反证 ★ 判到回档那一脚 + 手动恢复那一脚之后：rulebook / 大纲 逐字节没变（不在那 5 份里 ⇒ 一个都不许被写）',
       readMem('rulebook.md') === CHANGED['rulebook.md'] && readMem('大纲-甲.md') === CHANGED['大纲-甲.md']
+      && rAuto.pending !== null && rAuto.restore === null
       && r.restore.moved.every((m) => fl.isFloorFile(m.name)))
     check('C-6相 ★ index.md 里有死区 ⇒ **按块合并**：非死区那半回到第 1 楼，死区那段保留盘上现况（这里是逐字没变的）',
       readMem('index.md') === `${CORE}\n\n# 索引\nv1\n`
@@ -943,14 +1062,18 @@ try {
     putFiles({ 'notes.md': '# 笔记\n模型在第 4 楼又写了\n' })
     const before2 = { notes: readMem('notes.md'), idx: readMem('index.md') }
     const r = sync('turn')
-    check('C-7相 ★ 回到没有快照的楼层 ⇒ 退回"进这一楼之前"（用第 1 楼那一份），如实说用的是哪一份',
-      r.kind === 'rollback' && r.restore.source === 'prev' && r.restore.seq === 1 && r.restore.headSeq === 2
-      && readMem('notes.md') === V1['notes.md'] && readMem('index.md') === V1['index.md']
-      && before2.notes !== V1['notes.md'],
-      JSON.stringify([r.kind, r.restore && r.restore.source, r.restore && r.restore.seq]))
+    check('C-7相 ★ 回到没有快照的楼层 ⇒ 待处理指向"进这一楼之前"（用第 1 楼那一份），如实说用的是哪一份',
+      r.kind === 'rollback' && r.restore === null && r.pending !== null && r.pending.source === 'prev'
+      && r.pending.targetSeq === 1 && r.pending.toSeq === 2 && r.headSeq === 2
+      && readMem('notes.md') === before2.notes && readMem('notes.md') !== V1['notes.md'],
+      JSON.stringify([r.kind, r.pending && r.pending.source, r.pending && r.pending.targetSeq]))
+    const m = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: [], at: 'T2', stamp: 's2' })
+    check('C-7相b ★ 手动点那一脚才真退回"进这一楼之前"（笔记回到第 1 楼那份、`last` 也跟着）',
+      m.kind === 'manual' && readMem('notes.md') === V1['notes.md'] && readMem('index.md') === V1['index.md']
+      && indexOnDisk().last.nodeId === NODES[0])
     check('C-7反证 ★ 那一楼**也没有被"顺手记一份"**（拿第 4 楼的内容冒充第 2 楼会毒掉以后的回档）',
       fl.floorsOfNode(indexOf(), NODES[1]).length === 0
-      && indexOnDisk().last.nodeId === NODES[0] && before2.notes !== V1['notes.md'])
+      && before2.notes !== V1['notes.md'])
   }
 
   // ── C-8：相｜用户改过就跟着走（且在那一支恢复时用的是用户改过的那份）──────
@@ -979,13 +1102,19 @@ try {
     sync('turn')                       // 第 4 楼
     writeTimeline(NODES[1])            // 回档到第 2 楼
     const back = sync('turn')
-    check('C-8相c ★ 后来回档回这一支 ⇒ 恢复的是**用户自己改过**的那份（决定④的落点）',
-      back.kind === 'rollback' && readMem('notes.md') === MINE
-      && back.restore.moved.some((m) => m.name === 'notes.md'))
+    check('C-8相c ★ 后来回档回这一支 ⇒ 待处理指向**这一支**（用户自己改过的那份），笔记先不动',
+      back.kind === 'rollback' && back.restore === null
+      && back.pending !== null && back.pending.targetKey === fl.floorKeyOf(NODES[1], VAR(NODES[1]))
+      && readMem('notes.md') === V3['notes.md'],
+      JSON.stringify([back.kind, back.pending && back.pending.targetKey]))
+    const m = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[1], variantId: VAR(NODES[1]), zones: [], at: 'T3', stamp: 's3' })
+    check('C-8相d ★ 手动点「把档案退回第 2 楼」⇒ 恢复的是**用户自己改过**的那份（决定④的落点）',
+      m.kind === 'manual' && readMem('notes.md') === MINE
+      && m.restore.moved.some((x) => x.name === 'notes.md'))
   }
 
   // ═════════════════════════════════════════════════════════════════════════
-  sect('D 接线（真 HTTP + 真钩子：轮末才记 / 回档跟随 / 面板走端点 / 不碰别的）')
+  sect('D 接线（真 HTTP + 真钩子：轮末才记 / 判到回档**只提示** / 手动才写 / 面板走端点 / 不碰别的）')
 
   check('D1 ★ 两条钩子都在场（组装时那条 + 轮末那条），且注册在同一个插件里',
     assembleFns().length >= 1 && eventFns().length >= 1
@@ -993,24 +1122,34 @@ try {
     && listeners.some((l) => l.who === 'dsh-memory-archive:floor-snapshot' && l.event === 'system-prompt/assemble'))
 
   {
-    // 组装那一脚：回档跟随 —— 既**不占本轮时间**，又能在本轮之内把笔记换回去
+    // 组装那一脚：判到回档 —— ★ 20260924 改口径（手动挡）后它**只提示**：不占本轮时间、
+    //   也不在本轮之内（或之后）写那 5 份；那一跳待处理在本轮之内就记好了。
     reset(V1)
     sync('turn')                       // 第 1 楼
     writeTimeline(NODES[2])
     putFiles(V3)
     sync('turn')                       // 第 3 楼
     writeTimeline(NODES[0])            // 回档到第 1 楼（还没人处理）
+    const fiveBefore = fiveNow()
     const atNext = await drive(7, { snap: () => readMem('notes.md') })
-    check('D2 ★ 真接线｜这一轮的恢复**不占本轮时间**：调 next() 那一刻笔记还是旧的，让出事件循环之后才换回去',
-      atNext === V3['notes.md'] && readMem('notes.md') === V1['notes.md'], JSON.stringify([atNext]))
-    check('D2b ★ 回档跟随如实播报（日志一条，含"哪一楼 → 哪一楼 + 恢复了哪几份 + 预置没动"）',
-      floorLogs().some((m) => m.includes('检测到回档到第 1 楼') && m.includes('已把笔记恢复到第 1 楼的样子')
-        && m.includes('notes.md') && m.includes('预置那几份没动')
+    check('D2 ★ 真接线｜判到回档**一个字节都不写**：调 next() 那一刻与让出事件循环之后，笔记都还是第 3 楼那份',
+      atNext === V3['notes.md'] && readMem('notes.md') === V3['notes.md']
+      && JSON.stringify(fiveNow()) === JSON.stringify(fiveBefore) && backups().length === 0,
+      JSON.stringify([atNext]))
+    check('D2b ★ 但那条待处理在本轮之内就记好了（组装那一脚就跑完 —— ⛔ 不等轮末）',
+      indexOf().pending !== null && indexOf().pending.fromSeq === 3 && indexOf().pending.toSeq === 1
+      && indexOf().pending.targetSeq === 1 && indexOf().pending.why === 'back'
+      && indexOf().pending.source === 'self', JSON.stringify(indexOf().pending))
+    check('D2c ★ 回档只提示、如实播报（日志一条：哪一楼 → 哪一楼 + 一个字节都没写 + 得由人在面板上点）',
+      floorLogs().some((m) => m.includes('检测到回档到第 1 楼') && m.includes('从第 3 楼')
+        && m.includes('一个字节都没写') && m.includes('得由你在面板上点')
         && !m.includes('第 第') && !m.includes('楼 楼')), JSON.stringify(floorLogs().slice(-2)))
-    check('D2c ★ 面板那句「最近一次自动回档跟随」有料可读（状态文件如实落盘，带变体）',
-      statusDoc() !== null && statusDoc().kind === 'rollback' && statusDoc().to.seq === 1
-      && statusDoc().to.variantId === VAR(NODES[0])
-      && Array.isArray(statusDoc().restored) && statusDoc().restored.includes('notes.md')
+    check('D2d ★ 面板那句「最近一次回档」有料可读（状态文件如实落盘：从第 3 楼 → 第 1 楼 + 那条待处理 + 零恢复）',
+      statusDoc() !== null && statusDoc().kind === 'rollback'
+      && statusDoc().to !== null && statusDoc().to.seq === 1 && statusDoc().to.variantId === VAR(NODES[0])
+      && statusDoc().from !== null && statusDoc().from.seq === 3
+      && Array.isArray(statusDoc().restored) && statusDoc().restored.length === 0
+      && statusDoc().pending !== null && statusDoc().pending.targetSeq === 1
       && statusDoc().playthroughId === 'pt', JSON.stringify(statusDoc()))
     const at1 = statusAt()
     // ★ 同一个 turn 里再驱动两次装配 ⇒ 一次都不再跑（每轮至多一次）
@@ -1038,10 +1177,16 @@ try {
     writeTimeline(NODES[1], NODES, VAR(NODES[1], 2))      // ★ swipe 到第 2 支
     putFiles({ 'notes.md': '# 笔记\n第 2 支重 roll 出来的\n' })
     await drive(31)
-    check('D4 ★ 真接线｜同一楼 swipe（换变体）⇒ 组装那一脚就把笔记退回"进这一楼之前"（第 1 楼那一份）',
-      readMem('notes.md') === V1['notes.md']
+    check('D4 ★ 真接线｜同一楼 swipe（换变体）⇒ 组装那一脚就记下待处理（指向"进这一楼之前"），笔记一个字节没动',
+      readMem('notes.md') === '# 笔记\n第 2 支重 roll 出来的\n'
+      && indexOf().pending !== null && indexOf().pending.source === 'prev'
+      && indexOf().pending.targetSeq === 1 && indexOf().pending.why === 'variant'
       && String(statusDoc().message).includes('换了变体')
-      && statusDoc().to.seq === 1 && statusDoc().why === 'variant'
+      // ★ 20260924 改口径：状态文件里的 `to` = **剧情站到的那一楼**（不是"要退回哪一份"），
+      //   "要退回哪一份"在那条待处理里（`pending.targetSeq`）—— 两者在 swipe 时**不是**同一楼。
+      && statusDoc().to.seq === 2 && statusDoc().to.variantId === VAR(NODES[1], 2)
+      && statusDoc().pending !== null && statusDoc().pending.targetSeq === 1
+      && statusDoc().why === 'variant'
       // ★ "哪一楼 / 哪一支 → 恢复到哪一份"要说得出来（两条变体 id 都在那句里）
       && String(statusDoc().message).includes(VAR(NODES[1]))
       && String(statusDoc().message).includes(VAR(NODES[1], 2))
@@ -1059,8 +1204,10 @@ try {
     writeTimeline(NODES[1])            // ★ 回到第 2 楼（它没有快照）
     putFiles({ 'notes.md': '# 笔记\n第 4 楼之后模型又写了\n' })
     await drive(41)
-    check('D4b ★ 真接线｜回到没有快照的楼层 ⇒ 退回"进这一楼之前"，那句把"回档到第 2 楼"与"用的是第 1 楼那一份"都说了',
-      readMem('notes.md') === V1['notes.md']
+    check('D4b ★ 真接线｜回到没有快照的楼层 ⇒ 待处理指向"进这一楼之前"，那句把"回档到第 2 楼"与"用的是第 1 楼那一份"都说了（笔记没动）',
+      readMem('notes.md') === '# 笔记\n第 4 楼之后模型又写了\n'
+      && indexOf().pending !== null && indexOf().pending.source === 'prev'
+      && indexOf().pending.targetSeq === 1 && indexOf().pending.toSeq === 2
       && statusDoc().why === 'back' && statusDoc().source === 'prev'
       && String(statusDoc().message).includes('检测到回档到第 2 楼')
       && String(statusDoc().message).includes('用的是第 1 楼那一份')
@@ -1174,7 +1321,91 @@ try {
   }
 
   {
-    // ★ 死区（真文档）在接线那一层的两条：按块合并 / 数据坏掉 ⇒ 整次不做
+    // ★★ 2026-09-24 新端点那一对：`GET /floors` 带出那条待处理 + `POST …/floors/pending/settle`（保持现状）
+    reset(V1)
+    sync('turn')                       // 第 1 楼
+    writeTimeline(NODES[2]); putFiles(V3); sync('turn')   // 第 3 楼
+    writeTimeline(NODES[0])            // 回档到第 1 楼
+    const tlBefore = readFileSync(join(PT, 'timeline.json'), 'utf8')
+    const catBefore = readFileSync(join(WS, 'catalog.json'), 'utf8')
+    const v0 = await floorsView()
+    check('D10 ★ GET /floors：还没判过 ⇒ `pending` 如实为 null（面板据此**不画**横幅）',
+      v0.ok === true && v0.pending === null)
+    sync('turn')                       // 判到回档 ⇒ 记下那条
+    const fiveBefore = fiveNow()
+    const v1 = await floorsView()
+    check('D10b ★ GET /floors 里那条 pending 字段齐（from*/to*/target*/why/source/targetKey/at），且仍然**纯只读**',
+      v1.ok === true && v1.pending !== null
+      && v1.pending.fromNodeId === NODES[2] && v1.pending.fromSeq === 3
+      && v1.pending.toNodeId === NODES[0] && v1.pending.toSeq === 1
+      && v1.pending.targetNodeId === NODES[0] && v1.pending.targetSeq === 1
+      && v1.pending.why === 'back' && v1.pending.source === 'self'
+      && v1.pending.targetKey === fl.floorKeyOf(NODES[0], VAR(NODES[0]))
+      && typeof v1.pending.at === 'string' && v1.pending.at !== ''
+      && v1.head.seq === 1 && v1.floors.length === 2
+      && readFileSync(join(PT, 'timeline.json'), 'utf8') === tlBefore
+      && readFileSync(join(WS, 'catalog.json'), 'utf8') === catBefore
+      && JSON.stringify(fiveNow()) === JSON.stringify(fiveBefore), JSON.stringify(v1.pending))
+    const wasRaw = indexRaw()
+    await call('GET', '/playthrough/rp-memory/floors')
+    check('D10c ★ 再读一次清单逐字节一样（⛔ 读端点不刷任何时间戳）', indexRaw() === wasRaw)
+    // ★ 带一个跟当下那条不一致的 targetKey ⇒ 409（⛔ 绝不"按老目标就地登记"）
+    const stale = await call('POST', '/playthrough/rp-memory/floors/pending/settle', { targetKey: '别的目标' })
+    check('D10d ★ 体里的 targetKey 与当下那条不一致 ⇒ 409 + 如实说（那条还在原样，一个字节都没动）',
+      stale.status === 409 && stale.data.ok === false
+      && String(stale.data.error.code).includes('PENDING_STALE')
+      && indexOf().pending !== null && indexOf().pending.targetKey === v1.pending.targetKey)
+    const badBody = await call('POST', '/playthrough/rp-memory/floors/pending/settle')
+    check('D10e ★ 体坏（没带 JSON）⇒ 400（写侧口径，⛔ 不静默）', badBody.status === 400 && badBody.data.ok === false)
+    // ★★ 「保持现状」＝**就地登记**（2026-09-24 用户口径：跟 Tavern 一致 —— 回档之后那段历史就按新的算）
+    const shaNotesOf = (idx, nodeId) => {
+      const row = (idx.floors ?? []).find((f) => f.nodeId === nodeId)
+      const rec = row && Array.isArray(row.files) ? row.files.find((x) => x.name === 'notes.md') : null
+      return rec ? rec.sha256 : null
+    }
+    const shaV1 = dz.sha256Hex(V1['notes.md'])
+    const shaV3 = dz.sha256Hex(V3['notes.md'])
+    const idxBefore = indexOf()
+    const dis = await call('POST', '/playthrough/rp-memory/floors/pending/settle', { targetKey: v1.pending.targetKey })
+    const idxAfter = indexOf()
+    check('D10f ★「保持现状」＝就地登记：`last` 锚到当前这一楼 ＋ 把**盘上现文**记成它的那一份（⛔ 那 5 份正文一个字节都不写）',
+      dis.status === 200 && dis.data.ok === true && dis.data.changed === true
+      && dis.data.pending === null
+      && dis.data.settled !== null && dis.data.settled.nodeId === NODES[0] && dis.data.settled.seq === 1
+      && idxAfter.pending === null
+      && idxAfter.last?.nodeId === NODES[0] && idxAfter.last?.variantId === VAR(NODES[0]) && idxAfter.last?.seq === 1
+      // ★ 核心：这一楼那一行现在记的是**盘上这份**（V3），不是第一遍玩时那份（V1）
+      && shaNotesOf(idxBefore, NODES[0]) === shaV1 && shaNotesOf(idxAfter, NODES[0]) === shaV3 && shaV3 !== shaV1
+      && JSON.stringify(fiveNow()) === JSON.stringify(fiveBefore)
+      && readFileSync(join(PT, 'timeline.json'), 'utf8') === tlBefore, '')
+    const v2 = await floorsView()
+    check('D10g ★ 就地登记之后：清单里那条没了、当前那一楼如实指到第 1 楼（面板据此不再弹）',
+      v2.pending === null && v2.head.seq === 1
+      && v2.floors.some((f) => f.nodeId === NODES[0] && f.current === true))
+    const raw2 = indexRaw()
+    const r3 = sync('turn')            // 就地登记之后：判据不再认成回档
+    const r4 = sync('watch')
+    check('D10h ★ 就地登记之后判据**不再认成回档**（turn 那一脚 kind=same）、一个字节都不写、也不弹',
+      r3.kind === 'same' && r3.pending === null && r3.wrote === false
+      && r4.wrote === false && indexOf().pending === null && indexRaw() === raw2,
+      JSON.stringify([r3.kind, r3.wrote, r4.wrote]))
+    // ★★★ 这一条是**这次改口径的全部理由**：就地登记之后记录侧必须**够得到**。
+    //   （只清 pending、不锚 `last` 的那一版会让记录侧停摆 —— 见 §3-4 的反证。）
+    putFiles(V2)
+    const r5 = sync('turn')
+    check('D10i ★★ 就地登记之后**记录无缝续上**：同一楼又改了笔记 ⇒ 真的记了一份（⛔ 不是"只清 pending"那种停摆）',
+      r5.kind === 'same' && r5.wrote === true && r5.record !== null
+      && Array.isArray(r5.record.changed) && r5.record.changed.includes('notes.md')
+      && shaNotesOf(indexOf(), NODES[0]) === dz.sha256Hex(V2['notes.md']),
+      JSON.stringify([r5.kind, r5.wrote, r5.record && r5.record.changed]))
+    check('D10j ★ 如实播报（「保持现状」点下去那一刻记了一条：就地登记 + 锚到哪一楼；⛔ 不静默）',
+      logs.info.concat(logs.warn).some((m) => m.includes('保持现状') && m.includes('就地登记')),
+      JSON.stringify(logs.info.concat(logs.warn).slice(-12)))
+  }
+
+  {
+    // ★ 死区（真文档）在接线那一层的三条：判到回档零写入 / 手动那一脚按块合并 / 数据坏掉 ⇒ 整次不做
+    //   ★ 20260924 改口径（手动挡）：写盘那一脚现在只在**人点了**之后发生 ⇒ 走 **真端点** 那一脚。
     const CORE2 = '## 【核心规则】\n- 不许改这段'
     reset({ 'notes.md': V1['notes.md'], 'index.md': `${CORE2}\n\n# 索引\nv1\n` })
     writeDeadzones([['index.md', CORE2]])
@@ -1184,16 +1415,24 @@ try {
     writeMem('notes.md', '# 笔记\n模型改的\n')
     await fireEvent('turn/end')        // 第 3 楼
     writeTimeline(NODES[0])            // 回档
+    const diskBefore = readMem('index.md')
     await fireEvent('turn/end')
-    check('D8 ★ 接线那一层（读真文档）：死区那一份按块合并 —— index.md 的非死区块回到第 1 楼',
-      readMem('index.md') === `${CORE2}\n\n# 索引\nv1\n` && readMem('notes.md') === V1['notes.md'])
-    check('D8b ★ 状态文件把"按块合并"如实带上（⛔ 不再是"整份跳过"那种会误导的话）',
-      statusDoc() !== null && Array.isArray(statusDoc().skipped)
-      && statusDoc().skipped.some((s) => s.name === 'index.md' && s.reason === 'deadzone' && s.merged === true)
-      && String(statusDoc().message).includes('死区')
-      && String(statusDoc().message).includes('按块合并')
-      && String(statusDoc().message).includes('保留盘上现况'), JSON.stringify(statusDoc().skipped))
-    // ★ 死区数据坏掉 ⇒ 判据未知 ⇒ 整次恢复不做（⛔ 宁可不动）。走**真钩子**（接线那一层自己读文档）
+    check('D8 ★ 接线那一层（真钩子）：判到回档**一个字节都没写**（死区那份照旧停在盘上现况），只留一条待处理',
+      readMem('index.md') === diskBefore && readMem('notes.md') === '# 笔记\n模型改的\n'
+      && indexOf().pending !== null && indexOf().pending.targetSeq === 1
+      && backups().length === 0, JSON.stringify(indexOf().pending))
+    const mOk = await call('POST', '/playthrough/rp-memory/floors/restore', { nodeId: NODES[0], variantId: VAR(NODES[0]) })
+    check('D8b ★ 真端点（手动那一脚）：死区那一份按块合并 —— index.md 的非死区块回到第 1 楼 + 待处理清掉',
+      mOk.status === 200 && mOk.data.ok === true
+      && readMem('index.md') === `${CORE2}\n\n# 索引\nv1\n` && readMem('notes.md') === V1['notes.md']
+      && mOk.data.pendingCleared === true && indexOf().pending === null,
+      JSON.stringify(mOk.data && mOk.data.pendingCleared))
+    check('D8b2 ★ 手动那一脚的回执把"按块合并"如实带上（⛔ 不再是"整份跳过"那种会误导的话）',
+      mOk.data.skipped.some((s) => s.name === 'index.md' && s.reason === 'deadzone' && s.merged === true)
+      && String(mOk.data.message).includes('死区')
+      && String(mOk.data.message).includes('按块合并')
+      && String(mOk.data.message).includes('保留盘上现况'), JSON.stringify(mOk.data.skipped))
+    // ★ 死区数据坏掉 ⇒ 判据未知 ⇒ **手动那一脚整次不做**（⛔ 宁可不动）；判回档照旧只提示
     writeFileSync(join(PT_MEM, dz.DEADZONE_FILE_NAME), '{ 这不是 JSON')
     writeTimeline(NODES[2])
     writeMem('notes.md', '# 笔记\n第 3 楼又改了\n')
@@ -1202,17 +1441,23 @@ try {
     writeMem('notes.md', '# 笔记\n回档前那一刻\n')
     const lastBefore = indexOnDisk().last
     await fireEvent('turn/end')
-    check('D8c ★ 死区数据坏掉（判据未知）⇒ 整次恢复不做 + 如实播报（⛔ 宁可不动，⛔ 不静默）',
+    check('D8c ★ 死区数据坏掉（判据未知）⇒ 判到回档照旧只提示、笔记保持原样（⛔ 不静默，⛔ 也不动）',
       readMem('notes.md') === '# 笔记\n回档前那一刻\n'
-      && statusDoc() !== null && statusDoc().blocked === 'deadzones-unreadable'
-      && String(statusDoc().message).includes('死区数据读不出来')
-      && floorLogs().some((m) => m.includes('死区数据读不出来')),
-      JSON.stringify(statusDoc()))
+      && indexOf().pending !== null && indexOf().pending.targetSeq === 1
+      && floorLogs().some((m) => m.includes('检测到回档')),
+      JSON.stringify(indexOf().pending))
     check('D8d ★ 被挡住时 `last` **不前进**（下一轮还判回档、还试一次；⛔ 不拿"什么都没做"当"已经跟上"）',
       indexOnDisk().last.nodeId === lastBefore.nodeId
       && indexOnDisk().last.variantId === lastBefore.variantId
       && readMem('notes.md') === '# 笔记\n回档前那一刻\n',
       JSON.stringify(lastBefore))
+    const mBad = await call('POST', '/playthrough/rp-memory/floors/restore', { nodeId: NODES[0], variantId: VAR(NODES[0]) })
+    check('D8e ★ 真端点｜死区数据坏掉 ⇒ 手动那一脚**整次不做** + 如实说"笔记保持原样"（⛔ 一个字节都不写）',
+      mBad.status === 200 && mBad.data.ok === true && mBad.data.blocked === 'deadzones-unreadable'
+      && mBad.data.unchanged === true
+      && String(mBad.data.message).includes('死区数据读不出来')
+      && readMem('notes.md') === '# 笔记\n回档前那一刻\n'
+      && indexOf().pending !== null, JSON.stringify(mBad.data && mBad.data.blocked))
   }
 
   {
@@ -1227,6 +1472,238 @@ try {
       existsSync(snapDir()) === false)
     check('D9b ★ 但如实记日志，且**一次就够**（两轮下来只有一条，别每个 step 都记）',
       said.length === 1, JSON.stringify([said.length, floorLogs().slice(-2)]))
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  sect('F 本单 §3 六对（★ 20260924 改口径：回档改**手动挡** —— 判到只提示、写盘要人点）')
+
+  // ── 对 1：相｜判到回档 ⇒ 盘上零写入；反证｜把那一脚换回 `restoreFloor` ⇒ 同一夹具下必红 ──
+  {
+    reset(V1)
+    sync('turn')                       // 第 1 楼（记一份）
+    writeTimeline(NODES[2])
+    putFiles(V3)
+    sync('turn')                       // 第 3 楼（记一份）
+    writeTimeline(NODES[0])            // ★ head 往回走到第 1 楼
+    const filesBefore = fiveNow()
+    const rawBefore = indexRaw()
+    const r = sync('turn')
+    check('§3-1相 ★ 判到回档 ⇒ 那 5 份**逐字节不变**（连 .bak 都没有）、且 `pending` 记下了 from/to/target/why/source/targetKey/at',
+      r.kind === 'rollback' && r.restore === null
+      && JSON.stringify(fiveNow()) === JSON.stringify(filesBefore)
+      && backups().length === 0
+      && r.pending !== null
+      && r.pending.fromNodeId === NODES[2] && r.pending.fromVariantId === VAR(NODES[2]) && r.pending.fromSeq === 3
+      && r.pending.toNodeId === NODES[0] && r.pending.toVariantId === VAR(NODES[0]) && r.pending.toSeq === 1
+      && r.pending.targetNodeId === NODES[0] && r.pending.targetSeq === 1
+      && r.pending.why === 'back' && r.pending.source === 'self'
+      && r.pending.targetKey === fl.floorKeyOf(NODES[0], VAR(NODES[0]))
+      && typeof r.pending.at === 'string' && r.pending.at !== ''
+      && indexOf().pending !== null && indexRaw() !== rawBefore,
+      JSON.stringify(r.pending))
+    // ★ 反证（**同一夹具**）：把"不写盘"那一行换回**老的自动跟随那一脚**（`restoreFloor` ——
+    //   它就是改口径前 `syncFloor` 判到 rollback 时调的那个）⇒ 那 5 份**立刻被改写**、
+    //   "逐字节不变"那条断言必红。
+    const dug = fl.restoreFloor({
+      memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]),
+      zones: [], at: 'T2', stamp: 's2',
+    })
+    check('§3-1反证 ★ 把那一脚换回 `restoreFloor`（老的"自动跟随"）⇒ 同一夹具下那 5 份**被改写** ⇒ 上面那条"逐字节不变"必红',
+      dug.kind === 'manual' && JSON.stringify(fiveNow()) !== JSON.stringify(filesBefore)
+      && readMem('notes.md') === V1['notes.md'] && readMem('notes.md') !== V3['notes.md']
+      && dug.restore.moved.map((x) => x.name).sort().join(',') === 'index.md,notes.md,state.md',
+      JSON.stringify([dug.kind, dug.restore && dug.restore.moved.map((x) => x.name)]))
+  }
+
+  // ── 对 2：相｜pending 幂等（同一回档连判 ⇒ at 不变、只有一条；目标换了 ⇒ 更新）────────────
+  {
+    reset(V1)
+    sync('turn')                       // 第 1 楼
+    writeTimeline(NODES[1]); putFiles(V2); sync('turn')   // 第 2 楼
+    writeTimeline(NODES[2]); putFiles(V3); sync('turn')   // 第 3 楼
+    writeTimeline(NODES[0])            // ★ 回档到第 1 楼
+    const r1 = sync('turn')
+    const raw1 = indexRaw()
+    const r2 = sync('turn')            // 同一次回档再判（头还在第 1 楼）
+    const r3 = sync('watch')           // 组装那一脚也判到同一次
+    check('§3-2相 ★ 同一次回档连判三次（turn + turn + watch）⇒ `at` 不变、只有一条、**一个字节都不写**',
+      r1.pending !== null && r2.pending !== null && r3.pending !== null
+      && r1.pending.at === r2.pending.at && r2.pending.at === r3.pending.at
+      && r1.wrote === true && r2.wrote === false && r3.wrote === false
+      && indexRaw() === raw1 && indexOf().floors.length === 3
+      && indexOf().pending.targetKey === r1.pending.targetKey,
+      JSON.stringify([r1.wrote, r2.wrote, r3.wrote]))
+    // 目标变了 ⇒ 更新那一条（回到另一楼 ⇒ 指向**另一份**快照）
+    writeTimeline(NODES[1])            // ★ 回到第 2 楼（它有快照 ⇒ 目标 = 第 2 楼那一份）
+    const p1 = sync('turn').pending
+    writeTimeline(NODES[0])            // ★ 目标变了：回到第 1 楼（目标 = 第 1 楼那一份）
+    const r4 = sync('turn', { at: 'T9' })
+    const p2 = indexOf().pending
+    check('§3-2相b ★ 目标变了 ⇒ 那一条被**更新**（targetKey / to / at 都跟上，还是只有一条）',
+      p1 !== null && p2 !== null && p1.targetKey !== p2.targetKey
+      && p1.targetSeq === 2 && p2.targetSeq === 1
+      && p2.toSeq === 1 && p2.toNodeId === NODES[0]
+      && p2.at === 'T9' && r4.pendingChanged === true
+      && indexOf().floors.length === 3,
+      JSON.stringify([p1.targetKey, p2.targetKey]))
+  }
+
+  // ── 对 3：相｜手动那一脚照旧真写 + 清 pending；反证｜把"清 pending"那一步挖掉 ⇒ 必红 ──────
+  {
+    reset(V1)
+    sync('turn')
+    writeTimeline(NODES[2]); putFiles(V3); sync('turn')
+    writeTimeline(NODES[0])
+    const rAuto = sync('turn')
+    const rawBefore = indexRaw()
+    const m = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: [], at: 'T2', stamp: 's2' })
+    check('§3-3相 ★ 显式调 `restoreFloor` ⇒ 那 5 份确实被写回 + `pending` 被清',
+      rAuto.pending !== null && m.kind === 'manual' && m.pendingChanged === true && m.pending === null
+      && readMem('notes.md') === V1['notes.md'] && readMem('index.md') === V1['index.md'] && readMem('state.md') === V1['state.md']
+      && indexOf().pending === null
+      && backups().length >= 3 && indexRaw() !== rawBefore,
+      JSON.stringify([m.kind, m.pending, indexOf().pending]))
+    check('§3-3反证 ★ 把"清 pending"那一步挖掉 ⇒ 同一夹具下"pending 被清"必红（横幅会一直挂着）',
+      (() => {
+        // 挖法：照原样再走一遍同一夹具，但收尾**只把 `last` 跟过去、不清 pending**
+        reset(V1)
+        sync('turn')
+        writeTimeline(NODES[2]); putFiles(V3); sync('turn')
+        writeTimeline(NODES[0])
+        const keep = sync('turn').pending
+        const idx = indexOf()
+        fl.writeIndex(PT_MEM, {
+          schemaVersion: fl.FLOOR_SCHEMA_VERSION, updatedAt: 'T2',
+          last: { nodeId: NODES[0], variantId: VAR(NODES[0]), seq: 1, at: 'T2' },
+          floors: idx.floors, pending: keep,
+        })
+        // 挖掉之后：`last` 照样指着第 1 楼，但那条待处理还在 ⇒ 上面那条必红
+        return keep !== null && indexOf().pending !== null && indexOf().last.nodeId === NODES[0]
+      })())
+  }
+
+  // ── 对 4：相｜「保持现状」＝就地登记（last 锚到当前这一楼 ⇒ 记录侧**够得到**）；反证｜挖掉"锚 last"⇒ 必红 ──
+  {
+    reset(V1)
+    sync('turn')
+    writeTimeline(NODES[2]); putFiles(V3); sync('turn')
+    writeTimeline(NODES[0])
+    const p = sync('turn').pending
+    const fiveBefore = fiveNow()
+    const d = fl.settlePending(PT_MEM, { at: 'T4' })
+    const settled = indexOf()
+    check('§3-4相 ★「保持现状」＝就地登记：`last` 锚到当前这一楼 ＋ 记成**盘上现文**（⛔ 那 5 份正文逐字节不变）',
+      p !== null && d.ok === true && d.changed === true && d.settled !== null
+      && d.settled.nodeId === NODES[0] && d.settled.seq === 1
+      && settled.pending === null && settled.last.nodeId === NODES[0] && settled.last.seq === 1
+      && JSON.stringify(fiveNow()) === JSON.stringify(fiveBefore)
+      && readMem('notes.md') === V3['notes.md'],
+      JSON.stringify([d.settled, settled.last, settled.pending]))
+    // ★★ 记录侧必须**够得到** —— 这才是"就地登记"存在的理由（只清 pending 的那一版会停摆）
+    putFiles(V2)
+    const r2 = sync('turn')
+    const r3 = sync('watch')
+    check('§3-4相b ★★ 就地登记之后记录**无缝续上**（同一楼又改了笔记 ⇒ 真记一份），且不再弹',
+      r2.kind === 'same' && r2.wrote === true && r2.record !== null
+      && Array.isArray(r2.record.changed) && r2.record.changed.includes('notes.md')
+      && r3.wrote === false && indexOf().pending === null,
+      JSON.stringify([r2.kind, r2.wrote, r2.record && r2.record.changed, r3.wrote]))
+    check('§3-4反证 ★ 挖掉"把 last 锚到当前这一楼"那一步（＝只清 pending 的那一版）⇒ 判据仍认回档、记录侧够不到 ⇒ 相b 必红',
+      (() => {
+        // 挖法：同一夹具走到同一步，settle 之后**把 `last` 挪回原来那一楼**（模拟"只清 pending"），再走同一脚
+        reset(V1)
+        sync('turn')
+        writeTimeline(NODES[2]); putFiles(V3); sync('turn')
+        writeTimeline(NODES[0])
+        const dugPending = sync('turn').pending
+        fl.settlePending(PT_MEM, { at: 'T4' })
+        const idx = indexOf()
+        fl.writeIndex(PT_MEM, {
+          schemaVersion: fl.FLOOR_SCHEMA_VERSION, updatedAt: 'T4',
+          last: { nodeId: NODES[2], variantId: VAR(NODES[2]), seq: 3, at: 'T4' },   // ★ 挪回去（= 老写法的行为）
+          floors: idx.floors, pending: null,
+        })
+        putFiles(V2)
+        const dug = sync('turn')
+        return dugPending !== null && dug.kind === 'rollback' && dug.record === null
+      })())
+  }
+
+  // ── 对 5：相｜预置/死区一律不碰；反证｜把"只写那 5 份"的判据挖掉 ⇒ 必红 ────────────────
+  {
+    const PRESET5 = {
+      'rulebook.md': '# 作者预置 · 规则书\n原样\n',
+      '大纲-乙.md': '# 作者预置 · 大纲\n原样\n',
+      '雨示例.txt': '示例文本\n原样\n',
+    }
+    const CORE = '## 【核心规则】\n- 作者写的'
+    reset(Object.assign({ 'notes.md': V1['notes.md'], 'index.md': CORE + '\n\n# 索引\nv1\n' }, PRESET5))
+    writeDeadzones([['index.md', CORE]])
+    sync('turn')                       // 第 1 楼
+    writeTimeline(NODES[2])
+    putFiles(Object.assign({}, V3, { 'index.md': CORE + '\n\n# 索引\n模型改的\n', 'rulebook.md': '# 作者预置 · 规则书\n模型改的\n' }))
+    sync('turn')                       // 第 3 楼（模型把两份都改了）
+    writeTimeline(NODES[0])            // ★ 回档
+    const rAuto = sync('turn')
+    const m = fl.restoreFloor({ memoryDir: PT_MEM, nodeId: NODES[0], variantId: VAR(NODES[0]), zones: zonesNow(), at: 'T2', stamp: 's2' })
+    const after5 = Object.fromEntries(Object.keys(PRESET5).map((n) => [n, readMem(n)]))
+    check('§3-5相 ★ 判到回档那一脚 + 手动恢复那一脚之后：预置那几份与死区块**逐字节不变**',
+      after5['rulebook.md'] === '# 作者预置 · 规则书\n模型改的\n'
+      && after5['大纲-乙.md'] === PRESET5['大纲-乙.md'] && after5['雨示例.txt'] === PRESET5['雨示例.txt']
+      && readMem('index.md') === CORE + '\n\n# 索引\nv1\n'
+      && rAuto.pending !== null && rAuto.restore === null
+      && m.restore.moved.every((x) => fl.isFloorFile(x.name))
+      && m.restore.skipped.some((s) => s.name === 'index.md' && s.reason === 'deadzone'),
+      JSON.stringify(Object.keys(after5).map((n) => n + '=' + JSON.stringify(after5[n]))))
+    check('§3-5反证 ★ 把"只写那 5 份"的判据挖掉 ⇒ 无白名单的同款逻辑会把 rulebook.md 也写回去 ⇒ 上面那条必红',
+      (() => {
+        // 灵敏度自证：手写一份**没有白名单**的恢复裁决（"挖掉那一步"），对比真 `planRestore`
+        const noGuard = (rawFloor, fileTexts, blobTexts) => {
+          const out = []
+          for (const f of rawFloor.files) {
+            const text = blobTexts[f.sha256]
+            if (typeof text !== 'string') continue
+            if (typeof fileTexts[f.name] === 'string' && dz.sha256Hex(fileTexts[f.name]) === f.sha256) continue
+            out.push({ name: f.name, text })
+          }
+          return out
+        }
+        const rawFloor = {
+          nodeId: NODES[0], variantId: VAR(NODES[0]),
+          files: [
+            { name: 'rulebook.md', sha256: dz.sha256Hex('# 作者预置 · 规则书\n原样\n'), bytes: 1, changed: true },
+            { name: 'notes.md', sha256: dz.sha256Hex(V1['notes.md']), bytes: 1, changed: true },
+          ],
+        }
+        const blobTexts = {
+          [dz.sha256Hex('# 作者预置 · 规则书\n原样\n')]: '# 作者预置 · 规则书\n原样\n',
+          [dz.sha256Hex(V1['notes.md'])]: V1['notes.md'],
+        }
+        const wall = noGuard(rawFloor, { 'rulebook.md': '# 作者预置 · 规则书\n模型改的\n', 'notes.md': '# 笔记\n模型又写了\n' }, blobTexts)
+        const real = fl.planRestore({ floor: rawFloor, fileTexts: {}, blobTexts, zones: [] })
+        return wall.some((w) => w.name === 'rulebook.md') === true && real.writes.every((w) => w.name !== 'rulebook.md')
+      })())
+  }
+
+  // ── 对 6：相｜没有快照的楼层 ⇒ 不写任何文件、只播报（照旧）────────────────────────────
+  {
+    reset(V1)
+    sync('turn')                       // 第 1 楼（有快照）
+    writeTimeline(NODES[3]); putFiles(V3); sync('turn')   // 第 4 楼（有快照）
+    writeTimeline(NODES[1])            // ★ 回到第 2 楼（**没有快照**；前一楼第 1 楼有）
+    const fiveBefore = fiveNow()
+    const r = sync('turn')
+    check('§3-6相 ★ head 到一个没有快照的楼层 ⇒ 那 5 份**一个字节都不写**（也没有 .bak），只留一条提示',
+      r.kind === 'rollback' && r.pending !== null && r.pending.source === 'prev'
+      && JSON.stringify(fiveNow()) === JSON.stringify(fiveBefore) && backups().length === 0,
+      JSON.stringify([r.kind, r.pending && r.pending.source]))
+    const rawBefore = indexRaw()
+    const r2 = sync('turn', { prevOf: () => null })
+    check('§3-6相b ★ 连前一楼也没有 ⇒ `back-no-snapshot`：**连我们的清单都不动**（安静地只播报）',
+      r2.kind === 'back-no-snapshot' && r2.wrote === false && r2.pendingChanged === false
+      && r2.restore === null && indexRaw() === rawBefore
+      && JSON.stringify(fiveNow()) === JSON.stringify(fiveBefore),
+      JSON.stringify([r2.kind, r2.wrote]))
   }
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -1256,7 +1733,8 @@ try {
       const mod = readFileSync(join(ROOT, 'lib', 'floor-snapshot.js'), 'utf8')
       const modCode = mod.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
       const idx = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
-      const start = idx.indexOf('「**按楼层绑定**的笔记快照 + 回档跟随」的接线')
+      // ★ 20260924：块头那句话改成了"…+ **回档提示（手动挡）**」的接线" ⇒ 锚跟着改（判据一个字没松）
+      const start = idx.indexOf('「**按楼层绑定**的笔记快照 + **回档提示（手动挡）**」的接线')
       const end = idx.indexOf('GET /playthrough/for-session', start)
       const floorBlock = idx.slice(start, end)
       const writes = floorBlock.match(/writeFileSync\([^,)]*/g) || []
@@ -1266,6 +1744,22 @@ try {
         && !/copyFileSync|unlinkSync|rmSync\(/.test(floorBlock)   // ⛔ 不删、不改名任何东西
         && !/writeFileSync\([^\n]*(timeline|catalog|play-workspace)/.test(idx)
     })())
+
+  check('E5 ★ 手动挡的唯一写入口：`syncFloor` 判到回档那一支**不许**再出现 `restoreFloor`/`runRestore`/`writeRestoredFile`',
+    (() => {
+      const mod = readFileSync(join(ROOT, 'lib', 'floor-snapshot.js'), 'utf8')
+      const code = mod.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+      const at = code.indexOf("if (decision.kind === 'rollback') {")
+      const end = code.indexOf('let record = null', at)
+      const branch = at < 0 || end <= at ? '' : code.slice(at, end)
+      const writes = code.match(/writeRestoredFile\(/g) || []
+      // `writeRestoredFile` 只在它自己的定义（export function …）与 runRestore 那一处出现 ⇒ 一共 2 次
+      return branch !== ''
+        && !/restoreFloor|runRestore|writeRestoredFile|planRestore/.test(branch)
+        && /restoreFloor, syncFloor, settlePending/.test(mod)
+        && writes.length === 2
+        && (code.match(/function runRestore\(/g) || []).length === 1
+    })(), '回档那一支又去写盘了（或那 5 份出现了第二个写入口）')
 
   check('E4 ★ 判据只有一处：死区那套只在 `lib/deadzone.js`（floor-snapshot 只调用，⛔ 不另立一份）',
     (() => {

@@ -1110,6 +1110,7 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     //   两条同源端点 —— 楼层清单（只读）与「回到这一楼」（手动触同一个恢复函数）。
     ['GET', '/playthrough/rp-memory/floors'],              // 楼层清单（序号/时间/改了哪几份/当前那一楼）
     ['POST', '/playthrough/rp-memory/floors/restore'],     // 回到这一楼（带 nodeId + variantId —— 20260923 变体级）
+    ['POST', '/playthrough/rp-memory/floors/pending/settle'], // 「保持现状」＝就地登记（20260924：last 锚到当前这一楼 + 把盘上现文记成那一份；⛔ 正文一个字节不写）
     // 「打开文件夹」（2026-09-20）：剧情大纲档那一颗按钮 —— 动作型，POST；⛔ 客户端不传路径
     ['POST', '/playthrough/reveal'],
     // 「后台收纳状态」只读出口（20260919）：面板 shell.overlay 的提示条读它（dsh-anima-rag 落的文件）
@@ -3103,6 +3104,13 @@ await check('★★ 记忆库·楼层快照（2026-09-23 / 同日补单）：按
       restored: ['notes.md'], skipped: [], failed: [], blocked: null,
       message: '检测到回档到第 1 楼（从第 2 楼） ⇒ 已把笔记恢复到第 1 楼的样子（恢复 notes.md）；⛔ 预置那几份没动',
     },
+    // ★ 20260924 改口径（回档改**手动挡**）：判到回档只记一条待处理 ⇒ 面板顶部那条**显著横幅**靠它渲染
+    //   （旧口径的 `lastAuto` 那句"最近一次自动回档跟随"已经不存在了 —— 自动跟随被拿掉）。
+    pending: {
+      targetKey: 'qa-1-1-aaa variant-1-1-aaa',
+      fromNodeId: 'qa-3-3-ccc', fromSeq: 3, toNodeId: 'qa-1-1-aaa', toSeq: 1,
+      targetNodeId: 'qa-1-1-aaa', targetSeq: 1, why: 'back', source: 'self', at: T1,
+    },
     checkedAt: T1,
   }
   fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
@@ -3124,7 +3132,11 @@ await check('★★ 记忆库·楼层快照（2026-09-23 / 同日补单）：按
     assert.ok(text.includes('◀ 当前这一楼'), '当前那一楼没有高亮标记')
     assert.ok(text.includes('notes.md（+20 字节）'), '「改了哪几份（+几字节）」没画出来')
     assert.ok(text.includes('notes.md（共 120 字节）'), '没有基数的那几份没如实报"共几字节"')
-    assert.ok(text.includes('最近一次自动回档跟随') && text.includes('检测到回档到第 1 楼'), '档顶没有「最近一次自动回档跟随」那一句')
+    // ★ 20260924 改口径（用户拍板「不要做跟随楼层的功能，先做手动挡」）：
+    //   旧断言等的是「最近一次自动回档跟随」那句 —— 自动跟随已经拿掉 ⇒ 现在该渲染的是
+    //   **待处理横幅**（检测到回档：/ 把档案退回 / 保持现状）。反证：把横幅那段挖掉 ⇒ 必红。
+    assert.ok(text.includes('检测到回档：') && text.includes('把档案退回') && text.includes('保持现状'),
+      '档顶没有那条「检测到回档」待处理横幅（把档案退回 / 保持现状）')
     assert.ok(text.includes('不影响会话'), '没写清「回到这一楼」不影响会话')
     assert.ok(text.includes('按块合并') && text.includes('死区') && text.includes('保留盘上现况'),
       '没把「死区那几份按块合并（保留盘上现况）」说出来（⛔ 不再是"整份跳过"）')
