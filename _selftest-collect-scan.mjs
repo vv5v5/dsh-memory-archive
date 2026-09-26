@@ -735,7 +735,9 @@ try {
     cpSync(join(here, 'lib'), join(tmp12, 'lib'), { recursive: true })
     writeFileSync(join(tmp12, 'package.json'), JSON.stringify({ type: 'module' }) + '\n', 'utf8')
     const p12 = join(tmp12, 'lib', 'collect-scan.js')
-    let src12 = readFileSync(p12, 'utf8')
+    // ★ 2026-09-25（收尾单 §3）：往下这些副本手术的针里都带 `\n`（行尾敏感）—— 副本一旦混进 CRLF 段，
+    //   针就永远失配 ⇒ replace 静默无效、"就位"断言误红。读入一律先归一成 `\n`（针与判据一字未动）。
+    let src12 = readFileSync(p12, 'utf8').replace(/\r\n/g, '\n') // ★ 行尾归一（同 16/17 节那几处）
     const before12 = src12
     src12 = src12
       // 旧写法①：路由**不传 base**（真机上漏的就是这一行）
@@ -939,7 +941,7 @@ function legacyBySeqOfProof(events) {
 
     // ── 反证夹具 B：把 mapRegionToFloors 里那两条排除判据挖掉（同一份副本，另拷一份）──
     const pF = join(revertedFloor13, 'lib', 'collect-scan.js')
-    let srcF = readFileSync(pF, 'utf8')
+    let srcF = readFileSync(pF, 'utf8').replace(/\r\n/g, '\n') // ★ 2026-09-25：行尾归一 —— 针里带 \n，CRLF 段必失配（判据一字未动）
     const beforeF = srcF
     srcF = srcF.replace('    if (doc.replacementNode === true) continue\n', '')
       .replace('    if (isInjectedUserMessage(doc)) continue\n', '')
@@ -1147,16 +1149,16 @@ function legacyBySeqOfProof(events) {
   {
     // ── 反证副本 A（对 1）：**美化那一步**换成"直接用模型原文"（= 旧写法：text 就是 raw）──
     const pA = join(rvText16, 'lib', 'collect-scan.js')
-    let sA = readFileSync(pA, 'utf8')
+    let sA = readFileSync(pA, 'utf8').replace(/\r\n/g, '\n') // ★ 2026-09-25：行尾归一 —— 针里带 \n，CRLF 段必失配（判据一字未动）
     const bA = sA
     sA = sA.replace('    text: beauty.text,\n', '    text: raw,\n')
     check('16a0', '反证副本 A 就位：美化那一步已换成"直接用模型原文"（⛔ 原文件一字未动）',
       sA !== bA && sA.includes('    text: raw,\n')
-      && readFileSync(join(here, 'lib', 'collect-scan.js'), 'utf8').includes('    text: beauty.text,\n'), '')
+      && readFileSync(join(here, 'lib', 'collect-scan.js'), 'utf8').replace(/\r\n/g, '\n').includes('    text: beauty.text,\n'), '')
     writeFileSync(pA, sA, 'utf8')
     // ── 反证副本 B（对 2）：tags 收编换成**老路** extractTagsLine（= 2026-09-22 之前的取法）──
     const pB = join(rvTags16, 'lib', 'collect-scan.js')
-    let sB = readFileSync(pB, 'utf8')
+    let sB = readFileSync(pB, 'utf8').replace(/\r\n/g, '\n') // ★ 2026-09-25：行尾归一 —— 针里带 \n，CRLF 段必失配（判据一字未动）
     const bB = sB
     sB = sB
       .replace('    tags: beauty.tags,\n    warnings: beauty.warnings,\n',
@@ -1178,11 +1180,11 @@ function legacyTagsForProof(text) {
 `
     check('16b0', '反证副本 B 就位：tags 收编已换回老路 extractTagsLine（⛔ 原文件一字未动）',
       sB !== bB && sB.includes('legacyTagsForProof(raw).tags') && !sB.includes('    tags: beauty.tags,\n')
-      && readFileSync(join(here, 'lib', 'collect-scan.js'), 'utf8').includes('    tags: beauty.tags,\n'), '')
+      && readFileSync(join(here, 'lib', 'collect-scan.js'), 'utf8').replace(/\r\n/g, '\n').includes('    tags: beauty.tags,\n'), '')
     writeFileSync(pB, sB, 'utf8')
     // ── 反证副本 C（对 3）：fail-open 换成"解析不出就**丢** / 就**回落机械**"（假设的错写法）──
     const pC = join(rvDrop16, 'lib', 'collect-scan.js')
-    let sC = readFileSync(pC, 'utf8')
+    let sC = readFileSync(pC, 'utf8').replace(/\r\n/g, '\n') // ★ 2026-09-25：行尾归一 —— 针里带 \n，CRLF 段必失配（判据一字未动）
     const bC = sC
     sC = sC
       .replace("  if (beauty.echo === true) return { kind: 'mechanical', reason: 'prompt-echo' }\n",
@@ -1190,12 +1192,12 @@ function legacyTagsForProof(text) {
       .replace("    text: String(raw ?? ''),\n", "    text: '',\n")
     check('16c0', '反证副本 C 就位：fail-open 已换成"解析不出就丢/就回落机械"（⛔ 原文件一字未动）',
       sC !== bC && sC.includes("if (beauty.echo === true || beauty.text === '')") && sC.includes("    text: '',\n")
-      && readFileSync(join(here, 'lib', 'collect-scan.js'), 'utf8').includes("  if (beauty.echo === true) return { kind: 'mechanical', reason: 'prompt-echo' }\n"), '')
+      && readFileSync(join(here, 'lib', 'collect-scan.js'), 'utf8').replace(/\r\n/g, '\n').includes("  if (beauty.echo === true) return { kind: 'mechanical', reason: 'prompt-echo' }\n"), '')
     writeFileSync(pC, sC, 'utf8')
     // ── 反证副本 D（任务书 §6-3 的"改造前"）：**两条旧写法合成** —— 正文直接用模型原文
     //    （副本 A 那一处）+ tags 走老路 extractTagsLine（副本 B 那一处）= 本单开工前的真机形态 ──
     const pD = join(rvOld16, 'lib', 'collect-scan.js')
-    let sD = readFileSync(pD, 'utf8')
+    let sD = readFileSync(pD, 'utf8').replace(/\r\n/g, '\n') // ★ 2026-09-25：行尾归一 —— 针里带 \n，CRLF 段必失配（判据一字未动）
     const bD = sD
     sD = sD
       .replace('    text: beauty.text,\n', '    text: raw,\n')
@@ -1463,7 +1465,7 @@ function legacyTagsForProof(text) {
     // 对 1 的反证：落盘改回**拼成一条**（本单开工前的写法：一次只提交一份摘要）——
     //   两处一起改回（提交处 + applyScan 的现取计划），否则 apply 的现取计划会把它救回来。
     const pA = join(rv17.join, 'lib', 'collect-scan.js')
-    let sA = readFileSync(pA, 'utf8')
+    let sA = readFileSync(pA, 'utf8').replace(/\r\n/g, '\n') // ★ 2026-09-25：行尾归一 —— 那根针是跨三行的模板串，CRLF 段必失配（判据一字未动）
     const bA = sA
     sA = sA
       .replace(`      ...(Array.isArray(entry.summaries) && entry.summaries.length > 0
@@ -1494,7 +1496,7 @@ function legacyTagsForProof(text) {
     writeFileSync(pC, sC, 'utf8')
     // 对 6 的反证：把「summary 与 summaries 只能给一个」的守卫挖掉 ⇒ 会**静默挑一个**
     const pD = join(rv17.guard, 'lib', 'collect.js')
-    let sD = readFileSync(pD, 'utf8')
+    let sD = readFileSync(pD, 'utf8').replace(/\r\n/g, '\n') // ★ 2026-09-25：行尾归一 —— 针里带 \n，CRLF 段必失配（判据一字未动）
     const bD = sD
     sD = sD.replace('  if (isPlainObject(input.summary)) bad(SUMMARIES_BOTH_MSG)\n', '')
     check('17d0', '对 6 反证副本就位：两路并存的守卫已挖掉（⛔ 原文件一字未动）',

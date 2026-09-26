@@ -34,7 +34,7 @@ node ~/.dsh/profiles/web/node_modules/dsh-memory-archive/preset/install.mjs --ap
 | 插件 | 必需？ | 它给什么 | 装到哪 / 怎么装 |
 |---|---|---|---|
 | [`dsh-memory-archive`](https://github.com/vv5v5/dsh-memory-archive) | **必需** | 归档与检索后端、提示词查看器、`keep-first-round` 的开关、`/v3.replaceGuard`、**本预设本身** | 装进 profile：`cd ~/.dsh/profiles/web && npm i github:vv5v5/dsh-memory-archive` |
-| [`dsh-anima-rag`](https://github.com/vv5v5/dsh-anima-rag) | **必需** | Anima 式记忆检索（向量 + BM25 双轨、回响机制），每轮注入 `<recalledMemories>` | 同上：`cd ~/.dsh/profiles/web && npm i github:vv5v5/dsh-anima-rag` |
+| [`dsh-anima-rag`](https://github.com/vv5v5/dsh-anima-rag) | **必需** | Anima 式记忆检索（向量检索 + life 回响），每轮注入 `<memoryEcho>` 与 `<recalledMemories>` | 同上：`cd ~/.dsh/profiles/web && npm i github:vv5v5/dsh-anima-rag` |
 | `pmp-dsh-tavern` | 可选 | 角色卡 / 世界书 / Tavern 预设往 system 里注入那几段；RP 模式判据（`rp.active`）、只读沙箱 | 按它自己的 README 装进 profile 层（`~/.dsh/profiles/web/node_modules/`） |
 
 - profile 目录名按你的实际部署改（`~/.dsh/profiles/<你的 profile>`）。装完**开新会话**，宿主会重新挂载。
@@ -44,7 +44,7 @@ node ~/.dsh/profiles/web/node_modules/dsh-memory-archive/preset/install.mjs --ap
 
 ## 这个预设长什么样
 
-- **system 里注入的东西**：RP 身份句、记忆检索协议、RP persona（本预设的主体提示词）、Tavern 注入的角色卡字段与状态页、Anima 检索到的历史记忆与原文回响、被压缩洗掉后钉回来的第一轮问答。
+- **system 里注入的东西**：RP 身份句、记忆检索协议、RP persona（本预设的主体提示词）、Tavern 注入的角色卡字段与状态页、Anima 语义检索到的历史记忆（与同一批命中渲染出的 `<memoryEcho>` 回响）、被压缩洗掉后钉回来的第一轮问答。
 - **工具面**：`anima_query`、`memory_write`、`skill`、`web_search`、`ask_user_question`、`glob`、`grep`、`read`（只读）。⛔ 没有 shell、没有写工具、没有子 agent —— 那些行**在这份组装里根本不存在**，不是被禁用。
   - `skill` 与它带来的**技能目录**：本插件唯一的 skill（`rp-assistant`）是**维护手册**，不是扮演用的 ⇒ 目录那条与提示词的工具清单里都明写 **RP 模式请勿调用**；真要修插件请**开普通会话**。
 - **压缩**：走官方 `compaction-basic` 的机制，但摘要是 **RP 专用**的中文归档模板（时间跨度/地点/角色/关键事件/未回收伏笔 + 结构化标签），并且活在 preset 自己的 isolate realm 里，**碰不到编程会话**。
@@ -68,7 +68,7 @@ node ~/.dsh/profiles/web/node_modules/dsh-memory-archive/preset/install.mjs --ap
 
 ## 已知限制（如实）
 
-1. **本预设里一个机器路径都没有** —— 这是刻意的：`data.vectorRoot/sessionRoot/bm25Root`（Anima 数据根）与 `workspaceBase`（Tavern 工作区根）都**省略**了，省略时落在 `dsh-anima-rag` 自己的默认值上（真机核过：默认值与省略前写的**逐字相同**，所以行为零变化）。
+1. **本预设里一个机器路径都没有** —— 这是刻意的：`data.vectorRoot/sessionRoot`（Anima 数据根；★ `bm25Root` 已随 BM25 退役摘除）与 `workspaceBase`（Tavern 工作区根）都**省略**了，省略时落在 `dsh-anima-rag` 自己的默认值上（真机核过：默认值与省略前写的**逐字相同**，所以行为零变化）。
    ⚠️ 但**默认值本身**仍是"作者机器"的位置（`…\SillyTavern\plugins\anima-rag\…` 与 `D:\apps\dsh-tarven`）—— 若你的 ST 数据 / Tavern 工作区不在那儿，**检索与入库会指向不存在的目录**。修法：在 profile 的 `cordis.patch.yml` 里配，或把 `data: {…}` / `workspaceBase: '…'` 加回 `agent.cordis.yml` 里 anima 那一行的 `config`。
 2. **`dsh-anima-rag` 插件自身的默认配置里也写死了作者机器路径**（例如 `rpSelectionsFile` 的默认值是一条「盘符 + 用户名目录」的绝对路径，指向作者 DSH 目录下的 `pmp-dsh-tavern/session-selections.json`；插件注释自己写着"换机器/换工作区要改"）。该文件不存在时插件会回退到 `allowSessions`（空 = 不限制）。这一层本仓库改不了。
 3. **薄壳的失败是硬的**：`anima-rag.js` 拿不到真包、或 require 失败 ⇒ 抛错、**整个 preset 挂不上**（故意的，⛔ 不静默降级）。修法见报错文本与上面「依赖」。

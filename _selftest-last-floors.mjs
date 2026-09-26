@@ -48,6 +48,25 @@ for (const [label, v] of OFF_SHAPES) {
 }
 check('L2.on', 'enabled:true ⇒ 开', readSwitch({ lastFloors: { enabled: true } }).enabled === true)
 
+console.log('\nL2c 上下文阈值：可覆写、只许放宽（2026-09-27 迁移局：首轮 ~25k 字，5000 窗永远 context-full）')
+{
+  const d = readSwitch({ lastFloors: { enabled: true } })
+  check('L2c-1', '缺 contextChars ⇒ 常量默认 5000', d.contextChars === 5000, JSON.stringify(d))
+  const w = readSwitch({ lastFloors: { enabled: true, contextChars: 40000 } })
+  check('L2c-2', 'config 覆写 ⇒ 生效（40000）', w.contextChars === 40000, JSON.stringify(w))
+  const t = readSwitch({ lastFloors: { enabled: true, contextChars: 800 } })
+  check('L2c-3', '配得比默认小 ⇒ 夹回 5000（⛔ 只许放宽）', t.contextChars === 5000, JSON.stringify(t))
+  const b = readSwitch({ lastFloors: { enabled: true, contextChars: '40000' } })
+  check('L2c-4', '字符串数字 ⇒ 回落默认（不猜）', b.contextChars === 5000, JSON.stringify(b))
+  // 覆写后闸门真的放宽：24.5k 上下文在默认窗下 context-full，覆写后 short
+  check('L2c-5', 'contextIsShort 用覆写阈值（24521 字：< 40000 ⇒ 短）',
+    contextIsShort({ contextChars: 24521, contextLimit: 40000 }) === true
+      && contextIsShort({ contextChars: 24521 }) === false)
+  check('L2c-6', 'decideInject 同一份阈值（24521 + 覆写 ⇒ 注入；默认 ⇒ context-full）',
+    decideInject({ enabled: true, contextChars: 24521, contextLimit: 40000, floors: [{ _floor: 1, mes: 'x' }], text: 'x' }).inject === true
+      && decideInject({ enabled: true, contextChars: 24521, floors: [{ _floor: 1, mes: 'x' }], text: 'x' }).reason === 'context-full')
+}
+
 console.log('\nL2b 数值键：非法的回落默认、越界的夹住')
 {
   const d = readSwitch({ lastFloors: { enabled: true } })

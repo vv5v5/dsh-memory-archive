@@ -249,9 +249,12 @@ const bites = (body, a, b, s) => has(body, s) && !has(body.replace(a, b), s)
   check('⑤★ 反证：把它换成 rootPlaythroughDir() ⇒ 同一句判据必红',
     bites(floors, 'sessionPlaythroughDir(sessionId)', 'rootPlaythroughDir()', 'sessionPlaythroughDir(sessionId)'), '')
 
-  const echo = bodyOf('echoRefreshSync')
-  check('⑤★ 回响语料按会话（echoArchiveSource(sessionId)），且**认不出 ⇒ 清空缓存**（不回响上一轮）',
-    has(echo, 'echoArchiveSource(sessionId)') && has(echo, 'arc.source === null') && has(echo, 'clear()'), String(echo).slice(0, 160))
+  // ★ 2026-09-26（T3）：原来这里查 `echoRefreshSync`（"回响语料按会话 + 认不出 ⇒ 清空缓存"）。
+  //   那条支线（本地 FTS5 回响）**整块退役** ⇒ 这个判据**已没有主语**（函数都不在了）。
+  //   ⛔ 不是静默删掉：同一条纪律现在由**下面 lastFloors 那条**守着（语料/门都按会话判据走）；
+  //   这里改成**退役不许回流**的反向判据 —— 那两个符号若被加回活代码，这一条先红。
+  check('⑤★ 回响（FTS5）那条支线的符号已退役（echoRefreshSync / echoArchiveSource 都不在活代码里；⛔ 不许回流）',
+    !src.includes('echoRefreshSync') && !src.includes('echoArchiveSource'), '')
 
   check('⑤★ 最近几楼段：语料传 sid（rootFloorsDir(sid)），门也用会话判据（sessionHasPlaythrough(sid)）',
     src.includes('rootFloorsDir(sid)') && src.includes('sessionHasPlaythrough(sid)'), '')

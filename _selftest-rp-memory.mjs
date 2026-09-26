@@ -245,7 +245,9 @@ try {
   }
   // T10b 源码级反证：处理器体内一个写/删 API 都不许出现
   {
-    const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
+    // ★ 2026-09-25：切片/正则前把行尾归一成 `\n`（那份文件的行尾是**混的**；`'\n}\n'` 那类切片
+    //   一旦碰上 CRLF 段就会一路切到文件尾 ⇒ 误报红。归一之后与行尾无关，判据本身一字未动。）
+    const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8').replace(/\r\n/g, '\n')
     const sig = src.indexOf('async function handleRpMemory(')
     const end = src.indexOf('\n}\n', sig)
     const body = sig >= 0 ? src.slice(sig, end) : ''
@@ -271,7 +273,9 @@ try {
 
   // ── T15 接线唯一性：ENDPOINTS 与分发行各恰好 1 处 ────────────────────────
   {
-    const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
+    // ★ 2026-09-25：切片/正则前把行尾归一成 `\n`（那份文件的行尾是**混的**；`'\n}\n'` 那类切片
+    //   一旦碰上 CRLF 段就会一路切到文件尾 ⇒ 误报红。归一之后与行尾无关，判据本身一字未动。）
+    const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8').replace(/\r\n/g, '\n')
     const table = (src.match(/'\/playthrough\/rp-memory': \['GET'\]/g) || []).length
     const dispatch = (src.match(/rest === '\/playthrough\/rp-memory'/g) || []).length
     check('T15 接线唯一：ENDPOINTS 条目 1 处、分发行 1 处', table === 1 && dispatch === 1, `table=${table} dispatch=${dispatch}`)
@@ -281,7 +285,9 @@ try {
   // ⛔ 本台子**绝不真的拉起文件管理器**（它跑在用户机器上，会当场弹一个窗口出来）
   //    ⇒ 只钉"形状"四条：路由是 POST 且唯一、处理函数拿不到客户端可控路径、目录解析复用同一份、spawn 不经 shell。
   {
-    const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
+    // ★ 2026-09-25：切片/正则前把行尾归一成 `\n`（那份文件的行尾是**混的**；`'\n}\n'` 那类切片
+    //   一旦碰上 CRLF 段就会一路切到文件尾 ⇒ 误报红。归一之后与行尾无关，判据本身一字未动。）
+    const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8').replace(/\r\n/g, '\n')
     const table = (src.match(/'\/playthrough\/reveal': \['POST'\]/g) || []).length
     const dispatch = (src.match(/rest === '\/playthrough\/reveal'/g) || []).length
     check('T17a 接线唯一：ENDPOINTS 条目 1 处（POST）、分发行 1 处', table === 1 && dispatch === 1, `table=${table} dispatch=${dispatch}`)

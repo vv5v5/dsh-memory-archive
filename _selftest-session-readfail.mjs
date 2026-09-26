@@ -101,7 +101,17 @@ function startServer(handler) {
 }
 async function withServer(handler, fn) {
   const { server, port } = await startServer(handler)
-  try { return await fn(port) } finally { await new Promise((r) => server.close(r)) }
+  try {
+    return await fn(port)
+  } finally {
+    // ★★ 2026-09-24：**先切断还挂着的连接**再关服务器。
+    //   少了这一行：undici 的连接池把 socket 留着 ⇒ 本台子结尾那句 `process.exit(...)` 在
+    //   **句柄还没收干净**的时候退出 ⇒ Windows 上撞 libuv 断言
+    //   `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c, line 76`
+    //   ⇒ 退出码变成异常值 ⇒ 全量门把它记成失败（"它自己 13/0 却总在门里红"的那个老 flake，根因就在这）。
+    try { if (typeof server.closeAllConnections === 'function') server.closeAllConnections() } catch { /* 老 node */ }
+    await new Promise((r) => server.close(r))
+  }
 }
 async function get(port, p) {
   const res = await fetch(`http://127.0.0.1:${port}${p}`)
@@ -265,4 +275,11 @@ await check('★12 面板接线（结构断言）：主视图在 turns.status=fa
 })
 
 console.log(`\n== 汇总：${pass} 通过 / ${fail} 失败 ==`)
-process.exit(fail === 0 ? 0 : 1)
+// ★★ 2026-09-24 改口径（**说明为什么**，不是"把错误藏起来"）：
+//   这里原来是 `process.exit(fail === 0 ? 0 : 1)` —— 而本台子起过真 HTTP（`fetch`/undici 连接池）
+//   ⇒ **句柄还没收干净就硬退** ⇒ Windows 上撞 libuv 断言
+//   `!(handle->flags & UV_HANDLE_CLOSING)`（退出码变成异常值）⇒ 它自己 **13 通过 / 0 失败**，
+//   却总在全量门里被记成失败 —— 这个"老 flake"的机制就在这里。
+//   改成**与其它台子同一口径**：不硬退，只设 `exitCode`，让事件循环自己空掉（undici 池过期即散）。
+//   ⛔ 这不是把失败吞掉：真有断言红了，`exitCode` 一样是 1。
+process.exitCode = fail === 0 ? 0 : 1

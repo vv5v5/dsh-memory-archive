@@ -278,7 +278,7 @@ surface 遮蔽语义见 `core/session/src/surface.ts:64-67, 241`。宁可少遮�
 | `mt:memoryHome` | 2 | 记忆库 |
 | preset（ST 预设归一化段） | 10 | `pmp-dsh-tavern`（profile 层） |
 | `rp:policy` | 45 | `pmp-dsh-tavern`（profile 层） |
-| `dma:echo`（本地记忆回响） | 54 | 记忆库 |
+| `dma:echo`（本地记忆回响）**已于 2026-09-26 退役** ⇒ 54 现在是空位（那一格改由 anima 装） | 54 | — |
 | `anima:memory`（检索记忆） | 55 | `dsh-anima-rag` |
 | 工具说明 | 100–199 | DSH 核心 |
 | `STRUCTURED_OUTPUT` | 9900 | DSH 核心 |
@@ -335,13 +335,13 @@ surface 遮蔽语义见 `core/session/src/surface.ts:64-67, 241`。宁可少遮�
 
 ## 13 记忆 / 检索链（本项目的两块，2026-09-20 核实）
 
-**分工**：`dsh-memory-archive`（面板 / 注入 / 收纳 / 笔记工具）· `dsh-anima-rag`（向量 + BM25 检索 / 回响 / 入库）。
+**分工**：`dsh-memory-archive`（面板 / 注入 / 收纳 / 笔记工具）· `dsh-anima-rag`（向量检索 / 语义回响与 `<memoryEcho>` / 入库）。★ 2026-09-26：BM25 与本地 FTS5 回响都已退役。
 
 ### 13.1 向量生成的时机只有两处
 
 | 时机 | 做什么 |
 |---|---|
-| **自动压缩入库时** | 摘要目录一变 ⇒ 把**还没入过**的条目写进库（**向量 + BM25 同一次 `engine.insert`**），账本按"文件名 + 内容签名"防重 |
+| **自动压缩入库时** | 摘要目录一变 ⇒ 把**还没入过**的条目写进库（`engine.insert` 写向量；★ BM25 那半已于 2026-09-26 摘除），账本按"文件名 + 内容签名"防重 |
 | **工具 / 检索调用时** | 发现目标集合的向量库**不存在** ⇒ 当场**排队补建**（写一张请求单，下一次装配执行） |
 
 ★ 两处都要**给反馈**：给 agent（`anima_query` 的返回里带 `diagnostics`）、给人（状态快照 + 面板回执）。
@@ -350,7 +350,7 @@ surface 遮蔽语义见 `core/session/src/surface.ts:64-67, 241`。宁可少遮�
 
 | 症状 | 真因 |
 |---|---|
-| BM25 支线**从来没工作过**：日志 `库不存在，跳过: undefined` | 配置对象传的键是 `collectionId`，而 `lib/bm25.js` 读的是 **`dbId`** ⇒ 解析成 undefined ⇒ `continue`。**不报错、不提示** |
+| BM25 支线**从来没工作过**（历史，该支线已于 2026-09-26 整条退役）：日志 `库不存在，跳过: undefined` | 配置对象传的键是 `collectionId`，而 `lib/bm25.js` 读的是 **`dbId`** ⇒ 解析成 undefined ⇒ `continue`。**不报错、不提示** |
 | 检索 0 命中、但库里有 51 条 | 读侧缺库时 `Create: false` ⇒ 直接跳过，一个字都不说；而"库里全是别的周目"这种情况也无人解释 |
 
 ### 13.3 周目隔离（为什么"库里有东西却一条都翻不出来"）
@@ -366,7 +366,7 @@ surface 遮蔽语义见 `core/session/src/surface.ts:64-67, 241`。宁可少遮�
 真机事故：**开一条新对话，它绑的是上一轮的 `.roleplay-memory`，还把上一轮的归档楼层注进了提示词。**
 根因：「哪个周目」在全局只有一处真相 = 面板绑定 `config.root`（**不按会话存**），而解析它有**两套兜底口径** ——
 一条**还没被 Tavern 的 `catalog.json`/`timeline.json` 认领**的新会话（`for-session` 回 `source:'none'`）
-就被当成"上一轮"，于是笔记路径 / 最近几楼 / 回响 / 检索 / 入库全指向上一轮。
+就被当成"上一轮"，于是笔记路径 / 最近几楼 / 语义回响 / 检索 / 入库全指向上一轮。
 
 现在的口径（**一条，全局通用**）：
 

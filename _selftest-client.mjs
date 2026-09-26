@@ -105,6 +105,12 @@ function makeFakeReact() {
     __setPreset(p) { preset = p },
     // 供「把组件当普通函数直接调用」用：先初始化 hooks 上下文（createElement 内部就是这么做）
     __begin(name) { begin(name) },
+    // ★ 2026-09-25（浮层 ✕ 那一单）：「点一下按钮 ⇒ 组件自己的 state 变了没有」要**真读回来**。
+    //   配合 `__begin(name)` + 直接调 `comp(props)` 用：那样 hooks 上下文**留在那个组件上**
+    //   （createElement 渲染子组件时会保存/还原 `hooks`），于是 setState 写的就是这一个 `states` 数组
+    //   ⇒ `__peek().states[1]` 就是那个组件的 #1 state 现值。
+    //   ⚠️ 假 react 的 setState **不带重渲染** ⇒ 只拿它断言"state 变了没有"，⛔ 别拿它断言"画出来什么"。
+    __peek() { return hooks },
   }
 }
 
@@ -1108,9 +1114,22 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     ['GET', '/playthrough/rp-memory/deadzones/status'],    // 死区现状（只读，面板红字读它）
     // ★ 2026-09-23（用户口径「**按楼层绑定**的笔记快照：每轮模型修改都记录，能自动跟随回档」）：
     //   两条同源端点 —— 楼层清单（只读）与「回到这一楼」（手动触同一个恢复函数）。
-    ['GET', '/playthrough/rp-memory/floors'],              // 楼层清单（序号/时间/改了哪几份/当前那一楼）
+    //   ★★ 2026-09-24 收尾：面板取楼层那一脚从 `GET /floors` 改成 **`POST /floors/scan`**（"开面板也检测一次"，
+    //     宿主那一脚**会写**我们自己的簿记 ⇒ POST）；`GET /floors` 仍在宿主那侧（给别的读侧用），
+    //     ⛔ 但面板不再用它 ⇒ 表里也就不再列它（这张表钉的是"**面板用到**的端点"）。
+    ['POST', '/playthrough/rp-memory/floors/scan'],        // 楼层清单 + ★ 开档补一次"开 fork"检测（⛔ 不碰那 5 份正文）
     ['POST', '/playthrough/rp-memory/floors/restore'],     // 回到这一楼（带 nodeId + variantId —— 20260923 变体级）
-    ['POST', '/playthrough/rp-memory/floors/pending/settle'], // 「保持现状」＝就地登记（20260924：last 锚到当前这一楼 + 把盘上现文记成那一份；⛔ 正文一个字节不写）
+    ['POST', '/playthrough/rp-memory/floors/pending/settle'], // 「对齐楼层」/「只对齐楼号」＝就地登记那一族（★ 2026-09-25 起一个端点带 `mode` 分两颗：'full' 记快照+锚 last / 'number' 只锚 last；⛔ 都不写正文）
+    ['POST', '/playthrough/rp-memory/floors/pending/ack'],    // 「不处理」（20260924 收尾那一颗；★ 20260925 改的名：清掉那条提示 + 让宿主把"认过的位置"跟到当前这一楼；⛔ 什么都不写）
+    // ★★ 2026-09-25（用户口径「**开一个下钻，直接显示具体改动的字段，写改了哪些可以说完全没用**」）：
+    //   清单每一行那颗「**看改动 ▸**」的取数口 —— **只读**、**按需**（点了那一颗才发这一个请求；
+    //   ⛔ 不轮询、⛔ 不挂定时器、⛔ 开档不预取）。带 `?nodeId=&variantId=`，"跟谁比"缺省 = 前一条（宿主挑）。
+    ['GET', '/playthrough/rp-memory/floors/diff'],
+    // ★★ 2026-09-24（用户口径「**不能在回档操作之后立刻弹吗，检测 tarven**」）：顶部浮层那条**推送面** ——
+    //   常驻挂载的侧边栏组件（`MemoryArchiveButton`）用它开一条 **SSE 长连**（`EventSource`）：
+    //   回档那一刻宿主推一帧 `{type:'fork'}` 过来，浮层就从上方滑下来。⚠️ ⛔ 不是轮询 —— 断开重连由
+    //   `EventSource` 自己管（重连后第一帧是 `hello`，带现状 ⇒ 自然对齐），⛔ 客户端一个定时器都不挂。
+    ['GET', '/playthrough/rp-memory/floors/events'],
     // 「打开文件夹」（2026-09-20）：剧情大纲档那一颗按钮 —— 动作型，POST；⛔ 客户端不传路径
     ['POST', '/playthrough/reveal'],
     // 「后台收纳状态」只读出口（20260919）：面板 shell.overlay 的提示条读它（dsh-anima-rag 落的文件）
@@ -1850,7 +1869,8 @@ await check('★ 最近几楼卡（2026-09-17 新段 mt:lastFloors）：卡在�
   assert.ok(src.includes('倒数第二'), '没写明「倒数第二」这个位置口径（这是用户点名的要求）')
   assert.ok(src.includes("'/config'") || src.includes('/config'), '没走既有 /config 投影')
   // ★ 灵敏度自证：把"卡没挂进设置视图"的写法喂给同一条判据，必须命中（否则是橡皮章）
-  const notMounted = "e(EchoCard, { config: cfg, reload: reload }),"
+  //   ★ 2026-09-26：例子从带 reload 的旧挂载行换成 EchoCard **当前真实的挂载行**（回响卡还在，只是变成了退役说明）。
+  const notMounted = "e(EchoCard, { config: cfg }),"
   assert.equal(/e\(LastFloorsCard, \{ config: cfg, reload: reload \}\)/.test(notMounted), false, '反证失败：这条判据抓不住"卡没挂上"')
 })
 
@@ -2543,11 +2563,13 @@ function outlineArrowBody(code, marker) {
 // 已知代价：带 `://` 的行后半截会被行注释剥法吃掉，只会漏报不会误报，对本块判据无影响）
 const outlineCodeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
 
-await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返回恰好 [摘要, 原文, 剧情大纲, 向量, 压缩]（★ 2026-09-20：摘「状态」档、加「向量」档；★ 2026-09-21：加「压缩」档）；会话模式只有 [会话事件, 压缩]', () => {
+// ★ 2026-09-25 美化单（用户拍板）：页签名「剧情大纲」→「RP 记忆」—— 该档实际是角色扮演预设维护的
+//   记忆库（5 份笔记 + 楼层快照），旧名与内容不符（client.js computeSources 同日注释）。逐字断言跟着改。
+await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返回恰好 [摘要, 原文, RP 记忆, 向量, 压缩]（★ 2026-09-20：摘「状态」档、加「向量」档；★ 2026-09-21：加「压缩」档；★ 2026-09-25：「剧情大纲」改名「RP 记忆」）；会话模式只有 [会话事件, 压缩]', () => {
   const cs = outlineFnBody(src, 'computeSources')
   assert.ok(cs, '缺 computeSources 函数')
   assert.ok(
-    cs.includes("return [['summaries', '摘要'], ['floors', '原文'], ['outline', '剧情大纲'], ['vector', '向量'], ['compact', '压缩']]"),
+    cs.includes("return [['summaries', '摘要'], ['floors', '原文'], ['outline', 'RP 记忆'], ['vector', '向量'], ['compact', '压缩']]"),
     '档位返回不是逐字约定形状',
   )
   // ★ 2026-09-21：「压缩」档读的是**本会话**的实时占用（不依赖 Tavern 归档）⇒ 会话模式与
@@ -2570,8 +2592,8 @@ await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返
     const clickables = []
     collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && typeof n.props.children === 'string', clickables)
     const labels = clickables.map((n) => n.props.children)
-    const order = labels.filter((l) => ['摘要', '原文', '剧情大纲', '向量', '压缩'].includes(l))
-    assert.deepEqual(order, ['摘要', '原文', '剧情大纲', '向量', '压缩'], '档位顺序或成员不对: ' + order.join(','))
+    const order = labels.filter((l) => ['摘要', '原文', 'RP 记忆', '向量', '压缩'].includes(l))
+    assert.deepEqual(order, ['摘要', '原文', 'RP 记忆', '向量', '压缩'], '档位顺序或成员不对: ' + order.join(','))
     assert.equal(labels.includes('状态'), false, '⛔「状态」档已摘除，不许回来')
     // ★ 2026-09-20：「向量」档与 摘要/原文/剧情大纲 同层（用户口径「和摘要原文平级」）
     assert.equal(labels.includes('向量'), true, '缺「向量」档入口')
@@ -2591,7 +2613,7 @@ await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返
     const tree = fakeReact.createElement(comp, { wide: true })
     const clickables = []
     collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && typeof n.props.children === 'string', clickables)
-    assert.equal(clickables.some((n) => n.props.children === '剧情大纲'), false, '会话模式不该有剧情大纲入口')
+    assert.equal(clickables.some((n) => n.props.children === 'RP 记忆'), false, '会话模式不该有 RP 记忆入口（★ 2026-09-25 原「剧情大纲」改名）')
     assert.equal(clickables.some((n) => n.props.children === '向量'), false, '会话模式不该有向量入口（它与摘要原文同层，都在工作区模式）')
     // ★ 2026-09-21：「压缩」档在会话模式**也有**（它读的是"本会话"的实时占用，不依赖 Tavern 归档）
     assert.equal(clickables.some((n) => n.props.children === '压缩'), true, '会话模式也应有「压缩」档入口')
@@ -2630,7 +2652,19 @@ function vfSnapFixture() {
       ingest: { state: { running: false, finishedAt: t, skipped: 'no-index', reason: '没有入库：那个周目的摘要目录里还没有 index.json' } },
     },
     result: null,
-    live: { vector: { exists: true, count: 51, mtime: t }, bm25: { exists: true, bytes: 144605, mtime: t }, ingestState: { running: false, finishedAt: t, skipped: 'no-index' } },
+    // `live.bm25` = BM25 库那一路（2026-09-26 复活）；`live.retrieval` = anima 写的"读侧最近一次跑成没有"
+    // ——这里摆**失败**那一相（真机踩过的坑）。
+    live: {
+      vector: { exists: true, count: 51, mtime: t },
+      bm25: { exists: true, bytes: 4096, mtime: t },
+      retrieval: {
+        ok: false,
+        failure: { code: 'EMBED_TIMEOUT', detail: '嵌入接口 8 秒没回', at: t },
+        note: '这一轮注入的是故障说明：嵌入接口 8 秒没回（EMBED_TIMEOUT）',
+        lastOkAt: t - 3600000, ms: null, dimMismatch: null,
+      },
+      ingestState: { running: false, finishedAt: t, skipped: 'no-index' },
+    },
     entries: vfEntriesFixture(),
     staleMs: 120000,
     error: '',
@@ -2663,6 +2697,13 @@ await check('★ 向量·四卡渲染（验收）：当前状态 + 库 + 向量�
     assert.ok(text.includes('1 条正文读不到'), '正文读不到的条数没有如实摆出来')
     assert.ok(text.includes('还没有摘要目录') || text.includes('那个周目还没有摘要目录'), 'skipped:no-index 没翻成人话')
     assert.ok(text.includes('剧情压缩时自动入库'), '入库时机口径缺失')
+    // ★ 2026-09-26（BM25 复活）：BM25 那一行回到**活行**（libRow 通用按钮），不再摆退役说明。
+    assert.ok(text.includes('BM25'), 'BM25 活行的行标不在: ' + text.slice(0, 900))
+    assert.equal(text.includes('已退役（2026-09-26）'), false, 'BM25 已复活 ⇒ 退役说明不许再出现')
+    // ★ 2026-09-26（T1）：读侧那一行 —— "最近一次到底跑成没有"必须上界面（这里是**失败**那一相）
+    assert.ok(text.includes('最近检索'), '读侧那一行（最近检索）缺失')
+    assert.ok(text.includes('❌ 最近一次') && text.includes('EMBED_TIMEOUT') && text.includes('上次成功'),
+      '读侧失败那一相没如实摆出来（故障码/上次成功时间都要在）: ' + text.slice(0, 900))
     assert.equal(text.includes(VF_BOUND), false, '⛔ 完整周目 UUID 不许上可见文本（只许在 title 里）')
     assert.equal(text.includes('候选池') || text.includes('隔离') || text.includes('命中'), false, '⛔ 内部词不许出现在界面')
   } finally { fakeReact.__setPreset(null) }
@@ -2698,6 +2739,7 @@ await check('★ 向量·库文件缺失与无快照的空态（⛔ 不白屏、
   const snapMissing = vfSnapFixture()
   snapMissing.live.vector = { exists: false, count: null, mtime: null }
   snapMissing.live.bm25 = { exists: false, bytes: null, mtime: null }
+  snapMissing.live.retrieval = null   // 这个场景还没跑过检索 ⇒ 读侧那行必须如实说"读不到"，⛔ 不编
   snapMissing.entries = null
   fakeReact.__setPreset(Object.assign(basePreset('read', host, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }),
     { ReadArea: { 0: 'vector' }, VectorFlow: vfPreset({ 0: snapMissing }) }))
@@ -2706,6 +2748,9 @@ await check('★ 向量·库文件缺失与无快照的空态（⛔ 不白屏、
     assert.ok(text.includes('⚠缺失'), '缺库没有 ⚠缺失 徽标')
     assert.ok(text.includes('向量库文件还没有落盘'), '缺库时条目卡没有如实说明')
     assert.equal(text.includes('共 51 条'), false, '缺库状态不该还显示旧条数')
+    assert.ok(text.includes('最近检索') && text.includes('读不到（还没有快照：进过一轮对话才有）'),
+      '读侧那一行拿不到时没如实说"读不到": ' + text.slice(0, 900))
+    assert.equal(text.includes('最近一次成功'), false, '⛔ 拿不到 retrieval 时不许编一个"成功"出来')
   } finally { fakeReact.__setPreset(null) }
   // ② 无快照（info=null）⇒ 空态原句 + 条目卡整个不出现
   const snapNone = { status: 'ready', info: null, result: null, live: null, entries: null, staleMs: null, error: '' }
@@ -2715,6 +2760,33 @@ await check('★ 向量·库文件缺失与无快照的空态（⛔ 不白屏、
     const text = visibleText(fakeReact.createElement(comp, { wide: true }))
     assert.ok(text.includes('还没有状态快照：开一条这个周目的会话，或点『立即入库』。'), '无快照空态原句缺失')
     assert.equal(text.includes('向量条目'), false, '无快照时条目卡不该出现（没有可列的东西）')
+  } finally { fakeReact.__setPreset(null) }
+})
+
+// ★ 2026-09-26（T1）：读侧那一行的**成功**那一相（失败那一相练在上面「四卡渲染」里）。
+//   为什么要单独一条：这一行的两态必须给出**不同答案** —— 成功要带耗时/上次成功时间，维度对不上要琥珀提示；
+//   ⛔ 不许两种情况都渲染成同一句话（那正是"看着像骗人"的来源）。
+await check('★ 向量·读侧成功那一相（2026-09-26 T1）：最近一次成功 + 耗时 + 上次成功时间 + 维度对不上时如实提示', () => {
+  const host = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }
+  const snapOk = vfSnapFixture()
+  snapOk.live.retrieval = {
+    ok: true, ms: 812.5, lastOkAt: Date.parse('2026-09-20T15:42:00+08:00'),
+    dimMismatch: ['库 1024 维 · 本模型 768 维'], failure: null,
+  }
+  fakeReact.__setPreset(Object.assign(basePreset('read', host, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }),
+    { ReadArea: { 0: 'vector' }, VectorFlow: vfPreset({ 0: snapOk }) }))
+  try {
+    const text = visibleText(fakeReact.createElement(comp, { wide: true }))
+    assert.ok(text.includes('最近一次成功') && text.includes('813ms'), '成功那一相没带"最近一次成功 + 耗时": ' + text.slice(0, 900))
+    assert.ok(text.includes('上次成功'), '成功那一相没带"上次成功"时间')
+    assert.ok(text.includes('⚠维度对不上') && text.includes('库 1024 维 · 本模型 768 维'), '维度对不上那条没如实摆出来')
+    assert.equal(text.includes('❌ 最近一次'), false, '成功那一相不该出现失败红字（两态必须不同答案）')
   } finally { fakeReact.__setPreset(null) }
 })
 
@@ -2739,6 +2811,11 @@ const RP_MEM_FETCH_CALLBACKS = [
   // ★ 2026-09-23（按楼层绑定的笔记快照）：两块新取数也是**具名回调**（读楼层清单 / 手动"回到这一楼"）
   'const loadFloors = () => ',
   'const gotoFloor = (nodeId) => ',
+  // ★ 2026-09-24 收尾：那条横幅上那一颗（清提示 + 让宿主把"认过的位置"跟到当前这一楼；★ 2026-09-25 文案改名「不处理」）
+  'const ackPending = () => ',
+  // ★★ 2026-09-25（用户口径「**开一个下钻，直接显示具体改动的字段**」）：那一行「看改动 ▸」的下钻取数
+  //   —— 同样是**具名回调**（点了才发那一个请求；⛔ 开档不预取、⛔ 不轮询）。
+  'const loadFloorDiff = (f, key) => ',
 ]
 function rpMemGateContract(code) {
   const body = outlineFnBody(code, 'RpMemoryFlow')
@@ -3026,16 +3103,22 @@ await check('★★ 记忆库·死区 + 直接编辑（2026-09-23）：入口只
 //     ② ⛔ 面板**不直连 Tavern、不自己算"当前第几楼"**（序号/高亮/该不该恢复全是宿主给的）；
 //     ③ 「回到这一楼」**只带 `(nodeId, variantId)`**（⛔ 不带路径、不带 sha —— 路径与判据只能由宿主自己解析）；
 //     ④ 成败与"跳过 / 没写进去"都如实画出来（⛔ 不许部分成功当全成功）+ 明说"不影响会话"。
-await check('★★ 记忆库·楼层快照（2026-09-23 / 同日补单）：按 (楼层, 变体) 传 · 不自己算第几楼 · 列表/高亮/老记录只读/自动回档那句都画得出来；反证：挖掉列表支必红', () => {
+await check('★★ 记忆库·楼层快照（2026-09-23 / 同日补单 / ★ 2026-09-24 收尾）：按 (楼层, 变体) 传 · 不自己算第几楼 · 列表/高亮/老记录只读都画得出来；★ 常驻状态行两相 + 横幅三颗按钮；反证：挖掉列表支 / 挖掉状态行必红', () => {
   const body = outlineFnBody(src, 'RpMemoryFlow')
   assert.ok(body, '缺 RpMemoryFlow 组件')
-  // ① 两个具名回调（门内）—— 名字必须与 RP_MEM_FETCH_CALLBACKS 一致，否则"门外零取数"那条判据会漏
+  // ① 具名回调（门内）—— 名字必须与 RP_MEM_FETCH_CALLBACKS 一致，否则"门外零取数"那条判据会漏
   const loadFn = outlineArrowBody(body, 'const loadFloors = () => ')
   assert.ok(loadFn, '缺取楼层清单的回调 loadFloors')
-  assert.ok(loadFn.includes("requestJson(HOST_API_BASE + '/playthrough/rp-memory/floors'"), 'loadFloors 没走 /floors 端点')
+  // ★★ 2026-09-24 收尾：取楼层那一脚是 **POST /floors/scan**（"开面板也检测一次"，宿主那一脚会写我们自己的簿记）
+  assert.ok(loadFn.includes("apiPost(HOST_API_BASE + '/playthrough/rp-memory/floors/scan'"), 'loadFloors 没走 /floors/scan 端点')
+  assert.equal(loadFn.includes("requestJson(HOST_API_BASE + '/playthrough/rp-memory/floors'"), false,
+    'loadFloors 还在用读端点（不改判据就永远看不到"回档之后没发消息、直接开面板"那一次）')
   const gotoFn = outlineArrowBody(body, 'const gotoFloor = (nodeId, variantId) => ')
   assert.ok(gotoFn, '缺「回到这一楼」的回调 gotoFloor(nodeId, variantId)')
   assert.ok(gotoFn.includes("apiPost(HOST_API_BASE + '/playthrough/rp-memory/floors/restore'"), 'gotoFloor 没走 /floors/restore 端点')
+  const ackFn = outlineArrowBody(body, 'const ackPending = () => ')
+  assert.ok(ackFn, '缺「不处理」的回调 ackPending')
+  assert.ok(ackFn.includes("apiPost(HOST_API_BASE + '/playthrough/rp-memory/floors/pending/ack'"), 'ackPending 没走 /floors/pending/ack 端点')
   // ③ 请求体**只有 nodeId**（只取那一次调用到回执之间的那一段，⛔ 别把回执渲染算进来）
   const at = gotoFn.indexOf('apiPost(')
   const callSeg = gotoFn.slice(at, gotoFn.indexOf('setGotoMsg({', at))
@@ -3047,7 +3130,15 @@ await check('★★ 记忆库·楼层快照（2026-09-23 / 同日补单）：按
   // ④ 忙/成功/失败三态都在（⛔ 不许静默、⛔ 不许部分成功当全成功）
   assert.ok(gotoFn.includes("if (gotoMsg.status === 'busy') return"), '缺忙态门（连点会重复恢复）')
   assert.ok(body.includes('floor-goto-err') && body.includes('floor-goto-ok'), '回执只画了一半（成败都要如实画）')
-  assert.ok(body.includes("'⚠ 没写进去：'"), '没把"哪几份没写进去"画出来')
+  // ★★ 2026-09-26（「弹窗那颗改成先真回档」那一单）：那句「⚠ 没写进去：…」随**共用那一份**搬到了
+  //   `floorRestoreDetail`（弹窗那颗「对齐楼层」也走 restore 那一脚、回执要**同一份** ——
+  //   ⛔ 不两处各写一遍）。⚠️ 判据**一个字都没删**：只是从"这一档的体内"改成"这一档**调的那一份**共用画法里"，
+  //   下面紧接着两条还钉着"这一档确实在调它"与"那三块的次序/文案"。
+  const restoreDetailBody = outlineArrowBody(src, 'const floorRestoreDetail = (detail) =>')
+  assert.ok(restoreDetailBody, '缺共用的回执明细画法 floorRestoreDetail')
+  assert.ok(restoreDetailBody.includes("'⚠ 没写进去：'"), '没把"哪几份没写进去"画出来')
+  assert.ok(restoreDetailBody.includes('不算全成功'), '没把"不算全成功"那句画出来')
+  assert.ok(body.includes('...floorRestoreDetail(gotoMsg.detail)'), '「回到这一楼」的回执没调共用的那一份画法（那三块会丢）')
   assert.ok(!/useEffect|setInterval|setTimeout/.test(body), 'RpMemoryFlow 里出现了 useEffect / 定时器（这一档不轮询、不自动重试）')
 
   // ── 渲染断言：摆进 ready 态（hook 序：…10 alert / 11 floorPane / 12 gotoMsg）──
@@ -3064,39 +3155,48 @@ await check('★★ 记忆库·楼层快照（2026-09-23 / 同日补单）：按
     files: [{ name: 'notes.md', exists: true, bytes: 140, mtime: 0, deadzones: 0, writable: true }],
     baseLabel: '周目目录', candidates: [], sharedHint: false, otherEntries: 0, error: '',
   }
-  const floorData = {
+  /** 楼层那一份 body（改动单：`last` 如实给"档案停在哪一楼" ⇒ 常驻状态行读它）。
+   *  ★★ 2026-09-25：「序号」那一单 —— 宿主多给三个东西，**这一份夹具按新口径摆**：
+   *    · 每一行 `ordinal` = 面板显示的「序号 N」（按**记录时间**编的"第几版"，`N` 最大 = 最新）＋
+   *      `pointer` = 这一行是不是**档案指针（`last`）指着的那一行**（默认窗口要保证它可见）；
+   *    · `head` / `last` 各带 `ordinal`（状态行显示的就是它，**⛔ 不是 `seq`**）；
+   *    · ★ 那条 `pending` **逐字照账**（⛔ 一个字段都不加 —— 它与宿主盘上那条一致是硬判据），
+   *      面板要显示的三个序号走**旁边那份** `pendingOrdinals`（`{from,to,archive}`，横幅与浮层的标题读它）。
+   *    ⚠️ 数组**按 `ordinal` 从大到小**摆（宿主就是这么排的，⛔ 面板不排序）—— 这是"宿主排序"那条判据的相。 */
+  const floorBody = (over) => Object.assign({
     ok: true, base: 'playthrough', baseLabel: '周目目录', sharedHint: false,
     dir: '.dma-floor-snapshots', docExists: true, docError: null,
     targets: ['notes.md', 'index.md', 'state.md', 'characters.md', 'world.md'],
-    head: { nodeId: 'qa-3-3-ccc', variantId: 'variant-3', seq: 3 }, orderKnown: true,
-    last: { nodeId: 'qa-3-3-ccc', seq: 3, at: T1 }, lastFloorSeq: 3,
+    head: { nodeId: 'qa-3-3-ccc', variantId: 'variant-3', seq: 3, ordinal: 4 }, orderKnown: true,
+    last: { nodeId: 'qa-3-3-ccc', variantId: 'variant-3', seq: 3, at: T1, ordinal: 4 }, lastFloorSeq: 3,
     deadzonesReadable: true, deadFiles: ['rulebook.md'],
     legacyFloors: [{ nodeId: 'qa-2-2-bbb', seq: 2 }],
     floors: [
+      // ⚠️ 顺序 = 宿主给的（序号大 → 小）。序号与楼号（seq）**故意错开**，好钉住"面板显示的是序号"。
       {
-        nodeId: 'qa-1-1-aaa', variantId: 'variant-1', seq: 1, at: T0, updatedAt: T0,
-        current: false, sameNode: false, legacy: false,
-        changed: [{ name: 'notes.md', bytes: 120, delta: null }, { name: 'index.md', bytes: 80, delta: null }],
-        present: ['notes.md', 'index.md'], absent: ['state.md'], deadzone: [],
-      },
-      // ★ 20260923：同一楼 swipe 出来的**另一支**（当前那一支是下面那条）
-      {
-        nodeId: 'qa-3-3-ccc', variantId: 'variant-3-old', seq: 3, at: T0, updatedAt: T0,
-        current: false, sameNode: true, legacy: false,
-        changed: [{ name: 'notes.md', bytes: 90, delta: null }],
-        present: ['notes.md'], absent: [], deadzone: [],
-      },
-      {
-        nodeId: 'qa-3-3-ccc', variantId: 'variant-3', seq: 3, at: T1, updatedAt: T1,
-        current: true, sameNode: true, legacy: false,
+        nodeId: 'qa-3-3-ccc', variantId: 'variant-3', seq: 3, ordinal: 4, at: T1, updatedAt: T1,
+        current: true, pointer: true, sameNode: true, legacy: false,
         changed: [{ name: 'notes.md', bytes: 140, delta: 20 }],
         present: ['notes.md', 'index.md'], absent: [], deadzone: ['index.md'],
       },
+      // ★ 20260923：同一楼 swipe 出来的**另一支**（当前那一支是上面那条）
+      {
+        nodeId: 'qa-3-3-ccc', variantId: 'variant-3-old', seq: 3, ordinal: 3, at: T0, updatedAt: T0,
+        current: false, pointer: false, sameNode: true, legacy: false,
+        changed: [{ name: 'notes.md', bytes: 90, delta: null }],
+        present: ['notes.md'], absent: [], deadzone: [],
+      },
       // ★ 20260923：上一版形状的**老记录**（只有 nodeId、不知道是哪一支）⇒ 只读、不能恢复
       {
-        nodeId: 'qa-2-2-bbb', variantId: '', seq: 2, at: T0, updatedAt: T0,
-        current: false, sameNode: false, legacy: true,
+        nodeId: 'qa-2-2-bbb', variantId: '', seq: 2, ordinal: 2, at: T0, updatedAt: T0,
+        current: false, pointer: false, sameNode: false, legacy: true,
         changed: [], present: ['notes.md'], absent: [], deadzone: [],
+      },
+      {
+        nodeId: 'qa-1-1-aaa', variantId: 'variant-1', seq: 1, ordinal: 1, at: T0, updatedAt: T0,
+        current: false, pointer: false, sameNode: false, legacy: false,
+        changed: [{ name: 'notes.md', bytes: 120, delta: null }, { name: 'index.md', bytes: 80, delta: null }],
+        present: ['notes.md', 'index.md'], absent: ['state.md'], deadzone: [],
       },
     ],
     lastAuto: {
@@ -3104,15 +3204,23 @@ await check('★★ 记忆库·楼层快照（2026-09-23 / 同日补单）：按
       restored: ['notes.md'], skipped: [], failed: [], blocked: null,
       message: '检测到回档到第 1 楼（从第 2 楼） ⇒ 已把笔记恢复到第 1 楼的样子（恢复 notes.md）；⛔ 预置那几份没动',
     },
-    // ★ 20260924 改口径（回档改**手动挡**）：判到回档只记一条待处理 ⇒ 面板顶部那条**显著横幅**靠它渲染
-    //   （旧口径的 `lastAuto` 那句"最近一次自动回档跟随"已经不存在了 —— 自动跟随被拿掉）。
-    pending: {
-      targetKey: 'qa-1-1-aaa variant-1-1-aaa',
-      fromNodeId: 'qa-3-3-ccc', fromSeq: 3, toNodeId: 'qa-1-1-aaa', toSeq: 1,
-      targetNodeId: 'qa-1-1-aaa', targetSeq: 1, why: 'back', source: 'self', at: T1,
-    },
+    // ★ 2026-09-25：面板显示的那三个**序号**（与 `pending` **分开**一份 —— 那条账一个字都不许动）。
+    pendingOrdinals: null,
     checkedAt: T1,
+  }, over ?? {})
+  /** ★ 20260924 收尾：那条待处理（**开 fork** 时宿主记的）—— 横幅靠它渲染。
+   *  `from*` = 剧情**之前**站的楼（`seen`）、`to*` = 剧情**现在**站的楼（head）、
+   *  `archive*` = **档案停在哪一楼**、`target*` = 要退回那一份（**可以没有**）。
+   *  ★ 2026-09-25：**逐字照账**（⛔ 一个字段都不加）—— 那三个序号在旁边的 `pendingOrdinals` 里
+   *  （夹具里序号与楼号**故意错开**：from/to/archive 的 seq 是 3/1/3，序号是 4/1/4）。 */
+  const pendingFull = {
+    targetKey: 'qa-1-1-aaa\u0000variant-1-1-aaa',
+    fromNodeId: 'qa-3-3-ccc', fromSeq: 3,
+    toNodeId: 'qa-1-1-aaa', toSeq: 1,
+    archiveNodeId: 'qa-3-3-ccc', archiveSeq: 3,
+    targetNodeId: 'qa-1-1-aaa', targetSeq: 1, why: 'back', source: 'self', at: T1,
   }
+  const floorData = floorBody({ pending: pendingFull, pendingOrdinals: { from: 4, to: 1, archive: 4 } })
   fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
     ReadArea: { 0: 'outline' },
     RpMemoryFlow: { 0: 'ready', 1: memSt, 2: 'notes.md', 11: { status: 'ready', data: floorData, error: '' } },
@@ -3128,31 +3236,175 @@ await check('★★ 记忆库·楼层快照（2026-09-23 / 同日补单）：按
     assert.ok(s.includes('dma-rpmem-floor-goto-qa-2-2-bbb-legacy'), '老记录那一行没有按钮（要禁用而不是没有）')
     assert.ok(s.includes('"data-floor":"1"') && s.includes('"data-floor":"3"'), '楼层列表没画出来（序号缺失）')
     assert.ok(s.includes('"data-floor-current":"1"') && s.includes('"data-floor-current":"0"'), '当前那一楼没标出来（高亮判据缺失）')
-    assert.ok(text.includes('第 1 楼') && text.includes('第 3 楼'), '楼层序号没显示成人话')
+    // ★★ 2026-09-25（用户口径「**不要楼号了，基本没用，只标序号**」）：行头显示的是宿主算的 **`ordinal`**
+    //   （按记录时间编的"第几版"），⛔ 不再是 Tavern 那个楼号。夹具里两者**故意错开**
+    //   （`seq` 有 3、3、2、1 四个值，`ordinal` 是 4、3、2、1）⇒ 下面这几条只认序号。
+    assert.ok(s.includes('"data-floor-ordinal":"4"') && s.includes('"data-floor-ordinal":"1"'),
+      '行头那个新属性 data-floor-ordinal（宿主给的序号）没画出来')
+    assert.ok(text.includes('序号 4') && text.includes('序号 1'), '楼层序号没显示成人话（「序号 N」）')
+    assert.equal(/第 \d+ 楼/.test(text), false, '版面里还出现 Tavern 那个楼号（用户口径：不要楼号了，只标序号）: ' + text.slice(0, 300).replace(/\s+/g, ' '))
     assert.ok(text.includes('◀ 当前这一楼'), '当前那一楼没有高亮标记')
     assert.ok(text.includes('notes.md（+20 字节）'), '「改了哪几份（+几字节）」没画出来')
     assert.ok(text.includes('notes.md（共 120 字节）'), '没有基数的那几份没如实报"共几字节"')
-    // ★ 20260924 改口径（用户拍板「不要做跟随楼层的功能，先做手动挡」）：
-    //   旧断言等的是「最近一次自动回档跟随」那句 —— 自动跟随已经拿掉 ⇒ 现在该渲染的是
-    //   **待处理横幅**（检测到回档：/ 把档案退回 / 保持现状）。反证：把横幅那段挖掉 ⇒ 必红。
-    assert.ok(text.includes('检测到回档：') && text.includes('把档案退回') && text.includes('保持现状'),
-      '档顶没有那条「检测到回档」待处理横幅（把档案退回 / 保持现状）')
+    // ★★ 2026-09-24 收尾（用户口径「**开 fork 时（回档）前台弹提示**」「做更显著的更改表示」）：
+    //   ① 档顶那条**常驻状态行**：`剧情 序号 N · 档案 序号 M`（两处一样 ⇒ 灰、不一样 ⇒ 琥珀 + 一颗对齐按钮）；
+    //   ② 那条**显著横幅**：标题 `⚠ 检测到回档：序号 N → 序号 M` + **三颗按钮**
+    //      （★ 2026-09-25 起：「对齐楼层」/「只对齐楼号」/「不处理」；⛔ 不再有「把档案退回」那颗）。
+    assert.ok(s.includes('"data-dma":"floor-state-line"'), '档顶没有那条**常驻状态行**（floor-state-line）')
+    assert.ok(text.includes('剧情 序号 4 · 档案 序号 4'), '常驻状态行没把"剧情序号 · 档案序号"如实画出来')
+    assert.ok(text.includes('检测到回档：序号 4 → 序号 1'), '横幅标题不是序号口径（`序号 X → 序号 Y`）')
+    assert.ok(text.includes('剧情刚从 序号 4 退到 序号 1'), '横幅没说清"剧情刚从序号 X 退到序号 Y": ' + text.slice(0, 400).replace(/\s+/g, ' '))
+    assert.ok(text.includes('现在停在序号 4'), '横幅没如实说出**档案停在哪一条**（archiveOrdinal）')
+    // ★★ 2026-09-25 改口径（用户逐字给的）：「另外，改一下选项，**1、对齐楼层 2、只对齐楼号 3、不处理**」
+    //   ⇒ 那一排**就这三颗**（每颗的可见文案逐字钉住），⛔ **没有**「把档案退回第 N 楼」那颗。
+    assert.ok(s.includes('dma-rpmem-floor-pending-settle') && text.includes('对齐楼层'),
+      '横幅上缺「对齐楼层」那颗（＝就地登记，⛔ 不动正文）')
+    assert.ok(s.includes('dma-rpmem-floor-pending-number') && text.includes('只对齐楼号'),
+      '横幅上缺「只对齐楼号」那颗（★ 2026-09-25 新增：只锚 last，⛔ 不记快照、⛔ 不新增楼层行）')
+    assert.ok(s.includes('dma-rpmem-floor-pending-ack') && text.includes('不处理'),
+      '横幅上缺「不处理」那颗（清掉提示，⛔ 什么都不写）')
+    assert.equal(s.includes('dma-rpmem-floor-pending-restore'), false,
+      '横幅那一排里还留着「把档案退回」那颗（用户口径：那排只要这三件；退回那条路在楼层清单每一行的「回到这一楼」里）')
     assert.ok(text.includes('不影响会话'), '没写清「回到这一楼」不影响会话')
     assert.ok(text.includes('按块合并') && text.includes('死区') && text.includes('保留盘上现况'),
       '没把「死区那几份按块合并（保留盘上现况）」说出来（⛔ 不再是"整份跳过"）')
-    assert.ok(text.includes('同一楼的另一支（swipe 掉的）'), '同一楼 swipe 出来的另一支没标出来')
+    // ★★ 2026-09-25：这一句按用户口径改说**序号**口径的说法（原来拿 Tavern 节点说事；**意思一个字没变**）
+    //   —— 老那一句「同一楼的另一支（swipe 掉的）」不再出现（下面断言的就是新说法）。
+    assert.ok(text.includes('这一条的另一个分支（swipe 重 roll）'), '同一楼 swipe 出来的另一种分支没标出来')
     assert.ok(text.includes('老记录·不能恢复') && text.includes('老记录：只有楼层、不知道是哪一支'),
       '老记录那一行没如实标成"只读、不能恢复"')
     assert.ok(s.includes('"data-floor-legacy":"1"') && s.includes('"data-floor-variant":"variant-3"'),
       '老记录/变体那两个属性没画出来（面板要靠它标行）')
     assert.ok(text.includes('这一楼当时没有：state.md'), '没如实说"那一楼当时没有这份"（恢复时不动它）')
     assert.ok(text.includes('notes.md、index.md、state.md、characters.md、world.md'), '没摆出"只记这 5 份"的名单')
+    // ★ 2026-09-25：那一行「同一楼的另一支（swipe 掉的）」按用户口径改说 **序号**口径的说法（意思一个字没变）——
+    //   已在上面那一处钉过（⛔ 不重复写两遍同一条判据）。
     // 反证：把列表那一支挖掉 ⇒ 同一条判据必红
-    const dugSrc = body.replace('floorRows.map(floorRow),', '')
-    assert.equal(dugSrc.includes('floorRows.map(floorRow)'), false, '反证失败：挖掉列表支后仍能命中')
-    // 反证：把"档顶那一句自动回档"挖掉 ⇒ 同一条判据必红
-    const dugAuto = body.replace('floorAutoLine,', '')
-    assert.equal(dugAuto.includes('floorAutoLine,'), false, '反证失败：挖掉自动回档那一句后仍能命中')
+    const dugSrc = body.replace('floorVisible.map((x, i) => (x.kind === ', '')
+    assert.equal(dugSrc.includes('floorVisible.map((x, i) => (x.kind === '), false, '反证失败：挖掉列表支后仍能命中')
+    // ★★ 2026-09-25（用户口径第 4 条，逐字）：「⇄ 最近一次回档：……**这一整段删掉**」
+    //   ⇒ 相：就算宿主那份 body 里**还带着** `lastAuto`，这一档也**不再画**它（元素、渲染分支、取数点全撤了）。
+    assert.equal(s.includes('floor-auto'), false, '「⇄ 最近一次回档」那一块还在渲染（用户口径：这一整段删掉）')
+    assert.equal(text.includes('最近一次回档'), false, '版面上还挂着"最近一次回档"那句话（那一整段该没了）')
+    //   反证（**把那块加回来 ⇒ 必红**）：把宿主给的那条 `lastAuto` 重新挂进 floorBlock 再装一遍 ⇒ 上面那条判据必红。
+    const dugAutoSrc = src.replace(
+      "'data-dma': 'floor-block', className: 'dma-rp-sec' },",
+      "'data-dma': 'floor-block', className: 'dma-rp-sec' },"
+      + " e('div', { 'data-dma': 'floor-auto' }, '⇄ 最近一次回档：' + String((floorData && floorData.lastAuto && floorData.lastAuto.message) || '')),")
+    assert.notEqual(dugAutoSrc, src, '反证失败：那一处锚没被改成（"加回来"这个动作本身没生效）')
+    const dugAutoComp = reloadClientComp(dugAutoSrc)
+    fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+      ReadArea: { 0: 'outline' },
+      RpMemoryFlow: { 0: 'ready', 1: memSt, 2: 'notes.md', 11: { status: 'ready', data: floorData, error: '' } },
+    }))
+    const dugAutoJson = JSON.stringify(fakeReact.createElement(dugAutoComp, { wide: true }))
+    assert.equal(dugAutoJson.includes('floor-auto'), true,
+      '反证失败：把"最近一次回档"那块加回去之后**还是**画不出来 —— 说明上面那条判据不是被这一块咬住的（橡皮章）')
+
+    // ★★ 常驻状态行**第二相**：剧情与档案**不在同一楼** ⇒ 琥珀 + 一颗「档案对齐到序号 N」（★ 保持）。
+    //   ★ 2026-09-25：这一相里那条待处理**没有**可退回的那一份（`targetSeq` 空）—— 那是**正常状态**；
+    //   那一排**本来就不再有**「把档案退回」那颗（它凭什么都不画），三颗照旧都在。
+    const noTarget = Object.assign({}, pendingFull, { targetNodeId: '', targetVariantId: '', targetSeq: null })
+    fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+      ReadArea: { 0: 'outline' },
+      RpMemoryFlow: {
+        0: 'ready', 1: memSt, 2: 'notes.md',
+        11: {
+          status: 'ready', error: '',
+          // ⚠️ 档案指针挪到**序号 1** 那一行（`last.ordinal = 1`）⇒ 与剧情的序号 4 不一样。
+          data: floorBody({
+            pending: noTarget, pendingOrdinals: { from: 4, to: 1, archive: 4 },
+            last: { nodeId: 'qa-1-1-aaa', variantId: 'variant-1', seq: 1, at: T0, ordinal: 1 },
+          }),
+        },
+      },
+    }))
+    const ntTree = fakeReact.createElement(comp, { wide: true })
+    const ntText = visibleText(ntTree)
+    const ntJson = JSON.stringify(ntTree)
+    assert.ok(ntJson.includes('"data-floor-same":"0"'), '状态行没标出"两处不一样"（data-floor-same）')
+    assert.ok(ntJson.includes('dma-rpmem-floor-align'), '状态行上那颗「档案对齐到序号 N」没画出来')
+    assert.ok(ntText.includes('档案对齐到序号 4'), '那颗按钮的序号不是宿主给的 head 的 `ordinal`')
+    assert.ok(ntText.includes('剧情 序号 4 · 档案 序号 1（不在同一楼）'), '状态行没把两处不一样如实写出来')
+    // ★ 反证（**真跑出来**的）：把状态行那两个数换回 Tavern 的 `seq`（这正是用户说"屁用没有"的那个号）
+    //   ⇒ `剧情 序号 4 · 档案 序号 1` 这一条**必红**（那时画出来的是 `剧情 序号 3 · 档案 序号 1`）。
+    const dugOrdSrc = src.replace('Number.isFinite(floorData.head.ordinal) ? floorData.head.ordinal : null', 'Number.isFinite(floorData.head.seq) ? floorData.head.seq : null')
+    assert.notEqual(dugOrdSrc, src, '反证失败：状态行那个取值没被改到（"按 seq 编"这个动作本身没生效）')
+    const dugOrdComp = reloadClientComp(dugOrdSrc)
+    fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+      ReadArea: { 0: 'outline' },
+      RpMemoryFlow: {
+        0: 'ready', 1: memSt, 2: 'notes.md',
+        11: {
+          status: 'ready', error: '',
+          data: floorBody({
+            pending: noTarget, pendingOrdinals: { from: 4, to: 1, archive: 4 },
+            last: { nodeId: 'qa-1-1-aaa', variantId: 'variant-1', seq: 1, at: T0, ordinal: 1 },
+          }),
+        },
+      },
+    }))
+    const dugOrdText = visibleText(fakeReact.createElement(dugOrdComp, { wide: true }))
+    assert.equal(dugOrdText.includes('剧情 序号 4'), false,
+      '反证失败：把序号换回 `seq` 之后**还是**画成"剧情 序号 4" —— 说明上面那条判据不是被 `ordinal` 咬住的（橡皮章）')
+    assert.equal(ntJson.includes('dma-rpmem-floor-pending-restore'), false,
+      '那一排里不该再有「把档案退回」那颗（★ 2026-09-25 撤掉；那个动作在楼层清单每一行）')
+    assert.ok(ntJson.includes('dma-rpmem-floor-pending-number') && ntText.includes('只对齐楼号'),
+      '没有可退回的那一份时，那三颗照旧都得在（★ 2026-09-25 起「只对齐楼号」也在这一排里）')
+    // ★ 那一排的可见文案里**一个字都不该再提**「把档案退回」（那颗撤了；"退回"那条路在清单行里）
+    assert.equal(ntText.includes('把档案退回'), false, '那一排的文案里还在提「把档案退回」（用户口径：那排只要这三件）')
+    // ★ 第四相：同一楼**换支**（swipe 重 roll）—— `fromSeq` 与 `toSeq` 同一楼 ⇒ 文案要说"换了支"，
+    //   ⛔ 不许写成"从序号 4 退到序号 4"；那一排的三颗照旧都在。
+    fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+      ReadArea: { 0: 'outline' },
+      RpMemoryFlow: {
+        0: 'ready', 1: memSt, 2: 'notes.md',
+        11: {
+          status: 'ready', error: '',
+          data: floorBody({
+            pendingOrdinals: { from: 4, to: 4, archive: 4 },
+            pending: Object.assign({}, pendingFull, {
+              fromSeq: 3, toSeq: 3,
+              targetSeq: 3, targetNodeId: 'qa-3-3-ccc', targetVariantId: 'variant-3-old',
+              archiveSeq: 3, why: 'variant', source: 'self',
+            }),
+          }),
+        },
+      },
+    }))
+    const swText = visibleText(fakeReact.createElement(comp, { wide: true }))
+    assert.ok(swText.includes('剧情在 序号 4 换了支（swipe 重 roll）'), '同一楼换支那一相没写"换了支"（⛔ 不许写"退到同一个号"）')
+    // ★ 反证：横幅那句也是**序号**口径（两个号一样 ⇒ 说的是"换了支"，⛔ 不许写"从某号退到同一个号"）
+    assert.equal(swText.includes('剧情刚从 序号 4 退到 序号 4'), false, '同一楼换支那一相出现了"从某号退到同一个号"的怪话')
+    assert.ok(swText.includes('对齐楼层') && swText.includes('只对齐楼号') && swText.includes('不处理'),
+      '同一楼换支那一相也得摆出那三颗（★ 2026-09-25 的新口径）')
+    assert.ok(swText.includes('检测到回档：序号 4 → 序号 4'), '同一楼换支的标题也该是 `序号 X → 序号 X`（宿主给的 from/to）')
+
+    // 反证：把常驻状态行那一段挖掉 ⇒ 上面那几条必红
+    const dugState = body.replace('floorStateLine,', '')
+    assert.equal(dugState.includes('floorStateLine,'), false, '反证失败：挖掉状态行后仍能命中')
+    assert.equal(dugState.includes("'data-dma': 'floor-state-line'"), true,
+      '反证失败：挖掉的应当只是挂载那一句（状态行本体还在源码里）')
+
+    // ★★ 三颗按钮**各有自己的回执行**（hook 序：13 pendingMsg / 14 alignMsg —— ⛔ 不许"回执落在看不见的地方"：
+    //   横幅那两颗画在横幅里、常驻状态行那颗画在状态行里）。顺带钉住"新状态只能**追加在最后**"那条纪律。
+    fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
+      ReadArea: { 0: 'outline' },
+      RpMemoryFlow: {
+        0: 'ready', 1: memSt, 2: 'notes.md',
+        11: { status: 'ready', data: floorData, error: '' },
+        13: { status: 'ok', message: '已「不处理」：那条提示收掉了（⛔ 没登记、⛔ 那 5 份笔记一个字节都没动）' },
+        14: { status: 'err', message: '这条待处理登记不掉（no-head）⇒ 拒改（⛔ 一个字节都没写）' },
+      },
+    }))
+    const msgTree = fakeReact.createElement(comp, { wide: true })
+    const msgJson = JSON.stringify(msgTree)
+    const msgText = visibleText(msgTree)
+    assert.ok(msgJson.includes('floor-pending-ok') && msgText.includes('那条提示收掉了'),
+      '横幅那颗的回执没画在横幅里（pendingMsg 那一行）')
+    assert.ok(msgJson.includes('floor-align-err') && msgText.includes('这条待处理登记不掉'),
+      '常驻状态行那颗的回执没画在状态行里（alignMsg 那一行）')
+
     // 失败态：有哪几份没写进去 ⇒ 红字 + 逐条列出来（⛔ 绝不"部分成功当全成功"）
     fakeReact.__setPreset(Object.assign(basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }), {
       ReadArea: { 0: 'outline' },
@@ -3192,6 +3444,300 @@ await check('★★ 记忆库·楼层快照（2026-09-23 / 同日补单）：按
     assert.ok(JSON.stringify(blockedTree).includes('floor-goto-blocked'), '被拦住而没恢复时没画成警示（⛔ 不许画成成功）')
     assert.ok(visibleText(blockedTree).includes('这次不敢恢复'), '被拦住时没把"为什么没动"说清')
   } finally { fakeReact.__setPreset(null) }
+})
+
+// =======================================================================
+// ★★ 2026-09-25（用户口径，逐字）：「**默认显示最近10楼，从序号大到小排序**」
+//
+//   三件事（判据全在宿主那边，面板只照画）：
+//     ① 顺序 = 宿主给的那份数组（按 `ordinal` **从大到小**，最新在最上）—— 面板⛔ 不排序、⛔ 不比新旧；
+//     ② **默认只画最近 10 行** ＋ 一颗「显示其余 N 条」（点开 = 全部）；
+//     ③ ⚠️ **「当前剧情那一行」与「档案指针那一行」必须永远可见** —— 用户回档到很早以前时它们会落在
+//        最近 10 条**之外**（⛔ 不许一刀切掉，否则"回档完找不到高亮那一条"＝这功能就废了）。
+//        哪一行是那两行由**宿主**给（`current` / `pointer` 两个布尔）—— ⛔ 面板不拿 nodeId 去比。
+//     ④ 中间被省掉的那几段用**一行** `…（省略 N 条）` 表示（⛔ 不逐条列出来）。
+//
+//   ⚠️ 反证是**真跑出来的**：把那句"当前行 / 指针行也留下"挖掉、把改过的源码**重新装一遍**再渲染
+//   ⇒ "深在第 13 位的那一行也得在"那一条**必红**（证明它不是橡皮章）。
+// =======================================================================
+await check('★★ 记忆库·楼层清单的默认窗口（2026-09-25）：只画最近 10 行 · 当前行与档案指针行**永远可见** · 省略标记与「显示其余 N 条」；反证：一刀切掉那两行必红', () => {
+  const readyHost = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }
+  const memSt = {
+    files: [{ name: 'notes.md', exists: true, bytes: 140, mtime: 0, deadzones: 0, writable: true }],
+    baseLabel: '周目目录', candidates: [], sharedHint: false, otherEntries: 0, error: '',
+  }
+  const T = '2026-09-23T09:00:00.000Z'
+  /** 14 条（序号 14 → 1）；**当前剧情那一行**是序号 2、**档案指针那一行**是序号 1
+   *  —— 两条都深在最近 10 条**之外**，中间还隔着序号 4 / 3 两段 ⇒ 省略标记与"深的那两条必须可见"一起钉。 */
+  const many = (over) => {
+    const floors = []
+    for (let n = 14; n >= 1; n--) {
+      floors.push({
+        nodeId: 'qa-' + String(n) + '-x', variantId: 'variant-' + String(n), seq: n, ordinal: n, at: T, updatedAt: T,
+        current: n === 2, pointer: n === 1, sameNode: false, legacy: false,
+        changed: [{ name: 'notes.md', bytes: 100 + n, delta: 1 }], present: ['notes.md'], absent: [], deadzone: [],
+      })
+    }
+    return Object.assign({
+      ok: true, base: 'playthrough', baseLabel: '周目目录', sharedHint: false,
+      dir: '.dma-floor-snapshots', docExists: true, docError: null,
+      targets: ['notes.md', 'index.md', 'state.md', 'characters.md', 'world.md'],
+      head: { nodeId: 'qa-2-x', variantId: 'variant-2', seq: 2, ordinal: 2 }, orderKnown: true,
+      last: { nodeId: 'qa-1-x', variantId: 'variant-1', seq: 1, at: T, ordinal: 1 }, lastFloorSeq: 1,
+      deadzonesReadable: true, deadFiles: [], legacyFloors: [], floors, pending: null, checkedAt: T,
+    }, over ?? {})
+  }
+  const setPane = (data, more) => fakeReact.__setPreset(Object.assign(
+    basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }),
+    { ReadArea: { 0: 'outline' }, RpMemoryFlow: Object.assign({ 0: 'ready', 1: memSt, 2: 'notes.md', 11: { status: 'ready', data: data, error: '' } },
+      more === undefined ? {} : { 15: more }) },
+  ))
+  try {
+    // ── 相：默认（只最近 10 行 ∪ 那两行）────────────────────────────────────────────
+    setPane(many())
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const s = JSON.stringify(tree)
+    const text = visibleText(tree)
+    for (let n = 14; n >= 5; n--) {
+      assert.ok(s.includes('"data-floor-ordinal":"' + String(n) + '"'), '最近 10 行里的第 ' + String(n) + ' 条没画出来')
+    }
+    // 序号 2 / 1 在最近 10 之外 —— 但**当前剧情那一行**与**档案指针那一行**照旧得在（这条是整块的意义）
+    assert.ok(s.includes('"data-floor-ordinal":"2"'), '「当前剧情那一行」（序号 2）落在默认窗口之外就没了（回档完找不到高亮那一条）')
+    assert.ok(s.includes('"data-floor-ordinal":"1"'), '「档案指针那一行」（序号 1）落在默认窗口之外就没了')
+    assert.ok(s.includes('"data-floor-current":"1"') && s.includes('"data-floor-ordinal":"2"'),
+      '当前剧情那一行没跟着它的高亮一起出现')
+    // 中间被省掉的那两段（序号 4 / 3）：**默认不画**（它们既不是最近 10 条、也不是那两行）
+    assert.equal(s.includes('"data-floor-ordinal":"4"'), false, '默认窗口把中间那两条也画出来了（默认只该画 10 条 ∪ 那两行）')
+    assert.equal(s.includes('"data-floor-ordinal":"3"'), false, '默认窗口把中间那两条也画出来了')
+    // 被省掉的那一段：**一行**省略标记 + 一颗「显示其余 N 条」（计数如实 = 全量 - 画出来的）
+    assert.ok(s.includes('"data-dma":"floor-omitted"') && text.includes('…（省略 2 条）'), '中间被省掉的那一段没有那一行省略标记')
+    assert.ok(s.includes('dma-rpmem-floor-more'), '缺那颗「显示其余 N 条」')
+    assert.ok(text.includes('显示其余 2 条'), '那颗按钮上的条数不是如实算出来的（14 条 - 画出来 12 条 = 2）')
+    // ── 相：展开（`floorAll` = true ⇒ 全量；顺序仍是宿主给的那份）────────────────────────
+    setPane(many(), true)
+    const allTree = fakeReact.createElement(comp, { wide: true })
+    const allS = JSON.stringify(allTree)
+    for (let n = 14; n >= 1; n--) {
+      assert.ok(allS.includes('"data-floor-ordinal":"' + String(n) + '"'), '展开之后第 ' + String(n) + ' 条还是没画出来（"点开 = 全部"不成立）')
+    }
+    assert.equal(allS.includes('"data-dma":"floor-omitted"'), false, '展开之后还留着省略标记（那就不是全量）')
+    assert.ok(visibleText(allTree).includes('收起其余 2 条'), '展开之后那颗按钮没变成"收起"')
+    // ── 真点一下：那颗按钮点了就把"全量"这个开关翻过去（假 react 不重渲染 ⇒ 只读回 state）──
+    setPane(many())
+    const moreTree = fakeReact.createElement(comp, { wide: true })
+    const moreBtn = collectNodes(moreTree, (n) => n.props && n.props.id === 'dma-rpmem-floor-more', [])
+    assert.equal(moreBtn.length, 1, '那颗「显示其余 N 条」找不到（或不止一颗）：实得 ' + String(moreBtn.length))
+    fakeReact.__begin('RpMemoryFlow')
+    moreBtn[0].props.onClick()
+    assert.equal(fakeReact.__peek().states[15], true, '点了「显示其余 N 条」却没把展开那一格翻成 true（点了没用）')
+    // ── 反证（真跑出来的）：把"当前行 / 指针行也留下"挖掉 ⇒ 上面那两条必红 ────────────────
+    const dugSrc = src.replace('if (i < FLOOR_RECENT_N || f.current === true || f.pointer === true) keep.add(i)',
+      'if (i < FLOOR_RECENT_N) keep.add(i)')
+    assert.notEqual(dugSrc, src, '反证失败：那句"当前行/指针行也留下"没被挖掉')
+    const dugComp = reloadClientComp(dugSrc)
+    setPane(many())
+    const dugS = JSON.stringify(fakeReact.createElement(dugComp, { wide: true }))
+    assert.equal(dugS.includes('"data-floor-ordinal":"2"'), false,
+      '反证失败：一刀切掉之后"当前剧情那一行"**还在** —— 说明上面那条判据不是被这一句咬住的（橡皮章）')
+    assert.equal(dugS.includes('"data-floor-ordinal":"1"'), false, '反证失败：一刀切掉之后"档案指针那一行"还在')
+  } finally { fakeReact.__setPreset(null) }
+})
+
+// =======================================================================
+// ★★ 2026-09-25（用户口径，逐字）：「**开一个下钻，直接显示具体改动的字段，写改了哪些可以说完全没用**」
+//
+//   每一行一颗「**看改动 ▸**」（默认收起）—— 点开就地展开一份**真内容**：这一条 vs 时间上紧随其前的
+//   那一条（宿主按 `ordinal` 口径挑），逐份给出**增行 / 删行**（带一点点上下文）。
+//   判据四条（都带反证）：
+//     ① **按需**：开档那一帧**一个请求都不发**（渲染树里也没有 `floor-diff` 那一块）；
+//        真点那颗「看改动 ▸」⇒ **恰好一次** `GET …/floors/diff?nodeId=…&variantId=…`（⛔ 不轮询、不预取）；
+//     ② 再点一下 ⇒ 收起来（⛔ 不发任何请求）＋ 面板不自己算"跟谁比"（请求里**没有** `against` —— 缺省＝宿主挑前一条）；
+//     ③ 加载中 / 读不出来 / 空 diff 三态**都如实画**（⛔ 不许静默、⛔ 不许画成"没改动"）；
+//     ④ 逐份那些标签原样透出（`absent` / `deadzone` / `unreadable` …）＋ 增删行**照宿主给的那份**逐行画。
+// =======================================================================
+await check('★★ 记忆库·楼层「看改动 ▸」下钻（2026-09-25）：点了才发那一个请求 · 三态如实画 · 逐份逐行照宿主给的画；反证：挖掉"看按钮 id"必红', async () => {
+  const body = outlineFnBody(src, 'RpMemoryFlow')
+  assert.ok(body, '缺 RpMemoryFlow 组件')
+  // ① 取数只在**具名回调**里（`RP_MEM_FETCH_CALLBACKS` 已把 loadFloorDiff 钉上）；端点形状照约定
+  const loadFn = outlineArrowBody(body, 'const loadFloorDiff = (f, key) => ')
+  assert.ok(loadFn, '缺那一脚取数的具名回调 loadFloorDiff(f, key)')
+  // ⚠️ URL 是**拼出来的**（带两个查询参数）⇒ 判据看"端点那一段"与"确实用 requestJson 发了它"两件事。
+  assert.ok(loadFn.includes("HOST_API_BASE + '/playthrough/rp-memory/floors/diff?nodeId='"),
+    '下钻没走 /floors/diff 端点（或没带 nodeId）')
+  assert.ok(loadFn.includes('requestJson(url'), '下钻没把拼好的那条 URL 交给 requestJson 发出去')
+  assert.ok(loadFn.includes('variantId=') && loadFn.includes('encodeURIComponent'),
+    '下钻没把 variantId 带上（或没做 URL 编码）')
+  assert.equal(/against=/.test(loadFn), false, '请求里塞了 `against` —— 缺省就该由**宿主**挑"前一条"（⛔ 面板不挑）')
+  assert.equal(/setInterval|setTimeout/.test(body), false, '面板里出现了定时器（这一档不轮询、不自动重试）')
+  // ② 收起那一脚**不发请求**（只有 toggle 里的 setState）
+  const toggleFn = outlineArrowBody(body, 'const toggleFloorDiff = (f) => ')
+  assert.ok(toggleFn, '缺那颗按钮的处理函数 toggleFloorDiff')
+  assert.equal(/requestJson|\.fetch\(|loadFloorDiff\(/.test(toggleFn.replace('loadFloorDiff(f, key)', '')),
+    false, '收起那一支里也在发请求（收起不该发任何请求）')
+  // ③ 三态与逐份逐行：源码里那几样都在（加载中 / 读不出来 / 逐字节一样 / 逐行 / 截断）
+  for (const needle of ['floor-diff-loading', 'floor-diff-err', 'floor-diff-lines', '与上一条逐字节一样', '只显示前 ']) {
+    assert.ok(body.includes(needle), '下钻那一块缺一样：' + needle)
+  }
+  for (const kind of ['absent', 'deadzone', 'unreadable', 'not-target']) {
+    assert.ok(body.includes("'" + kind + "'") || body.includes(kind + ':'), '逐份的 kind 少了一种：' + kind)
+  }
+
+  // ── 渲染断言：摆进 ready 态（hook 序：…11 floorPane / 15 floorAll / 16 floorDiff）──
+  const readyHost = {
+    healthStatus: 'ready',
+    health: { ok: true, webServer: true, sessionQuery: true, storageDirWritable: true, tavernReachable: true },
+    healthError: '', configStatus: 'ready',
+    config: { ok: true, rootMode: 'workspace', api: { url: '', model: '' }, keySet: false, keyHint: null, storageDir: '', configPath: '', configError: null },
+    configError: '',
+  }
+  const T0 = '2026-09-25T09:00:00.000Z'
+  const memSt = {
+    files: [{ name: 'notes.md', exists: true, bytes: 140, mtime: 0, deadzones: 0, writable: true }],
+    baseLabel: '周目目录', candidates: [], sharedHint: false, otherEntries: 0, error: '',
+  }
+  const oneRow = {
+    ok: true, base: 'playthrough', baseLabel: '周目目录', sharedHint: false,
+    dir: '.dma-floor-snapshots', docExists: true, docError: null,
+    targets: ['notes.md', 'index.md', 'state.md', 'characters.md', 'world.md'],
+    head: { nodeId: 'qa-9-x', variantId: 'variant-9', seq: 9, ordinal: 2 }, orderKnown: true,
+    last: { nodeId: 'qa-9-x', variantId: 'variant-9', seq: 9, at: T0, ordinal: 2 }, lastFloorSeq: 9,
+    deadzonesReadable: true, deadFiles: [], legacyFloors: [], pending: null, checkedAt: T0,
+    floors: [{
+      nodeId: 'qa-9-x', variantId: 'variant-9', seq: 9, ordinal: 2, at: T0, updatedAt: T0,
+      current: true, pointer: true, sameNode: false, legacy: false,
+      changed: [{ name: 'notes.md', bytes: 140, delta: 20 }], present: ['notes.md'], absent: [], deadzone: [],
+    }],
+  }
+  /** 宿主那一份 diff（形状逐字照 `handleRpMemoryFloorDiff` 的响应）。 */
+  const diffReady = {
+    ok: true, dir: '.dma-floor-snapshots',
+    floor: { nodeId: 'qa-9-x', variantId: 'variant-9', seq: 9, at: T0, legacy: false, ordinal: 2 },
+    against: { nodeId: 'qa-8-x', variantId: 'variant-8', seq: 8, at: T0, legacy: false, ordinal: 1 },
+    againstSource: 'prev', deadzonesReadable: true, deadFiles: ['index.md'],
+    truncated: true, added: 2, removed: 1,
+    files: [
+      { name: 'notes.md', kind: 'changed', added: 2, removed: 1, truncated: true, total: 9,
+        lines: [{ t: ' ', text: '第一段' }, { t: '-', text: '旧的那一行' }, { t: '+', text: '新的那一行' },
+          { t: '+', text: '又加一行' }, { t: '@', text: '这里跳过 37 行没变' }, { t: ' ', text: '收尾那一段' }],
+        reason: '', sha256: 'aa', baseSha256: 'bb' },
+      { name: 'index.md', kind: 'deadzone', added: 0, removed: 0, truncated: false, total: 0, lines: [],
+        reason: '这一份有死区 ⇒ 恢复时按块合并（死区那几段保留盘上现况、不会被回档改动）', sha256: 'cc', baseSha256: 'cc' },
+      { name: 'state.md', kind: 'same', added: 0, removed: 0, truncated: false, total: 0, lines: [],
+        reason: '', sha256: 'dd', baseSha256: 'dd' },
+      { name: 'characters.md', kind: 'absent', added: 0, removed: 0, truncated: false, total: 0, lines: [],
+        reason: '这一楼当时没有这一份', sha256: null, baseSha256: null },
+      { name: 'world.md', kind: 'unreadable', added: 0, removed: 0, truncated: false, total: 0, lines: [],
+        reason: '这一条的正文读不出来', sha256: 'ee', baseSha256: 'ff' },
+    ],
+    message: '序号 2 与 序号 1 比（时间上紧接着它的那一条）', checkedAt: T0,
+  }
+  const setDiff = (v) => fakeReact.__setPreset(Object.assign(
+    basePreset('read', readyHost, { 4: discReady, 5: catalogReady, 6: 0, 7: '' }),
+    { ReadArea: { 0: 'outline' }, RpMemoryFlow: { 0: 'ready', 1: memSt, 2: 'notes.md', 11: { status: 'ready', data: oneRow, error: '' }, 16: v } },
+  ))
+  const savedFetch = globalThis.fetch
+  const calls = []
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+  try {
+    // ① 相：默认收起 ⇒ 那块不画、**一个请求都不发**
+    globalThis.fetch = async (url) => { calls.push(String(url)); throw new Error('不该发请求：' + String(url)) }
+    setDiff({ key: '', status: 'idle', data: null, error: '' })
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const s = JSON.stringify(tree)
+    assert.equal(calls.length, 0, '开档那一帧就发了请求（⛔ 下钻是按需取，点了才发）: ' + calls.join('、'))
+    // ⚠️ 那一行那颗「看改动 ▸」本身就是 `data-dma="floor-diff-toggle"` ⇒ 这里判的是**展开那块**（`floor-diff`）在不在。
+    assert.equal(s.includes('"data-dma":"floor-diff"'), false, '默认收起时那块下钻也画出来了（⛔ 收起 = 不占版面）')
+    assert.equal(s.includes('floor-diff-lines'), false, '默认收起时逐行内容也画出来了')
+    assert.ok(s.includes('dma-rpmem-floor-diff-qa-9-x-variant-9'), '那一行缺「看改动 ▸」那颗按钮')
+    assert.ok(visibleText(tree).includes('看改动 ▸'), '那颗按钮的可见文案不是「看改动 ▸」（收起态）')
+    // ② 真点一下 ⇒ **恰好一次** GET /floors/diff（带 nodeId + variantId；⛔ 不带 against）
+    globalThis.fetch = async (url) => {
+      calls.push(String(url))
+      return { ok: true, status: 200, json: async () => diffReady }
+    }
+    const diffBtn = collectNodes(tree, (n) => n.props && n.props.id === 'dma-rpmem-floor-diff-qa-9-x-variant-9', [])
+    assert.equal(diffBtn.length, 1, '那颗「看改动 ▸」找不到（或不止一颗）：实得 ' + String(diffBtn.length))
+    fakeReact.__begin('RpMemoryFlow')
+    diffBtn[0].props.onClick()
+    await tick(); await tick()
+    assert.equal(calls.length, 1, '点一下该**恰好**发一个请求，实得 ' + String(calls.length) + '：' + calls.join('、'))
+    assert.ok(calls[0].includes('/playthrough/rp-memory/floors/diff?nodeId=qa-9-x&variantId=variant-9'),
+      '下钻那个请求的形状不对：' + String(calls[0]))
+    assert.equal(calls[0].includes('against='), false, '请求里带了 against（缺省＝宿主挑前一条，⛔ 面板不挑）')
+    const afterClick = fakeReact.__peek().states[16]
+    assert.equal(afterClick && afterClick.status, 'ready', '拿到宿主那份 diff 之后没落成 ready: ' + JSON.stringify(afterClick && afterClick.status))
+    // 再点一下 ⇒ 收起来（⛔ 不再发请求）。
+    //   ⚠️ 假 react **不重渲染** ⇒ 得拿"已经展开着"那一帧重新画一棵树再点那颗按钮
+    //   （不然闭包里读到的还是旧的 state，测的就不是真机上的那个行为）。
+    globalThis.fetch = async (url) => { calls.push(String(url)); throw new Error('收起不该发请求：' + String(url)) }
+    setDiff({ key: 'qa-9-x\u0000variant-9', status: 'ready', data: diffReady, error: '' })
+    const openTree = fakeReact.createElement(comp, { wide: true })
+    assert.ok(visibleText(openTree).includes('收起 ▴'), '展开了那一行那颗按钮没变成「收起 ▴」')
+    const openBtn = collectNodes(openTree, (n) => n.props && n.props.id === 'dma-rpmem-floor-diff-qa-9-x-variant-9', [])
+    assert.equal(openBtn.length, 1, '展开了之后那颗按钮找不到（或不止一颗）：实得 ' + String(openBtn.length))
+    fakeReact.__begin('RpMemoryFlow')
+    openBtn[0].props.onClick()
+    assert.equal(calls.length, 1, '收起那一脚又发了请求（⛔ 收起不发任何请求）: ' + calls.join('、'))
+    assert.equal(fakeReact.__peek().states[16] && fakeReact.__peek().states[16].status, 'idle', '再点一下没收起来')
+
+    // ③ 三态如实画 + 逐份逐行照宿主给的画
+    setDiff({ key: 'qa-9-x\u0000variant-9', status: 'loading', data: null, error: '' })
+    const loadS = JSON.stringify(fakeReact.createElement(comp, { wide: true }))
+    assert.ok(loadS.includes('floor-diff-loading'), '加载中那一态没画出来')
+    setDiff({ key: 'qa-9-x\u0000variant-9', status: 'error', data: null, error: '楼层快照清单读不出来（corrupt）' })
+    const errTree = fakeReact.createElement(comp, { wide: true })
+    assert.ok(JSON.stringify(errTree).includes('floor-diff-err'), '读不出来那一态没画成红字块')
+    assert.ok(visibleText(errTree).includes('楼层快照清单读不出来（corrupt）'), '读不出来时没把宿主给的原因画出来（⛔ 不许静默）')
+    setDiff({ key: 'qa-9-x\u0000variant-9', status: 'ready', data: diffReady, error: '' })
+    const okTree = fakeReact.createElement(comp, { wide: true })
+    const okS = JSON.stringify(okTree)
+    const okText = visibleText(okTree)
+    assert.ok(okS.includes('"data-dma":"floor-diff"'), '展开之后那块下钻没画出来')
+    assert.ok(okText.includes('序号 2 与 序号 1 比'), '没把"这一条是序号几 / 比的是序号几"照宿主那句画出来')
+    assert.ok(okS.includes('"data-dma":"floor-diff-lines"'), '逐行内容那一块没画出来')
+    assert.ok(okText.includes('- 旧的那一行') && okText.includes('+ 新的那一行') && okText.includes('+ 又加一行'),
+      '增行/删行没逐行画出来（用户口径：要的是"具体改动的字段"）')
+    assert.ok(okText.includes('… 这里跳过 37 行没变'), '中间被跳过的那一段没有省略标记')
+    assert.ok(okS.includes('"data-diff-t":"@"') && okS.includes('"data-diff-t":"+"') && okS.includes('"data-diff-t":"-"'),
+      '逐行的三种标记（增/删/省略）没有各自的属性（台子/样式靠它分色）')
+    assert.ok(okText.includes('notes.md') && okText.includes('+2 / −1 行'), '那一份的增删计数没画出来')
+    assert.ok(okText.includes('只显示前 6 / 9 行'), '被截断那一份没如实说"只显示了前几行"')
+    assert.ok(okText.includes('这一份有死区 ⇒ 恢复时按块合并'), '有死区那一份没**标出来**（⛔ 不许假装它跟别的一样）')
+    assert.ok(okText.includes('与上一条逐字节一样'), '两侧同文那一相没照实写"逐字节一样"')
+    assert.ok(okText.includes('这一楼当时没有这一份'), 'absent 那一份没如实标')
+    assert.ok(okText.includes('这一条的正文读不出来'), '读不出来的那一份没如实标（⛔ 更不许画成"没改动"）')
+    // 没有前一条（最早的那一条）⇒ 如实画宿主那句话（⛔ 不画成"没改动"）
+    setDiff({
+      key: 'qa-9-x\u0000variant-9', status: 'ready', error: '',
+      data: Object.assign({}, diffReady, { against: null, files: [], message: '这是最早的一条，没有可比的' }),
+    })
+    const noneText = visibleText(fakeReact.createElement(comp, { wide: true }))
+    assert.ok(noneText.includes('这是最早的一条，没有可比的'), '没有前一条时没如实说"这是最早的一条"')
+    // 死区数据读不出来 ⇒ 如实说（⛔ 不许当"都没有死区"）
+    setDiff({
+      key: 'qa-9-x\u0000variant-9', status: 'ready', error: '',
+      data: Object.assign({}, diffReady, { deadzonesReadable: false, deadFiles: [] }),
+    })
+    assert.ok(visibleText(fakeReact.createElement(comp, { wide: true })).includes('死区数据读不出来'),
+      '死区数据读不出来时没如实说（那几份的"死区"标记可能不全）')
+    // ④ 反证（真跑出来的）：把那颗按钮的 id 挖掉 ⇒ "每一行都有那颗按钮"必红
+    const dugSrc = src.replace("id: 'dma-rpmem-floor-diff-' + f.nodeId + '-' + (f.variantId || 'legacy'),", '')
+    assert.notEqual(dugSrc, src, '反证失败：那颗按钮的 id 没被挖掉')
+    const dugComp = reloadClientComp(dugSrc)
+    setDiff({ key: '', status: 'idle', data: null, error: '' })
+    const dugJson = JSON.stringify(fakeReact.createElement(dugComp, { wide: true }))
+    assert.equal(dugJson.includes('dma-rpmem-floor-diff-qa-9-x-variant-9'), false,
+      '反证失败：挖掉那颗按钮的 id 之后**还能**命中 —— 说明上面那条判据是橡皮章')
+  } finally {
+    globalThis.fetch = savedFetch
+    fakeReact.__setPreset(null)
+  }
 })
 
 // =======================================================================
@@ -3312,6 +3858,454 @@ await check('★ 压缩·失败也说话（验收6）：整体 ok:false 时从 e
   assert.ok(body.includes("const payload = error && error.payload ? error.payload : null"), '抛错时没读 err.payload（两半的原因会丢）')
   assert.ok(body.includes("setSave({ busy: false, ok: false, text: errText(error), detail: payload })"), '失败没进 detail（界面上看不到两半）')
   assert.ok(body.includes('void load()'), '失败后没有回读一次真实状态（界面会停在旧数）')
+})
+
+// =======================================================================
+// ★★ 2026-09-24：**顶部弹窗**（回档 → 立刻弹）
+//   用户口径（逐字）：「还需要一个 dsh 的弹窗 提示，最好是从**上方弹出**的那种」＋
+//   「**不能在回档操作之后立刻弹吗，检测 tarven**」；对"怎么收"没明确选 ⇒ 按**挂着直到处理**（带 ✕）做。
+//   判据五条（每条都带反证）：
+//     ① 它挂在**常驻挂载**的那个组件里（侧边栏 `MemoryArchiveButton` —— 面板关着也弹得出来），
+//        ⛔ 不是挂在只在打开时才挂的 `ArchivePanel` 里；
+//     ② 那条**唯一的**长连 = `EventSource(HOST_API_BASE + '/playthrough/rp-memory/floors/events')`，
+//        ⛔ 不挂定时器、⛔ 不轮询（重连由 EventSource 自己管）；只认 `type`，不认的**安静忽略**；
+//        清理函数里有 `close()`（⛔ 不留野长连）；
+//     ③ 有那条待处理 ⇒ 浮层在（`data-dma="floor-popup"`）＋ **三颗按钮**（★ 2026-09-25 起是
+//        「对齐楼层」/「只对齐楼号」/「不处理」，⛔ 不再有「把档案退回」那颗）＋ ✕；**没有 ⇒ 什么都不渲染**；
+//        ⛔ 那句说明**整段不渲染**（用户点名不要）；
+//     ④ 那次"从上方滑下来"是**CSS 里的两条 transition**（常态在屏幕外、`data-shown="1"` 才下来），
+//        ⛔ 不用定时器/自动消失；⛔ 不许挡住输入框（顶部 + 收窄宽度）；
+//     ⑤ 三颗按钮与档顶那条横幅**同一份**（`FloorPendingActions` ＋ `floorActionRun`，⛔ 不各写一份实现）。
+//   ★ 反证是**真跑出来的**：把浮层那一句从源码里挖掉、把改过的源码**重新装一遍**再渲染 ⇒ 本相必红。
+//   ★★ 2026-09-25 补：**✕ 收得掉**那一相（用户实测「档案回退弹窗 ✕ 不掉」）也在这一族里 ——
+//     真点那颗 ✕、真读回父组件的 state；反证是"把成功后收那一脚挖掉 ⇒ 本地那条还在"（见那一节的块头注释）。
+// =======================================================================
+
+/** ★ 反证用：把一份**改过的** client.js 重新装一遍（同一个假 react），拿回侧边栏那个席位组件。
+ *  ⚠️ 只在自检里用；⛔ 不改真源码、⛔ 不落盘。 */
+function reloadClientComp(code) {
+  const win2 = { __ModuleLoader__: { load(def) { win2.__def = def } } }
+  const saved = globalThis.window
+  globalThis.window = win2
+  try {
+    ;(0, eval)(code)
+    const mod2 = win2.__def.factory(() => fakeReact)
+    const list = []
+    const ctx2 = {
+      get() { return fakeSessions },
+      slots: { inject(name, fn) { return fn() }, register(meta, comp) { list.push({ meta, comp }); return comp } },
+    }
+    mod2.apply(ctx2)
+    return list[0].comp
+  } finally { globalThis.window = saved }
+}
+
+await check('★★ 记忆库·顶部弹窗（2026-09-24）：常驻挂载 · 唯一长连（无定时器）· 有 pending 才弹（三颗 + ✕）· 没有不渲染；反证：把浮层挖掉必红', () => {
+  // ① 挂在常驻那个组件里（不是面板里）
+  const btnBody = outlineFnBody(src, 'MemoryArchiveButton')
+  assert.ok(btnBody, '缺 MemoryArchiveButton（侧边栏那颗按钮）')
+  assert.ok(btnBody.includes('e(FloorPopup, { pending: floorPopup'), '浮层没挂在**常驻挂载**的那个组件里（面板关着就弹不出来）')
+  const panelBody = outlineFnBody(src, 'ArchivePanel')
+  assert.equal(panelBody.includes('e(FloorPopup,'), false, '浮层被挂进了面板（面板关着时弹不出来）')
+  const bannerBody = outlineFnBody(src, 'RpMemoryFlow')
+  assert.ok(bannerBody, '缺 RpMemoryFlow（档顶那条横幅那一块）')
+  // ② 那条唯一的长连
+  assert.ok(btnBody.includes("new EventSource(HOST_API_BASE + '/playthrough/rp-memory/floors/events')"),
+    '没连宿主那条 SSE（回档那一刻推过来的那一帧收不到）')
+  assert.equal(/setInterval|setTimeout/.test(btnBody), false, '常驻组件里出现了定时器/轮询（长连的重连由 EventSource 自己管）')
+  assert.ok(btnBody.includes("if (type !== 'fork' && type !== 'hello') return"), '不认的帧类型没有安静忽略（前向兼容会崩）')
+  assert.ok(/es\.onmessage = onFrame/.test(btnBody), '没有接默认 message 帧')
+  assert.ok(btnBody.includes("typeof es.close === 'function'") && btnBody.includes('es.close()'),
+    '清理路径里没有 close()（万一真卸载会留一条野长连）')
+  assert.ok(btnBody.includes('typeof EventSource !== \'function\''), '没有"环境没有 EventSource 就安静降级"那一支')
+  // ⑤ 与档顶那条横幅共用同一份（实现与画法都只有一处）
+  const actionsBody = outlineFnBody(src, 'FloorPendingActions')
+  assert.ok(actionsBody, '缺共用的那套画法 FloorPendingActions')
+  assert.ok(bannerBody.includes('e(FloorPendingActions, {'), '档顶那条横幅没调共用的那套（两处各画一份迟早漂）')
+  assert.ok(btnBody.includes('e(FloorPendingActions, {') || outlineFnBody(src, 'FloorPopup').includes('e(FloorPendingActions, {'),
+    '浮层没调共用的那套')
+  const runBody = outlineFnBody(src, 'floorActionRun')
+  assert.ok(runBody, '缺共用的那份动作实现 floorActionRun')
+  assert.ok((src.match(/floorActionRun\(/g) || []).length >= 4, '三颗动作没有走共用的那份实现（panel 三处 + 浮层一处 + 定义）')
+  // ④ 从上方滑下来的那两条 transition（CSS），且 ⛔ 不挡输入框
+  assert.ok(src.includes('.dma-floor-popup {') && src.includes('.dma-floor-popup[data-shown="1"]'),
+    '缺浮层那两条 CSS 态（进/出各一条 transition：translateY(-100%) → 0）')
+  assert.ok(src.includes('transform: translateX(-50%) translateY(-100%)'), '常态没停在屏幕外（那就不是"从上方滑下来"）')
+  assert.ok(src.includes('max-width: min(560px, 92vw)'), '浮层没收窄宽度（会挡住输入框）')
+  assert.ok(/prefers-reduced-motion/.test(src), '缺省电模式那一条（不做动画时得能当场收掉）')
+
+  // ── 渲染断言：有那条待处理 ⇒ 浮层在（三颗按钮 + ✕ + 那句逐字标题）
+  const T1 = '2026-09-24T09:00:00.000Z'
+  const pending = {
+    targetKey: 'qa-1-1-aaa\u0000variant-qa-1-1-aaa',
+    fromNodeId: 'qa-3-3-ccc', fromSeq: 3,
+    toNodeId: 'qa-1-1-aaa', toSeq: 1,
+    archiveNodeId: 'qa-3-3-ccc', archiveSeq: 3,
+    targetNodeId: 'qa-1-1-aaa', targetSeq: 1, why: 'back', source: 'self', at: T1,
+  }
+  /** ★ 2026-09-25：那一帧里**另外**带的三个序号（`pendingOrdinals` —— 与那条账分开；序号与楼号故意错开）。 */
+  const pendingOrdinals = { from: 4, to: 1, archive: 4 }
+  try {
+    fakeReact.__setPreset({ MemoryArchiveButton: { 0: false, 1: pending, 2: pendingOrdinals } })
+    const tree = fakeReact.createElement(comp, { wide: true })
+    const s = JSON.stringify(tree)
+    const text = visibleText(tree)
+    assert.ok(s.includes('"data-dma":"floor-popup"') && s.includes('"data-shown"'),
+      '有那条待处理却没弹出浮层（floor-popup）')
+    assert.ok(s.includes('dma-floor-popup-settle') && text.includes('对齐楼层'), '浮层缺「对齐楼层」')
+    assert.ok(s.includes('dma-floor-popup-number') && text.includes('只对齐楼号'), '浮层缺「只对齐楼号」')
+    assert.ok(s.includes('dma-floor-popup-ack') && text.includes('不处理'), '浮层缺「不处理」')
+    assert.ok(s.includes('dma-floor-popup-x') && text.includes('✕'), '浮层缺那颗 ✕（用户口径：挂着直到处理，带 ✕）')
+    assert.equal(s.includes('dma-floor-popup-restore'), false,
+      '浮层那一排里还留着「把档案退回」那颗（用户口径：只要这三件；退回那条路在楼层清单每一行）')
+    // ★★ 2026-09-25（用户点名）：「（浮层里那句说明整段去掉）」⇒ 那一行**不渲染**，⛔ 也不换成别的说明。
+    assert.equal(text.includes('都不影响会话'), false,
+      '浮层里那句说明还在（用户点名整段不渲染：「把档案退回」动那 5 份笔记的正文…⛔ 都不影响会话）')
+    assert.equal(text.includes('一个字节都不写正文'), false, '浮层里那句说明换了张皮又回来了')
+    assert.ok(s.includes('dma-floor-popup-x') && text.includes('✕'), '浮层缺那颗 ✕（用户口径：挂着直到处理，带 ✕）')
+    // ★ 2026-09-25：标题里的三个位置换成**序号**口径（宿主给的 `fromOrdinal` / `toOrdinal` / `archiveOrdinal`；
+    //   ⛔ 不再显示 Tavern 那个楼号 —— 夹具里序号与楼号故意错开，所以"还写着第 3 楼"必红）。
+    assert.ok(text.includes('剧情刚退回去了：序号 4 → 序号 1（档案停在序号 4）'),
+      '浮层标题不是序号口径（⚠ 剧情刚退回去了：序号 X → 序号 Y（档案停在序号 Z））: ' + text.slice(0, 200).replace(/\s+/g, ' '))
+    assert.equal(/第 \d+ 楼/.test(text), false, '浮层标题里还出现 Tavern 那个楼号（用户口径：只标序号）')
+    assert.equal(/setTimeout|setInterval/.test(JSON.stringify(tree)), false, '浮层里带了定时器（⛔ 不许"几秒自动消失"）')
+    // 没有那条待处理 ⇒ **什么都不渲染**（⛔ 不占位置、⛔ 不渲染空壳）
+    fakeReact.__setPreset({ MemoryArchiveButton: { 0: false, 1: null, 2: null } })
+    const clean = JSON.stringify(fakeReact.createElement(comp, { wide: true }))
+    assert.equal(clean.includes('floor-popup'), false, '没有待处理却还渲染了浮层（空壳/占位置）')
+    // ★ 反证（真跑出来的）：把浮层那一句**挖掉**、把改过的源码重新装一遍 ⇒ 上面"有就弹"那一条必红
+    const dugSrc = src.replace('floorPopup === null ? null : e(FloorPopup, {', 'true ? null : e(FloorPopup, {')
+    assert.equal(dugSrc.includes('floorPopup === null ? null : e(FloorPopup, {'), false, '反证失败：那一句没被挖掉')
+    const dugComp = reloadClientComp(dugSrc)
+    fakeReact.__setPreset({ MemoryArchiveButton: { 0: false, 1: pending, 2: pendingOrdinals } })
+    const dugTree = fakeReact.createElement(dugComp, { wide: true })
+    assert.equal(JSON.stringify(dugTree).includes('"data-dma":"floor-popup"'), false,
+      '反证失败：把浮层那一段挖掉之后**还能**渲染出 floor-popup（说明上面那条判据是橡皮章）')
+  } finally { fakeReact.__setPreset(null) }
+})
+
+// =======================================================================
+// ★★ 2026-09-25：**用户实测的那个 bug —— 「档案回退弹窗 ✕ 不掉」**
+//
+//   根因（读出来的）：✕（与「不处理」同一脚）原来**只清宿主那条 `pending`**（`POST …/pending/ack`）——
+//   宿主那边清了、**父组件里那个 `floorPopup` state 从来没被碰过**（浮层是照**最后一帧 SSE** 渲染的）
+//   ⇒ 本地那条**原地不动**，要等下一帧 SSE（hello / fork）才被替掉 ⇒ 用户看到的就是"✕ 不掉"。
+//
+//   修法（fail-loud，⛔ 不许"先把浮层藏起来再说"）：`floorActionRun` 的 `done` 那一脚**只在请求成功之后**跑
+//   （浮层据此**当场**收掉自己，见 `FloorPopup` 的 `dismiss`）；**失败 ⇒ ⛔ 不收**（浮层该还在，错误如实画在它里面）。
+//
+//   判据（每条都带反证；这里**真跑**：假 react 把组件当普通函数调一次、真点那颗 ✕、真读回 state）：
+//     ① 相：✕ ⇒ 宿主回 200 ⇒ 父组件那条 `floorPopup` **当场变 `null`**（＝浮层收掉了）；
+//     ② 反证：把"成功后收"那一脚挖掉（`succeeded &&` ⇒ `false &&`）⇒ **同一个判据必红**
+//        （本地那条还在 —— 那正是用户看到的"✕ 不掉"）；
+//     ③ 失败：宿主回 409 ⇒ **不收**（本地那条不是 `null`）＋ 那一脚的回执是 `err`（⛔ 不静默失败）。
+// =======================================================================
+await check('★★ 记忆库·浮层 ✕ 收得掉（2026-09-25 修 bug）：成功 ⇒ 本地那条当场清掉；失败 ⇒ 浮层还在（fail-loud）；反证：挖掉"成功后收"那一脚，同一判据必红', async () => {
+  const T1 = '2026-09-25T09:00:00.000Z'
+  const pending = {
+    targetKey: 'qa-1-1-aaa\u0000variant-qa-1-1-aaa',
+    fromNodeId: 'qa-3-3-ccc', fromSeq: 3, toNodeId: 'qa-1-1-aaa', toSeq: 1,
+    archiveNodeId: 'qa-3-3-ccc', archiveSeq: 3,
+    targetNodeId: 'qa-1-1-aaa', targetSeq: 1, why: 'back', source: 'self', at: T1,
+  }
+  const pendingOrdinals = { from: 4, to: 1, archive: 4 }
+  const savedFetch = globalThis.fetch
+  const calls = []
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+  /** 真点一下浮层里那颗 ✕，等异步那条链跑完，回读**父组件**（MemoryArchiveButton）的 #1 state。
+   *  ⚠️ 用 `__begin` + 直接调组件（⛔ 不走 `createElement`）：那样 hooks 上下文留在父组件上，
+   *     `setFloorPopup(null)` 写进的就是 `__peek().states[1]`（假 react 不重渲染，只能这么读）。
+   *  ⚠️ 假 react 的 setState **不按组件分隔**（写的是"当前"那一份 states）⇒ 这里读到的 #1 也可能是
+   *     **浮层自己那条回执**（msg 恰好也是 #1）。所以三条断言只说"是不是 `null`"与"回执是不是 err"。 */
+  async function clickX(component) {
+    fakeReact.__setPreset({ MemoryArchiveButton: { 0: false, 1: pending, 2: pendingOrdinals } })
+    fakeReact.__begin('MemoryArchiveButton')
+    const tree = component({ wide: true })
+    const x = collectNodes(tree, (n) => n.props && n.props.id === 'dma-floor-popup-x', [])
+    assert.equal(x.length, 1, '浮层里那颗 ✕ 找不到（或不止一颗）：实得 ' + x.length)
+    x[0].props.onClick()
+    await tick(); await tick()
+    return fakeReact.__peek().states[1]
+  }
+  try {
+    // ① 相：宿主回 200 ⇒ 本地那条被清掉（✕ 立刻就掉）
+    globalThis.fetch = async (url) => {
+      calls.push(String(url))
+      return {
+        ok: true, status: 200,
+        json: async () => ({ ok: true, changed: true, pending: null, message: '已「不处理」：那条提示收掉了' }),
+      }
+    }
+    const afterOk = await clickX(comp)
+    assert.ok(calls.some((u) => u.includes('/playthrough/rp-memory/floors/pending/ack')),
+      '✕ 没走 /floors/pending/ack（用户口径：✕ 与「不处理」是同一个动作）')
+    assert.equal(afterOk, null,
+      '✕ 点完（宿主 200）本地那条**还在** ⇒ 浮层收不掉（就是用户实测的那个 bug）：' + JSON.stringify(afterOk))
+
+    // ② 反证（真跑出来的）：把"成功后收"那一脚挖掉 ⇒ **本地那条还在**（浮层收不掉 = 用户实测的那个 bug）
+    //   —— 这正说明①那条判据咬的就是这一脚（不是橡皮章）。⚠️ 方向别写反：挖掉之后要断言"**还活着**"。
+    const dugSrc = src.replace("if (succeeded && typeof o.done === 'function') {", "if (false && typeof o.done === 'function') {")
+    assert.equal(dugSrc.includes("if (succeeded && typeof o.done === 'function') {"), false, '反证失败：那一脚没被挖掉')
+    const dugComp = reloadClientComp(dugSrc)
+    calls.length = 0
+    const afterDug = await clickX(dugComp)
+    assert.notEqual(afterDug, null,
+      '反证失败：把"成功后收"那一脚挖掉之后本地那条**却被清成 null** —— 说明①那条判据不是被这一脚咬住的（橡皮章）')
+
+    // ③ 失败：宿主回 409 ⇒ **不收**（浮层还在）＋ 那一脚的回执是 err（⛔ 失败也不静默）
+    globalThis.fetch = async (url) => {
+      calls.push(String(url))
+      return {
+        ok: false, status: 409,
+        json: async () => ({
+          ok: false,
+          error: { code: 'RP_MEMORY_FLOOR_PENDING_STALE', message: '这一条回档提示已经换成新的了（那次 fork 的落点变了）⇒ 刷新面板再点' },
+        }),
+      }
+    }
+    const afterErr = await clickX(comp)
+    assert.notEqual(afterErr, null, '宿主回 409（没办成）⇒ 浮层**不该**被收掉（⛔ 不许"提示没了但事情没办"）')
+    assert.equal(afterErr && afterErr.status, 'err', '失败时那一脚的回执不是 err（⛔ 成败都要如实）：' + JSON.stringify(afterErr))
+    assert.ok(afterErr && typeof afterErr.message === 'string' && afterErr.message !== '',
+      '失败时没有可画给人看的那句话（浮层里得如实显示）')
+  } finally {
+    globalThis.fetch = savedFetch
+    fakeReact.__setPreset(null)
+  }
+})
+
+// =======================================================================
+// ★★ 2026-09-26（用户原话，逐字）：「**不是不触发弹窗，是弹窗上点同步后，没有触发真回档**」
+//   ＋ 追问后用户**选定**的那一档：「**让「对齐楼层」顺手真回档**」（预览逐字：`[对齐楼层]` 点它＝
+//   **先把 5 份写回那一楼的样子，再把这个位置记成账**）。
+//
+//   ⇒ **弹窗（`FloorPopup`）那一颗**从"就地登记（只记账、⛔ 不动正文）"改成 **先真回档、再记账**：
+//     ① 目标 = 那条 pending 的 `target*`（与当初「把档案退回第 N 楼」那颗**同一个目标**）；
+//     ② 走**现成的那一个端点** `POST …/floors/restore` —— 它自己就把 `last` 锚到那一份并把 pending 清掉
+//        （`runRestore` 第③步）⇒ ⛔ **不再调 settle**（两脚会打架）；端点与请求体**逐字写在**那个具名回调
+//        `settle` 里（仓里"静态判据钉端点"的惯例）；
+//     ③ 回执**两件事都在**：写了哪几份/跳过/失败/被挡住（沿用现成 restore 那一份，含 `.bak-时间戳`、
+//        `按块合并`、`那一楼本来就没有这份`）＋ "这一脚同时把这个位置记成了账"；
+//     ④ **边界不许静默、⛔ 不许写成成功**：`targetNodeId === ''`（那一楼没有可退回的那一份）⇒ 不能假装
+//        回了档 —— 按**就地登记**收尾、回执如实说"只把位置记成账、正文没动"；被死区挡住（宿主回 **200**
+//        但 `blocked`、一个字节都没恢复、pending 也没清）⇒ **这一脚不算成功**：红字如实回执 ＋
+//        ⛔ **不收起浮层**（⛔ 不说成"已对齐"）。
+//   ★ 反证（**真跑出来的**）：把"先回档"那一脚**改回打 settle**（＝本单改之前的实现）⇒ ① 那条必红。
+//   ★ 回执怎么读回来：假 react **不重渲染**，而成功之后浮层会把自己收掉（`done: dismiss` ⇒ 那条 state
+//     被写 `null`）—— 所以这里把"当前 hooks 上下文"换成一个**记录探针**（`__begin` ＋ 给 `states[1]`
+//     挂个 setter）：组件那两下 `setState`（先设回执、再收）全程看得见。⛔ 不改源码、⛔ 不动组件语义。
+//   ★ ⛔ 本单没动的那几颗（都在这里钉住）：弹窗的「只对齐楼号」/「不处理」/✕、档顶横幅那三颗、
+//     常驻状态行那颗（**没有 pending 时那颗仍然是"就地登记"**）。
+// =======================================================================
+await check('★★ 记忆库·弹窗「对齐楼层」＝先真回档、再记账（2026-09-26）：端点+体逐字 · 回执两件事都在 · 边界两相（没有可退回的那一份 ⇒ 就地登记 / 被死区挡 ⇒ 红字且不清 pending）；反证：改回打 settle 必红', async () => {
+  // ── ⓪ 静态：那颗走的是 restore（端点 ＋ 请求体**逐字写在具名回调 `settle` 里**）
+  const popupBody = outlineFnBody(src, 'FloorPopup')
+  assert.ok(popupBody, '缺 FloorPopup（弹窗）')
+  const settleFn = outlineArrowBody(popupBody, 'const settle = () =>')
+  assert.ok(settleFn, '缺弹窗那颗「对齐楼层」的具名回调 settle')
+  assert.ok(settleFn.includes("apiPost(HOST_API_BASE + '/playthrough/rp-memory/floors/restore'"),
+    '「对齐楼层」没走 /floors/restore（那就还是"只记账、不动正文"的老语义 —— 正是用户说的"没有触发真回档"）')
+  assert.ok(settleFn.includes('{ nodeId: targetNodeId, variantId: targetVariantId })'),
+    '「对齐楼层」的请求体不是那条 pending 的 target（逐字要 `{ nodeId: targetNodeId, variantId: targetVariantId }`）')
+  assert.equal(/\bpath\b|\bdir\b|\bbase\b|sha256/.test(settleFn.slice(settleFn.indexOf('apiPost('), settleFn.indexOf('return data'))),
+    false, '那一脚把路径/目录/sha 塞进了请求（宿主只认 nodeId + variantId）')
+  assert.ok(settleFn.includes("const targetNodeId = typeof pending.targetNodeId === 'string' ? pending.targetNodeId : ''")
+    && settleFn.includes("const targetVariantId = typeof pending.targetVariantId === 'string' ? pending.targetVariantId : ''"),
+    '没从那条 pending 上取目标（⛔ 不许自己编一个目标）')
+  // 边界①：没有可退回的那一份 ⇒ 按**就地登记**收尾（settle · mode:'full' —— 「＝从前那颗的行为」）
+  const fbAt = settleFn.indexOf("if (targetNodeId === '') {")
+  assert.ok(fbAt >= 0, '缺"那一楼没有可退回的那一份"那条边界')
+  const fbSeg = settleFn.slice(fbAt, settleFn.indexOf('return', fbAt))
+  assert.ok(fbSeg.includes("'/playthrough/rp-memory/floors/pending/settle'"), '边界①没有按"就地登记"收尾')
+  assert.ok(fbSeg.includes("mode: 'full'"), '边界①的就地登记不是 mode:full')
+  assert.ok(fbSeg.includes('这一楼没有可退回的那一份'), '边界①的回执没说清"这一楼没有可退回的那一份"')
+  // 边界②：被死区挡住 ⇒ 那一脚**不算成功**（抛出去走 err ⇒ 红字 ＋ ⛔ 不收起浮层）
+  assert.ok(settleFn.includes("data.blocked !== null && data.blocked !== undefined && data.blocked !== ''"),
+    '没认宿主回执里的 `blocked`（被死区挡住那一相会被画成"成功"）')
+  assert.ok(settleFn.includes('throw blocked'), '被死区挡住时没有"这一脚不算成功"那一抛（浮层会被收掉、提示没了但事情没办）')
+  // ★ 用户口径：那颗的**悬停说明**要写清"先把那 5 份写回那一楼的样子，再把这个位置记成账"
+  assert.ok(popupBody.includes('先把那 5 份写回那一楼的样子，再把这个位置记成账'),
+    '弹窗那颗的悬停说明没写清新语义（会跟旁边的「只对齐楼号」读混）')
+  assert.ok(popupBody.includes('settleTitle: settleTitle'), '那颗的说明没传给共用的那套画法（画出来还是老口径那句）')
+  // ⛔ 按钮上的字没变（用户没让改字）；横幅/常驻状态行那两处那颗的默认说明也没被顶掉
+  const actionsBody = outlineFnBody(src, 'FloorPendingActions')
+  assert.ok(actionsBody.includes("}, '对齐楼层')"), '按钮上的字被改了（用户没让改字）')
+  assert.ok(actionsBody.includes('对齐楼层（就地登记）'), '横幅/常驻状态行那两处那颗的默认说明被顶掉了')
+  // ── ⓪b ⛔ 没动的那些：弹窗那两颗（只对齐楼号 / 不处理）与横幅、常驻状态行那两处照旧
+  assert.ok(popupBody.includes("Object.assign({ mode: 'number' }"), '弹窗那颗「只对齐楼号」被动过（本单一个字都不该动）')
+  assert.ok(popupBody.includes("apiPost(HOST_API_BASE + '/playthrough/rp-memory/floors/pending/ack', undefined, {})"),
+    '弹窗那颗「不处理」（与 ✕ 同一脚）被动过')
+  const rpBody = outlineFnBody(src, 'RpMemoryFlow')
+  const settlePendingFn = outlineArrowBody(rpBody, 'const settlePending = (key, where, mode) => ')
+  assert.ok(settlePendingFn.includes("apiPost(HOST_API_BASE + '/playthrough/rp-memory/floors/pending/settle'"),
+    '档顶横幅/常驻状态行那两颗「对齐」不再是"就地登记"了（本单只动弹窗这一颗）')
+  assert.ok(rpBody.includes("onSettle: () => settlePending(pendingKey, 'banner', 'full')"),
+    '横幅那颗「对齐楼层」的语义被动过（⛔ 本单只动弹窗那一颗）')
+  assert.ok(rpBody.includes("onClick: () => settlePending(pendingKey, 'state', 'full')"),
+    '常驻状态行那颗的语义被动过（⛔ 本单只动弹窗那一颗）')
+
+  // ── 真点那颗（探针把回执读回来）
+  const T1 = '2026-09-26T09:00:00.000Z'
+  const pending = {
+    targetKey: 'qa-1-1-aaa\u0000variant-1',
+    fromNodeId: 'qa-3-3-ccc', fromSeq: 3, toNodeId: 'qa-1-1-aaa', toSeq: 1,
+    archiveNodeId: 'qa-3-3-ccc', archiveSeq: 3,
+    targetNodeId: 'qa-1-1-aaa', targetVariantId: 'variant-1', targetSeq: 1,
+    why: 'back', source: 'self', at: T1,
+  }
+  const pendingOrdinals = { from: 4, to: 1, archive: 4 }
+  const savedFetch = globalThis.fetch
+  const calls = []
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+  /** 真点一下浮层里那颗「对齐楼层」，等异步那条链跑完；返回**这一脚设过的回执序列**。
+   *  ⚠️ 读法见上面块头那段：把"当前 hooks 上下文"换成记录探针（`states[1]` 上挂 setter）——
+   *     `setMsg`（先 busy、再回执）与"成功之后收掉自己"那一下（写 `null`）因此全都看得见。 */
+  async function clickSettle(component, pend) {
+    fakeReact.__setPreset({ MemoryArchiveButton: { 0: false, 1: pend || pending, 2: pendingOrdinals } })
+    fakeReact.__begin('MemoryArchiveButton')
+    const tree = component({ wide: true })
+    const btn = collectNodes(tree, (n) => n.props && n.props.id === 'dma-floor-popup-settle', [])
+    assert.equal(btn.length, 1, '浮层里那颗「对齐楼层」找不到（或不止一颗）：实得 ' + btn.length)
+    fakeReact.__begin('floor-receipt-probe')
+    const probe = fakeReact.__peek()
+    const seen = []
+    Object.defineProperty(probe.states, 1, {
+      configurable: true,
+      get() { return seen.length === 0 ? undefined : seen[seen.length - 1] },
+      set(v) { seen.push(v) },
+    })
+    calls.length = 0
+    btn[0].props.onClick()
+    await tick(); await tick()
+    return seen
+  }
+  const lastOf = (seen) => (seen.length === 0 ? undefined : seen[seen.length - 1])
+  /** 宿主 `…/floors/restore` 那一脚**成了**的回执（照真实形状：明细 ＋ `.bak` ＋ 按块合并 ＋ absent）。 */
+  const restoreOk = {
+    ok: true, base: 'playthrough', baseLabel: '周目目录', sharedHint: false,
+    nodeId: 'qa-1-1-aaa', variantId: 'variant-1', seq: 1,
+    restored: [{ name: 'notes.md', bytes: 120, backup: 'notes.md.bak-2026-09-26T09-00-00-000Z', created: false, merged: false }],
+    skipped: [
+      { name: 'index.md', reason: 'deadzone', merged: true, kept: [0], dropped: [], appended: [] },
+      { name: 'state.md', reason: 'absent-then' },
+    ],
+    failed: [], blocked: null, source: 'self', pre: null, pendingCleared: true,
+    message: '面板点了「回到这一楼」（第 1 楼 · variant-1）⇒ 已把笔记恢复到第 1 楼的样子（恢复 notes.md）；'
+      + '跳过/按块合并 index.md（死区那 1 段保留盘上现况、其余照快照回档）、state.md（那一楼本来就没有这份）；⛔ 预置那几份没动',
+  }
+  /** 被死区挡住那一相：宿主回 **200**，但一个字节都没恢复、`last` 留在原地、那条 pending **也没清**。 */
+  const restoreBlocked = {
+    ok: true, base: 'playthrough', baseLabel: '周目目录', sharedHint: false,
+    nodeId: 'qa-1-1-aaa', variantId: 'variant-1', seq: 1,
+    restored: [], skipped: [], failed: [], blocked: 'deadzones-unreadable',
+    pendingCleared: false, unchanged: true,
+    message: '面板点了「回到这一楼」（第 1 楼 · variant-1）⇒ ⚠ 死区数据读不出来（那几段的判据未知）'
+      + '⇒ 这次不敢恢复（怕碰死区里的内容），笔记保持原样',
+  }
+  /** 边界①那条路（就地登记）成了的回执：只动账，⛔ 一个字节正文都没写。 */
+  const settleOk = {
+    ok: true, changed: true, mode: 'full',
+    settled: { nodeId: 'qa-1-1-aaa', variantId: 'variant-1', seq: 1 },
+    beforeOrdinal: 4, settledOrdinal: 1, pending: null,
+    message: '当前记忆从【序号 4】改为【序号 1】',
+  }
+  const mockFetch = (payload) => async (url, init) => {
+    calls.push({ url: String(url), body: init && init.body ? String(init.body) : '' })
+    return { ok: true, status: 200, json: async () => payload }
+  }
+  try {
+    // ── ① 相：真点那颗 ⇒ 发出的**只有** restore（端点＋体逐字）；回执两件事都在；成功 ⇒ 把浮层收掉
+    globalThis.fetch = mockFetch(restoreOk)
+    const seenOk = await clickSettle(comp)
+    assert.equal(calls.length, 1, '那一脚该只发一个请求（两脚会打架）：' + JSON.stringify(calls.map((c) => c.url)))
+    assert.ok(calls[0].url.includes('/playthrough/rp-memory/floors/restore'),
+      '点「对齐楼层」发的不是 /floors/restore：' + calls[0].url)
+    assert.equal(calls.some((c) => c.url.includes('/floors/pending/settle')), false,
+      '还在调 settle（本单就是要它**只走 restore 那一脚**）')
+    assert.equal(calls[0].body, '{"nodeId":"qa-1-1-aaa","variantId":"variant-1"}',
+      '请求体不是那条 pending 的 target（逐字钉住）：' + calls[0].body)
+    const okMsg = seenOk.find((m) => m && m.status === 'ok')
+    assert.ok(okMsg, '这一脚没有落一条"成了"的回执：' + JSON.stringify(seenOk))
+    // ① 宿主那一脚的执行 —— 写了哪几份
+    assert.ok(okMsg.message.includes('已把笔记恢复到') && okMsg.message.includes('notes.md'),
+      '回执没说"写了哪几份"：' + okMsg.message)
+    // ② 这一脚同时把这个位置记成了账
+    assert.ok(okMsg.message.includes('记成了账'), '回执里没有"这一脚同时把这个位置记成了账"那一句：' + okMsg.message)
+    assert.ok(okMsg.detail && Array.isArray(okMsg.detail.restored) && okMsg.detail.restored.length === 1,
+      '回执没带上宿主那一脚的明细（.bak / 按块合并 / absent 那几句就没处画）：' + JSON.stringify(okMsg.detail))
+    assert.equal(lastOf(seenOk), null, '成功之后浮层该**当场收掉**（那条 state 被写 null）—— 那是"这一脚成了"的判据')
+    // 画出来的那一份：明细与"记成了账"都在版面上（与「回到这一楼」共用同一份画法）
+    fakeReact.__setPreset({ MemoryArchiveButton: { 0: false, 1: pending, 2: pendingOrdinals }, FloorPopup: { 1: okMsg } })
+    const okText = visibleText(fakeReact.createElement(comp, { wide: true }))
+    assert.ok(okText.includes('记成了账'), '回执那句话没画出来')
+    assert.ok(okText.includes('已写回：notes.md（原样备份成 notes.md.bak-2026-09-26T09-00-00-000Z）'),
+      '没把"哪几份写回、原件备份成什么（.bak-时间戳）"照 restore 的既有口径画出来：' + okText.slice(0, 400).replace(/\s+/g, ' '))
+    assert.ok(okText.includes('跳过：index.md（死区（作者预置）：按块合并 · 死区那几段保留盘上现况、其余照快照回档）、state.md（那一楼本来就没有这份）'),
+      '没把"按块合并 / 那一楼本来就没有这份"那几句画出来：' + okText.slice(0, 400).replace(/\s+/g, ' '))
+
+    // ── ② 反证（真跑出来的）：把"先回档"那一脚**改回打 settle**（＝本单改之前的实现）⇒ ① 那条必红
+    const dugSrc = src.replace('const settle = () => {',
+      'const settle = () => { return runAction({ request: () => apiPost(HOST_API_BASE + '
+      + "'/playthrough/rp-memory/floors/pending/settle', undefined, Object.assign({ mode: 'full' }, "
+      + "pendingKey === '' ? {} : { targetKey: pendingKey })), ok: (data) => ({ status: 'ok', message: '（反证用的老口径）' }), "
+      + 'err: (message) => ({ status: \'err\', message: message }) }) ')
+    assert.notEqual(dugSrc, src, '反证失败：那一脚没被改掉（"改回打 settle"这个动作本身没生效）')
+    const dugComp = reloadClientComp(dugSrc)
+    const dugSrcActions = outlineFnBody(dugSrc, 'FloorPopup')
+    assert.ok(outlineArrowBody(dugSrcActions, 'const settle = () =>').includes('/floors/pending/settle'),
+      '反证失败：改过的源码里那颗没回到 settle（挖法本身没生效）')
+    globalThis.fetch = mockFetch(settleOk)
+    await clickSettle(dugComp)
+    assert.equal(calls.some((c) => c.url.includes('/playthrough/rp-memory/floors/restore')), false,
+      '反证失败：改回打 settle 之后**还**发出了 /floors/restore —— 说明①那条判据不是被这一脚咬住的（橡皮章）')
+    assert.ok(calls.some((c) => c.url.includes('/playthrough/rp-memory/floors/pending/settle')),
+      '反证失败：改回打 settle 之后一个 settle 请求都没发（那一步没真挖到）')
+
+    // ── ③ 边界①：`targetNodeId === ''`（那一楼**没有可退回的那一份**）⇒ 走**就地登记**那条路：
+    //    ⛔ 不假装回了档 —— 回执如实说"这一楼没有可退回的那一份 ⇒ 只把位置记成账、正文没动"
+    globalThis.fetch = mockFetch(settleOk)
+    const noTarget = Object.assign({}, pending, { targetNodeId: '', targetVariantId: '', targetSeq: null })
+    const seenNT = await clickSettle(comp, noTarget)
+    assert.equal(calls.length, 1, '边界①该只发一个请求：' + JSON.stringify(calls.map((c) => c.url)))
+    assert.equal(calls.some((c) => c.url.includes('/floors/restore')), false,
+      '那一楼没有可退回的那一份却去打了 restore（凭空编一个目标 —— 只会 404）')
+    assert.ok(calls[0].url.includes('/playthrough/rp-memory/floors/pending/settle'),
+      '没有可退回的那一份时没走"就地登记"那条路：' + calls[0].url)
+    assert.ok(calls[0].body.includes('"mode":"full"'), '就地登记那一脚没带 mode:full：' + calls[0].body)
+    const ntMsg = seenNT.find((m) => m && m.status === 'ok')
+    assert.ok(ntMsg, '就地登记那条路没有落回执：' + JSON.stringify(seenNT))
+    assert.ok(ntMsg.message.includes('这一楼没有可退回的那一份') && ntMsg.message.includes('只把位置记成账、正文没动'),
+      '回执没说清"只记账、正文没动"：' + ntMsg.message)
+    assert.equal(lastOf(seenNT), null, '就地登记成了 ⇒ 浮层该收掉（＝从前那颗的行为）')
+
+    // ── ④ 边界②：被死区挡住（宿主回 200 但 `blocked`、一个字节都没恢复、pending 也没清）
+    //    ⇒ **这一脚不算成功**：红字如实回执 ＋ ⛔ 不收起浮层（⛔ 不说成"已对齐"）
+    globalThis.fetch = mockFetch(restoreBlocked)
+    const seenBlocked = await clickSettle(comp)
+    assert.ok(calls.length === 1 && calls[0].url.includes('/floors/restore'), '被挡住那一相走的也必须是 restore 那一脚')
+    const blkMsg = lastOf(seenBlocked)
+    assert.ok(blkMsg && blkMsg.status === 'err', '被死区挡住却画成了成功（红字在哪）：' + JSON.stringify(blkMsg))
+    assert.ok(typeof blkMsg.message === 'string' && blkMsg.message.includes('这次不敢恢复'),
+      '被挡住时没把"为什么没动"如实说清：' + String(blkMsg.message))
+    assert.equal(blkMsg.message.includes('记成了账'), false,
+      '一个字节都没恢复、那条 pending 也没清，却说"记成了账"（⛔ 不许把被挡住写成成功）')
+    assert.notEqual(lastOf(seenBlocked), null,
+      '被挡住时浮层**不该**被收掉（⛔ 不许"提示没了但事情没办"）—— 也不该去清宿主那条 pending')
+    assert.equal(calls.some((c) => c.url.includes('/floors/pending/ack')), false,
+      '被挡住时客户端自己去清了那条 pending（⛔ 那一脚没做成，提示该留着）')
+  } finally {
+    globalThis.fetch = savedFetch
+    fakeReact.__setPreset(null)
+  }
+})
+
+await check('★ 收纳升级（2026-09-26）：RP 记忆 notes.md 过保养线 ⇒ 行头亮「⚠ 超保养线」徽标（字节近似 6000×3，精确字数在宿主注入那路）；反证：挖掉字节判据 ⇒ 必红', () => {
+  const judge = (s) => s.includes("'data-notes-over': '1'")
+    && s.includes('f.bytes >= 6000 * 3') && s.includes('⚠ 超保养线')
+    && s.includes('最早场记压成一行')
+  assert.ok(judge(src), 'notes.md 超保养线徽标没找到（源码里缺徽标行/判据/文案）')
+  const cut = src.split('f.bytes >= 6000 * 3').join('')
+  assert.equal(judge(cut), false, '反证失败：挖掉字节判据后 judge 仍命中（判据没咬住那一行）')
 })
 
 console.log('== 总结：' + pass + ' 通过 / ' + fails.length + ' 失败 ==')

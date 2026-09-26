@@ -11,7 +11,7 @@ DSH 的[上下文压缩](https://github.com/deepseek-ai/deepseek-harness)（`com
 
 配套的两个独立插件（都是**可选**的，本仓库**不含**它们的代码）：
 [`pmp-dsh-tavern`](https://github.com/Player-MINEPIG/dsh-tavern)（角色卡 / 世界书 / 周目 / ST 预设）与
-[`dsh-anima-rag`](https://github.com/vv5v5/dsh-anima-rag)（向量 + BM25 检索、回响、向量面板那半边）。
+[`dsh-anima-rag`](https://github.com/vv5v5/dsh-anima-rag)（向量检索、语义回响、向量面板那半边）。★ 2026-09-26 起 BM25 支线已退役（摘除）；`<memoryEcho>` 那一格由 anima 的语义命中装。
 
 ---
 
@@ -19,7 +19,7 @@ DSH 的[上下文压缩](https://github.com/deepseek-ai/deepseek-harness)（`com
 
 | 能力 | 状态 |
 |---|---|
-| **记忆库面板**：摘要 / 原文 / 剧情大纲 / **向量** 四档 + 设置 | ✅ |
+| **记忆库面板**：摘要 / 原文 / RP 记忆 / 向量 / 压缩 五档 + 设置 | ✅ |
 | **提示词查看器**：每次模型请求**真正发出**的全文（system 段地图、段级偏移、点开看该段正文、消息流） | ✅ |
 | **剧情笔记写入**：`memory_write` 工具，写进本会话周目的 `.roleplay-memory/`（⛔ 只写周目目录） | ✅ |
 | **预部署资料**：把要预置的文件放进**工作区根** `.roleplay-memory/` ⇒ 新周目开局就**读得到**（只读、所有周目共享；见下） | ✅ |
@@ -68,8 +68,8 @@ node <profile>/node_modules/dsh-memory-archive/preset/install.mjs --apply  # 真
 | 功能 | 依赖 |
 |---|---|
 | 记忆库（会话模式）/ 提示词查看器 / 工具与注入 | **零依赖** —— 原版 DSH 纯净环境即可用 |
-| 工作区模式、剧情笔记目录、剧情大纲、向量页签的体检行 | 需要 [`pmp-dsh-tavern`](https://github.com/Player-MINEPIG/dsh-tavern)（**可选**，未装时相关入口置灰并说明原因） |
-| 检索注入（`anima:memory`）、回响、向量页签的动作 | 需要 [`dsh-anima-rag`](https://github.com/vv5v5/dsh-anima-rag)（**可选**） |
+| 工作区模式、剧情笔记目录、RP 记忆档、向量页签的体检行 | 需要 [`pmp-dsh-tavern`](https://github.com/Player-MINEPIG/dsh-tavern)（**可选**，未装时相关入口置灰并说明原因） |
+| 检索注入（`anima:memory`）、`<memoryEcho>` 回响、向量页签的动作 | 需要 [`dsh-anima-rag`](https://github.com/vv5v5/dsh-anima-rag)（**可选**） |
 
 两者在 `package.json` 里都是 **optional peer**，不会被强制安装。
 
@@ -98,8 +98,13 @@ node <profile>/node_modules/dsh-memory-archive/preset/install.mjs --apply  # 真
 
 - **摘要** —— 按楼序拼接成长文，从头读到尾；
 - **原文** —— 按需懒加载：每条的 `surface` 如实标记（`current` / **`shadowed`** / `log-only`），未发给模型的楼层如实标注；
-- **剧情大纲** —— 本会话周目 `.roleplay-memory/` 里的笔记（`index.md` / `state.md` / `characters.md` / `world.md` …），**内容需手动确认才展开**；展开后**两处落点各一行**（本会话周目目录 / 跨周目共用那份），各自标「在 · N 份」或「还没有」，并各带一个按钮：`打开文件夹` / `创建并打开`（周目目录还没建 ⇒ 先建再开）/ `打开工作区根`（共用那份还没建 ⇒ 打开工作区根让你自己放，⛔ 我们不替社区预设建目录）；
-- **向量** —— 本库（`dsh-memory`）的体检行 + 两行库（向量 / BM25，各带 `⚠缺失` / 重建 / 删除）+ 一个「参与检索」开关；动作走一张**请求单**，由 `dsh-anima-rag` 在该周目会话的下一轮开始前执行，回执写回来（`lib/vector-panel.js`）；
+- **RP 记忆** —— 本会话周目 `.roleplay-memory/` 里的笔记（`index.md` / `state.md` / `characters.md` / `world.md` …），**内容需手动确认才展开**；展开后**两处落点各一行**（本会话周目目录 / 跨周目共用那份），各自标「在 · N 份」或「还没有」，并各带一个按钮：`打开文件夹` / `创建并打开`（周目目录还没建 ⇒ 先建再开）/ `打开工作区根`（共用那份还没建 ⇒ 打开工作区根让你自己放，⛔ 我们不替社区预设建目录）。
+  另有一张**楼层清单**：楼层号是**插件自编的序号**（按各条的记录时间升序编号，**最大＝最新**；⛔ 面板不再显示 Tavern 的楼号）。
+  清单默认只列**最近 10 条**（序号从大到小）；**当前剧情那一行与档案指针那一行永远可见**（排在 10 条之外也照画，回档完要找得到），
+  中间省略的用**一行**「…（省略 N 条）」表示，另有一颗「显示其余 N 条」（点开全量、再点收起）。
+  每一行有「**看改动 ▸**」：点开**就地展开**它与**时间上紧随其前那一条**的**逐份真 diff**（增/删行带上下文；
+  死区那几份如实标「按块合并」）—— ⛔ 不是"改了哪几份"那句话；要看就看真正变了的内容。
+- **向量** —— 本库（`dsh-memory`）的体检行 + 一行库（向量，带 `⚠缺失` / 重建 / 删除）+ 「最近检索」行（读侧最近一次到底跑成没有）+ 「BM25 已退役」那一行（★ 2026-09-26 摘除，如实告知）+ 一个「参与检索」开关；动作走一张**请求单**，由 `dsh-anima-rag` 在该周目会话的下一轮开始前执行，回执写回来（`lib/vector-panel.js`）；
 - **压缩** —— **自动压缩触发阈值控制面板**（2026-09-21；会话模式也与「会话事件」并列，因为它读的是本会话的实时数，不依赖 Tavern 归档）。三块：**实时读数**（每 4 秒现读宿主，面板关掉就停）——
   主行「当前 42%」= **DSH 自带的那个上下文百分比**（`contextPressure` 投影，prompt 侧压力，不含输出 token）；
   副行「触发判定 47%（含输出 token）」= **真正被拿去比阈值的那个数**（`tokenMeter.measure(session).totalTokens`）；
@@ -158,7 +163,8 @@ node <profile>/node_modules/dsh-memory-archive/preset/install.mjs --apply  # 真
 密钥**只在本机**：不进 git、不进日志、不经任何响应体回显（宿主只回 `keySet` 与末 4 位提示）。
 
 主要键：`rootMode` · `root` · `retrieval{url,model,key,rerankUrl,rerankModel,rerankKey,chatEnabled}` · `prompts{compaction,placeholder,compactionJailbreak}`
-· `keepFirstRound` · `echo` · `lastFloors` · `memoryWrite` · `phiAsMessage` · `autoCollect` · `summarize` · `v3`。
+· `keepFirstRound` · `lastFloors` · `memoryWrite` · `phiAsMessage` · `autoCollect` · `summarize` · `v3`。
+（★ 2026-09-26：`echo` 段已退役 —— 旧配置里的它会被如实忽略，GET `/config` 会回一个 `echo.retired` 说明。）
 
 ---
 
@@ -196,7 +202,7 @@ node <profile>/node_modules/dsh-memory-archive/preset/install.mjs --apply  # 真
 | 4 | 「压缩指令」保存的是**文本** | 它由**预设目录里的**压缩后端读取（`mt-compaction-rp.js`，用 `_materialize-preset-modules.mjs` 铺盘） |
 | 5 | 状态不再有独立子系统 | 由周目笔记 `state.md` 承载，模型自己维护；⛔ 没有优先级更高的"状态工具" |
 | 6 | 向量库的写入动作要等一轮 | 面板点动作 = 写一张请求单，由 `dsh-anima-rag` 在**下一次装配**执行（面板会显示进度与回执） |
-| 7 | **未归入周目的会话什么都拿不到** | 口径如此（⛔ 不继承上一轮的绑定）：笔记路径、最近几楼、回响、检索、最近总结全停，`memory_write` 报可读错。**先在 Tavern 里给它开/选一个周目**（经 Tavern「与 X 新开周目」开的会话从一开始就有周目）。顶栏与「向量」档都会如实标出来 |
+| 7 | **未归入周目的会话什么都拿不到** | 口径如此（⛔ 不继承上一轮的绑定）：笔记路径、最近几楼、语义检索与回响、最近总结全停，`memory_write` 报可读错。**先在 Tavern 里给它开/选一个周目**（经 Tavern「与 X 新开周目」开的会话从一开始就有周目）。顶栏与「向量」档都会如实标出来 |
 
 ---
 

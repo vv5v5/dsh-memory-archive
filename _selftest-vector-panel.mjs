@@ -2,7 +2,7 @@
  * _selftest-vector-panel.mjs —— 「向量」页签（lib/vector-panel.js + lib/client.js 的那一档）的自检台。
  *
  * 覆盖：
- *   A) 常量逐字：四个动作名 / 中文短名 / 三张文件名 —— 对真模块导出、**并**对 anima 侧
+ *   A) 常量逐字：三个动作名 / 中文短名 / 三张文件名 —— 对真模块导出、**并**对 anima 侧
  *      `dsh-anima-rag/lib/panel-request.js` 的源码逐字交叉比对（跨包不能共享模块 ⇒ 只能靠这条盯漂移）。
  *   B) makeRequest 的白名单：认识的四个才造单子；`enable`、大小写变体、空串、非字符串一律 null。
  *   C) readVectorState 的容错与"现算"：文件缺失/坏 JSON/非对象快照 ⇒ 不抛且 info=null；
@@ -144,7 +144,7 @@ const FROZEN = {
   VECTOR_INFO_FILE: 'vector-info.json',
   PANEL_REMOVED_PREFIX: 'removed-',
 }
-check('A1 四个动作名 + 中文短名 + 三张文件名 + removed 前缀 逐字（与冻结契约一致）', constantsOk(mod, FROZEN),
+check('A1 三个动作名 + 中文短名 + 三张文件名 + removed 前缀 逐字（与冻结契约一致）', constantsOk(mod, FROZEN),
   JSON.stringify({ a: mod.PANEL_ACTIONS, f: mod.PANEL_REQUEST_FILE }))
 // ★反证：把白名单里任一条改一个字（模拟"契约漂了"）⇒ 判据必须红
 {
@@ -162,8 +162,8 @@ check('A1 四个动作名 + 中文短名 + 三张文件名 + removed 前缀 逐�
     console.log(`SKIP A2 anima 侧 panel-request.js 不在（${animaRoot}）—— 跨包逐字比对这一步没跑`)
   } else {
     const aSrc = readFileSync(animaFile, 'utf8')
-    const pick = (name) => {
-      const m = aSrc.match(new RegExp(name + "\\s*=\\s*(\\[[^\\]]*\\]|\\{[\\s\\S]*?\\n\\})"))
+    const pick = (name, source = aSrc) => {
+      const m = source.match(new RegExp(name + "\\s*=\\s*(\\[[^\\]]*\\]|\\{[\\s\\S]*?\\n\\})"))
       return m ? m[1] : null
     }
     // 归一：只比"内容与顺序"，把空白、引号风格（单/双）与**尾逗号**统一掉
@@ -329,7 +329,11 @@ mkdirSync(ANIMA, { recursive: true })
   check('C6 bm25Root 是空串 ⇒ bm25 {exists:false, bytes:null}（⛔ 不是 null——快照明明在）',
     st.live.bm25 !== null && st.live.bm25.exists === false && st.live.bm25.bytes === null,
     JSON.stringify(st.live))
-  check('C6 同一张快照里给全的 vectorRoot 照常 stat（互不连坐）', st.live.vector !== null && st.live.vector.exists === true)
+  // ★反证：把根填回来（快照其余字段一字不动）⇒ 同一张快照的形状必须给出 exists:true —— 两种读法不同答案
+  writeFileSync(join(ANIMA, 'vector-info.json'), JSON.stringify({ at: Date.now(), collectionId: 'dsh-memory', dataRoots: { vectorRoot: VROOT } }), 'utf8')
+  const stFill = mod.readVectorState({ homeDir: HOME })
+  check('C6 ★反证（把 vectorRoot 填回来 ⇒ 同一张快照给出 exists:true——上一条不是恒真）',
+    stFill.live.vector !== null && stFill.live.vector.exists === true)
   writeFileSync(join(ANIMA, 'vector-info.json'), JSON.stringify({ at: Date.now(), collectionId: 'dsh-memory', dataRoots: {} }), 'utf8')
   const st2 = mod.readVectorState({ homeDir: HOME })
   check('C6 dataRoots 空对象 ⇒ 两个库都 {exists:false}（vector.count=null ⛔ 不编 0）',
@@ -396,6 +400,40 @@ mkdirSync(ANIMA, { recursive: true })
     st2.entries === null && st2.live.vector.count === null)
 }
 
+// C9 ★★ 2026-09-26（T1）：`live.retrieval` = anima 写的"读侧最近一次跑成没有" —— **原样透传**。
+//   为什么单独盯它：检索失败改前只写一行控制台日志，界面上谁也看不出（用户是从"翻 system 全文
+//   发现 anima 那格是空的"才发现的）⇒ 面板必须拿到真话。本模块只转发，⛔ 一个字段都不加工。
+{
+  const RET = {
+    ok: false,
+    failure: { code: 'EMBED_FAILED', detail: '嵌入接口连接超时（8s）', at: 1789000000000 },
+    note: '这一轮没读出记忆：嵌入调用失败（EMBED_FAILED，嵌入接口连接超时）',
+    lastOkAt: 1788000000000, ms: 812.5, dimMismatch: ['库 1024 维 · 本模型 768 维'],
+  }
+  const withRet = (ret) => JSON.stringify(Object.assign(
+    { at: Date.now(), collectionId: 'dsh-memory', dataRoots: { vectorRoot: VROOT } },
+    ret === undefined ? {} : { retrieval: ret },
+  ))
+  writeFileSync(join(ANIMA, 'vector-info.json'), withRet(RET), 'utf8')
+  const st = mod.readVectorState({ homeDir: HOME })
+  check('C9 live.retrieval 原样透传（ok/failure/note/lastOkAt/ms/dimMismatch 逐字段同构，⛔ 不加工不美化）',
+    JSON.stringify(st.live.retrieval) === JSON.stringify(RET), JSON.stringify(st.live.retrieval))
+  // ★反证：把快照里换一份**不同**的 retrieval ⇒ 上一条判据必须红（证明它真在比快照那一格，不是恒真）
+  writeFileSync(join(ANIMA, 'vector-info.json'), withRet({ ok: true, ms: 1 }), 'utf8')
+  const stOther = mod.readVectorState({ homeDir: HOME })
+  check('C9 ★反证（换一份 retrieval ⇒ 与上面那份不同 ⇒ 判据咬得住）',
+    JSON.stringify(stOther.live.retrieval) !== JSON.stringify(RET) && stOther.live.retrieval.ok === true)
+  // 快照里根本没有 retrieval（老快照 / anima 还没写过）⇒ null：面板据此说"读不到"，⛔ 不许编一个"一切正常"
+  writeFileSync(join(ANIMA, 'vector-info.json'), withRet(undefined), 'utf8')
+  check('C9 快照里没有 retrieval ⇒ live.retrieval 为 null（⛔ 不编 ok:true 骗人）',
+    mod.readVectorState({ homeDir: HOME }).live.retrieval === null)
+  // 形状不对（字符串 / 数组）⇒ 同样 null（⛔ 不把半截当"最近一次成功"）
+  writeFileSync(join(ANIMA, 'vector-info.json'), withRet('一切正常'), 'utf8')
+  const stStr = mod.readVectorState({ homeDir: HOME })
+  check('C9 ★反证（retrieval 是字符串 ⇒ 仍是 null：两种"给不出"必须同款，⛔ 不照抄一句字符串当状态）',
+    stStr.live.retrieval === null)
+}
+
 // C5 DSH_HOME 环境变量兜底（homeDir 不给时；与 lib/index.js 的 dshHomeDir() 同口径）
 {
   const before = process.env.DSH_HOME
@@ -446,8 +484,9 @@ console.log('\n── D) writeRequest ──')
 console.log('\n── E) client.js 源级 ──')
 
 sensitive(
-  'E1 档位同层：computeSources 返回 [摘要, 原文, 剧情大纲, 向量]',
-  (s) => s.includes("['summaries', '摘要'], ['floors', '原文'], ['outline', '剧情大纲'], ['vector', '向量']"),
+  // ★ 2026-09-25 美化单（用户拍板）：页签名「剧情大纲」→「RP 记忆」，源级断言跟着改。
+  'E1 档位同层：computeSources 返回 [摘要, 原文, RP 记忆, 向量]',
+  (s) => s.includes("['summaries', '摘要'], ['floors', '原文'], ['outline', 'RP 记忆'], ['vector', '向量']"),
   "['vector', '向量']",
 )
 sensitive(
@@ -503,7 +542,7 @@ sensitive(
   "id: 'dma-vector-tracking'",
 )
 {
-  // ★★ 本单的正面要求：**两个删除动作提交后不许进跟踪**（回执当次就回来了）。
+  // ★★ 本单的正面要求：删除**提交后不许进跟踪**（回执当次就回来了）。
   //   判据：`submit` 里 `isDelete` 那一支必须**先 return**（在 startTracking 之前），且那一支里没有 startTracking。
   const sub = sliceArrowBody(clientSrc, 'submit')
   check('E20 取到 submit 函数体（判据有对象可比）', typeof sub === 'string' && sub.length > 500, sub === null ? 'null' : String(sub.length))
@@ -557,8 +596,33 @@ sensitive(
   'E13 库行内 ⚠缺失 徽标（琥珀色，向量/BM25 各自 exists===false 时都要摆出来）',
   (s) => s.includes("missing === true ? e('span', { style: amberBadgeStyle }, '⚠缺失') : null")
     && s.includes('vec !== null && vec.exists === false')
-    && s.includes('bm !== null && bm.exists === false'),
+    && s.includes('missingBadge(vec ? vec.exists : undefined)'),
   "missing === true ? e('span', { style: amberBadgeStyle }, '⚠缺失') : null",
+)
+sensitive(
+  // ★ 2026-09-26（BM25 误摘恢复，用户口径「bm25 被错误摘除」）：上一版这里钉的是「已退役」说明行；
+  //   那一行已还原成**真库行**（重建/删除动作齐、缺失徽标照走），退役标记 dma-vector-bm25-retired
+  //   必须**消失** —— 判据换方向咬住 libRow 那一行。⛔ 判据不许两头都要（那等于什么都没钉）。
+  'E22 ★ BM25 真库行在位（libRow rebuild:bm25 + delete-bm25 徽标齐）且退役标记已摘',
+  (s) => s.includes("libRow('rebuild:bm25', 'BM25', bmDetail, bm !== null && bm.exists === false, 'delete-bm25')")
+    && s.includes("'rebuild:bm25': { action: 'rebuild', label: '重建（向量 + BM25）'")
+    && s.includes("'delete-bm25': { action: 'delete-bm25', label: '删除 BM25 库'")
+    && !s.includes('dma-vector-bm25-retired'),
+  "libRow('rebuild:bm25', 'BM25', bmDetail, bm !== null && bm.exists === false, 'delete-bm25')",
+)
+sensitive(
+  // ★ 2026-09-26（T1）：读侧那一行 —— 用户从"翻 system 全文发现 anima 那格是空的"才发现的坑，
+  //   现在面板要直接说"最近一次跑成没有"（转发 anima 写的原话，⛔ 不加工）。
+  'E21 ★ 读侧那一行在位（id=dma-vector-retrieval + 「最近检索」 + 现读 live.retrieval 转发给 retrievalDetailText）',
+  (s) => s.includes("id: 'dma-vector-retrieval'") && s.includes('最近检索')
+    && s.includes('const ret = live.retrieval') && s.includes('retrievalDetailText(ret)'),
+  "id: 'dma-vector-retrieval'",
+)
+sensitive(
+  'E21b 读侧人话两态都在（成 ⇒ 最近一次成功；败 ⇒ ❌ + 故障码 + "那一轮注入的是故障说明，不是记忆"）',
+  (s) => s.includes('最近一次成功') && s.includes('❌ 最近一次**没跑成**（')
+    && s.includes('那一轮注入的是故障说明，不是记忆'),
+  '那一轮注入的是故障说明，不是记忆',
 )
 sensitive(
   'E14 提交没拿到回执 id ⇒ 不起后台跟踪（空 id 永远对不上，⛔ 不许白转）',
@@ -659,7 +723,7 @@ console.log('\n── F) vector-panel.js 源级 ──')
     panelSrc.includes('renameSync(plan.target, plan.dest)'))
   check('F3 动作白名单只有一处定义（PANEL_ACTIONS 字面量恰好 1 处）',
     (panelSrc.match(/export const PANEL_ACTIONS =/g) || []).length === 1)
-  check('F3b 删除白名单只有一处定义（PANEL_DELETE_ACTIONS 字面量恰好 1 处）',
+  check('F3b 删除白名单只有一处定义（PANEL_DELETE_ACTIONS 字面量恰好 1 处），且只剩向量那一个',
     (panelSrc.match(/export const PANEL_DELETE_ACTIONS =/g) || []).length === 1
     && panelSrc.includes("export const PANEL_DELETE_ACTIONS = ['delete-vector', 'delete-bm25']"))
   check('F4 ⛔ 源码里没有写死的盘符/用户目录（公开仓库的上架闸门会扫）',
@@ -675,13 +739,16 @@ console.log('\n── G) 端点真跑（GET /vector/state、POST /vector/action�
   const LIVE = join(tmpRoot, 'live-home')
   const LIVE_CFG = join(LIVE, 'dsh-memory-archive', 'config.json')
   mkdirSync(join(LIVE, 'dsh-memory-archive'), { recursive: true })
-  // 先埋一份**已有别的字段**的 config：验「读-改-写」而不是整份覆盖（⛔ 覆盖会丢 url/key/echo/root）
+  // 先埋一份**已有别的字段**的 config：验「读-改-写」而不是整份覆盖（⛔ 覆盖会丢 url/key/root/别的卡）
+  //   ★ 2026-09-26：夹带字段从退役的 `echo` 换成仍在册的 keepFirstRound / lastFloors（判据的点没变：
+  //     一次只改一项，别的一项都不许丢）。旧配置里那个 `echo` 段现在会被**如实忽略**（退役），不再当夹带样本。
   const FAKE_KEY = 'SECRET-' + 'KEY-1234567890'
   writeFileSync(LIVE_CFG, JSON.stringify({
     schemaVersion: 1, rootMode: 'workspace',
     root: { sessionId: 's-1', characterId: 'c-1', playthroughId: 'p-1' },
     retrieval: { url: 'https://api.example.invalid/v1', model: 'emb', rerankModel: 'rr', key: FAKE_KEY },
-    echo: { enabled: true, topK: 7 },
+    keepFirstRound: { enabled: true },
+    lastFloors: { enabled: true, count: 9 },
   }), 'utf8')
   const before = process.env.DSH_HOME
   process.env.DSH_HOME = LIVE
@@ -730,10 +797,11 @@ console.log('\n── G) 端点真跑（GET /vector/state、POST /vector/action�
     check('G4 POST /vector/action{enable,false} ⇒ 200 saved + config 里 chatEnabled=false',
       on.status === 200 && on.json?.ok === true && on.json?.saved === true && on.json?.chatEnabled === false && disk.retrieval.chatEnabled === false,
       JSON.stringify(on.json))
-    check('G4b ★ 读-改-写：别的字段一个都没丢（url/model/rerankModel/key/echo/root 原样）',
+    check('G4b ★ 读-改-写：别的字段一个都没丢（url/model/rerankModel/key/root/keepFirstRound/lastFloors 原样）',
       disk.retrieval.url === 'https://api.example.invalid/v1' && disk.retrieval.model === 'emb'
       && disk.retrieval.rerankModel === 'rr' && disk.retrieval.key === FAKE_KEY
-      && disk.echo?.topK === 7 && disk.root?.playthroughId === 'p-1' && disk.rootMode === 'workspace')
+      && disk.keepFirstRound?.enabled === true && disk.lastFloors?.enabled === true && disk.lastFloors?.count === 9
+      && disk.root?.playthroughId === 'p-1' && disk.rootMode === 'workspace', JSON.stringify(disk).slice(0, 300))
     check('G4c ⛔ 响应与投影里绝不出现 retrieval.key 原文（只给 keySet/keyHint）',
       !on.text.includes(FAKE_KEY) && !(await call('/config')).text.includes(FAKE_KEY))
     check('G4d GET /config 的 retrieval 投影含 chatEnabled:false（面板读它渲染开关初始态）',
@@ -825,7 +893,6 @@ function makeHome(name, { vectorExists = true, bm25Exists = true, summaryFiles =
   const broot = join(home, 'bm25')
   const ws = join(home, 'ws', 'char-a', 'playthrough-a', 'archive', 'summaries')
   mkdirSync(anima, { recursive: true })
-  mkdirSync(broot, { recursive: true })
   mkdirSync(ws, { recursive: true })
   if (vectorExists) {
     mkdirSync(join(vroot, 'dsh-memory'), { recursive: true })
@@ -834,7 +901,10 @@ function makeHome(name, { vectorExists = true, bm25Exists = true, summaryFiles =
   } else {
     mkdirSync(vroot, { recursive: true })
   }
-  if (bm25Exists) writeFileSync(join(broot, 'dsh-memory.json'), 'bm25-bytes', 'utf8')
+  if (bm25Exists) {
+    mkdirSync(broot, { recursive: true })
+    writeFileSync(join(broot, 'dsh-memory.json'), 'bm25-bytes', 'utf8')
+  }
   writeFileSync(join(anima, 'vector-info.json'), JSON.stringify({
     version: 1, at: infoAt,
     dataRoots: { vectorRoot: vroot, bm25Root: broot, sessionRoot: join(home, 'sessions') },
@@ -930,6 +1000,9 @@ function makeHome(name, { vectorExists = true, bm25Exists = true, summaryFiles =
   const ledBefore = readFileSync(join(h.anima, 'ingest-ledger.json'), 'utf8')
   const out = mod.deleteNow({ homeDir: h.home, action: 'delete-bm25', summariesDir: h.ws, now: H_STAMP_NOW })
   check('I7 这个周目没有摘要（清单为空）⇒ 文案说「忘掉账本 0 条」（⛔ 不编一个数）',
+    // ★ 2026-09-26（BM25 误摘恢复）：BM25 的归档落点是**文件** `<集合>.json` ⇒ 归档名带 `.json`
+    //   （`dsh-memory.json.removed-<戳>`，I7b 验的就是它）—— 上一版判据钉的 `dsh-memory.removed-`
+    //   是当时"消息与真实文件名对不上"的旧形状；现在消息引用的就是真实归档名，判据跟上。
     out.receipt.message === `已归档为 dsh-memory.json.removed-${H_STAMP}（没删），并忘掉账本 0 条 ⇒ 下次入库会重新长出来`,
     out.receipt.message)
   check('I7b BM25 落点是一个**文件**：原文件没了、`.json.removed-<时间戳>` 在',

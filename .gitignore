@@ -26,3 +26,8 @@ _tmp-*
 # 台子/CI 的临时目录（失败中断时会漏在仓库根；⛔ 绝不进仓库）
 _selftest-*-tmp-*
 .st-ci-tmp-*
+
+# Selftest droppings (2026-09-26 观察到的三类)
+.st-tmp-*/
+_pack-contract-selftest-*/
+_selftest-tmp-*/

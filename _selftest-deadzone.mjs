@@ -14,7 +14,7 @@
 import { createServer } from 'node:http'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { apply } from './lib/index.js'
+import { apply, __disposeFloorWatch } from './lib/index.js'
 import * as dz from './lib/deadzone.js'
 
 const ROOT = resolve('.')
@@ -71,7 +71,9 @@ const makeMem = (files) => {
 }
 const readMem = (name) => readFileSync(join(PT_MEM, name), 'utf8')
 const writeMem = (name, text) => writeFileSync(join(PT_MEM, name), text)
-const baks = () => readdirSync(PT_MEM).filter((n) => n.includes('.bak-'))
+// ★ 2026-09-26（收纳）：备份改落 `.bak/` 子目录（lib/deadzone.js `backupNameFor`）⇒ 判据的读法跟上；
+//   目录还没建（首次写盘前）时当空数组 —— 反证 B5e 靠的就是"没有备份 ⇒ 没有文件"。
+const baks = () => { try { return readdirSync(join(PT_MEM, '.bak')).filter((n) => n.includes('.bak-')) } catch { return [] } }
 /** 当前那份死区文档（直读盘上那一份 —— 判据要的是"盘上事实"，不是某个端点的说法）。 */
 const docOnDisk = () => JSON.parse(readFileSync(join(PT_MEM, dz.DEADZONE_FILE_NAME), 'utf8'))
 
@@ -176,6 +178,23 @@ try {
       })
       return dz.renderHint(b.doc) === '⛔ 死区（作者预置，你只有追加权）：index.md 的「## 【必须遵守的核心规则】」'
         + '「## 【H-scene 写作准则】」两段 —— 不许改写/覆盖/删除，要更新只能追加在它们之外。'
+    })())
+  // ★ 20260924（改口径那一单：「作者的 ⇒ 一个字不动；你自己的 ⇒ 该改就改、该删就删」+ 加 `mode:'replace'`）：
+  //   这半句里的「你只有追加权」**没有**跟着改，是**有意的**，⛔ 别当漏网：
+  //     ① 那句原文在 `lib/deadzone.js`（`renderHint` 的 HEAD/TAIL）—— 本单只许改的文件里**没有它**；
+  //     ② 更要紧的是**语义**：那句的作用域是**被划成死区的那几段**（"要更新只能追加在它们之外"）——
+  //        正对应新铁律的"作者的 ⇒ 一个字不动"，与新口径**同向**，不打架。
+  //        ⛔ 它**不是**"整份文件只许追加"那种一刀切（那种说法才是 20260924 退役掉的老口径）。
+  //   ⇒ 于是这一条钉的是**作用域写全没写全**：文件名 + 段首行 + "在它们之外" 少一个，
+  //     那句话就会被读成"这份文件只许追加"，把模型自己的段也一并冻住（与新版预设打架）。
+  check('A4b ★ 死区那句只对"被划定的那两段"说话（作用域三件套俱全：文件名 + 段首行 + "在它们之外"）',
+    (() => {
+      const doc = dz.decideToggle(dz.emptyDoc(), { action: 'add', file: 'index.md', sha256: dz.sha256Hex(CORE), text: CORE, at: 'T' }).doc
+      const hint = dz.renderHint(doc)
+      const scoped = (h) => h.includes('index.md') && h.includes('「## 【必须遵守的核心规则】」')
+        && h.includes('要更新只能追加在它们之外')
+      // ★ 反证：把那半句作用域剪掉 ⇒ 同一个判据必红（那时它就成了一刀切的"只许追加"）
+      return scoped(hint) === true && scoped(hint.replace('，要更新只能追加在它们之外', '')) === false
     })())
   check('A5 落盘裁决 · 纯函数五连拒：体坏 / 扩展名 / 不存在 / 带 sha 但盘上变了 / 没带 sha',
     (() => {
@@ -292,7 +311,9 @@ try {
       JSON.stringify(st2.items).slice(0, 300))
     check('B3e ★ 结构性反证：保存那条路上**必须**有 refreshAfterEdit（挖掉它这条就不成立）',
       (() => {
-        const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
+        // ★ 2026-09-25：切片/正则前把行尾归一成 `\n`（那份文件的行尾是**混的**；`'\n}\n'` 那类切片
+        //   一旦碰上 CRLF 段就会一路切到文件尾 ⇒ 误报红。归一之后与行尾无关，判据本身一字未动。）
+        const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8').replace(/\r\n/g, '\n')
         const body = /async function handleRpMemoryWrite\(req, send, log, redact\) \{([\s\S]*?)\n\}/.exec(src)
         const hasIt = body !== null && /refreshAfterEdit\(/.test(body[1]) && /writeDocFile\(found\.dir/.test(body[1])
         const dug = body !== null && !/refreshAfterEdit\(/.test(body[1].replace(/const next = deadzone\.refreshAfterEdit\([\s\S]*?\)\n/, ''))
@@ -339,8 +360,8 @@ try {
       && r.data.backup.includes('.bak-') && r.text.includes(newText.slice(0, 20)) === false,
       JSON.stringify(r.data).slice(0, 240))
     check('B5b ★ 盘上就是新文（逐字节）', readMem('index.md') === newText)
-    check('B5c ★ 写前备份真的落在原地，且内容是**改前**那一份（复制留档，⛔ 不销毁）',
-      baks().includes(r.data.backup) && readMem(r.data.backup) === beforeText,
+    check('B5c ★ 写前备份真的落在 `.bak/` 里，且内容是**改前**那一份（复制留档，⛔ 不销毁）',
+      baks().includes(r.data.backup) && readFileSync(join(PT_MEM, '.bak', r.data.backup), 'utf8') === beforeText,
       JSON.stringify(baks()))
     check('B5c2 ★ 备份名带毫秒戳（同一秒里连点两次保存也不会互相盖掉备份）',
       /\.bak-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}$/.test(r.data.backup), r.data.backup)
@@ -353,7 +374,7 @@ try {
         const withBak = baks().length === n + 1
         const tmp = join(PT_MEM, 'no-backup-probe.md')
         writeFileSync(tmp, 'x')                                                    // 模拟"没有备份那一步"
-        const withoutBak = readdirSync(PT_MEM).filter((f) => f.startsWith('no-backup-probe.md.bak-')).length === 0
+        const withoutBak = readdirSync(join(PT_MEM, '.bak')).filter((f) => f.startsWith('no-backup-probe.md.bak-')).length === 0
         unlinkSync(tmp)
         return withBak && withoutBak
       })())
@@ -448,7 +469,9 @@ try {
       readMem('index.md') === tampered)
     check('B8d ★ 结构性反证：告警那条路上**没有任何**"把快照写回文件"的调用',
       (() => {
-        const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
+        // ★ 2026-09-25：切片/正则前把行尾归一成 `\n`（那份文件的行尾是**混的**；`'\n}\n'` 那类切片
+        //   一旦碰上 CRLF 段就会一路切到文件尾 ⇒ 误报红。归一之后与行尾无关，判据本身一字未动。）
+        const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8').replace(/\r\n/g, '\n')
         const st2 = /function handleRpMemoryDeadzoneStatus\(send\) \{([\s\S]*?)\n\}/.exec(src)
         const watcher = /async function runDeadzoneCheck\(sessionId, log\) \{([\s\S]*?)\n\}/.exec(src)
         const mod = readFileSync(join(ROOT, 'lib', 'deadzone.js'), 'utf8')
@@ -532,7 +555,9 @@ try {
       })())
     check('C5 ★ 结构性反证：看门那条路上**没有 await**（不许阻塞轮次），且比对是排到本轮之外发出去的',
       (() => {
-        const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
+        // ★ 2026-09-25：切片/正则前把行尾归一成 `\n`（那份文件的行尾是**混的**；`'\n}\n'` 那类切片
+        //   一旦碰上 CRLF 段就会一路切到文件尾 ⇒ 误报红。归一之后与行尾无关，判据本身一字未动。）
+        const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8').replace(/\r\n/g, '\n')
         const body = /function registerDeadzoneWatch\(ctx, log\) \{([\s\S]*?)\n\}\n/.exec(src)
         if (body === null) return false
         const onBody = body[1].slice(body[1].indexOf("scope.on('system-prompt/assemble'"))
@@ -580,7 +605,9 @@ try {
       && (await call('GET', '/playthrough/rp-memory/deadzones/status')).text.includes(WS) === false)
     check('D7 端点表与分派各一处（⛔ 不两处各写一遍）',
       (() => {
-        const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
+        // ★ 2026-09-25：切片/正则前把行尾归一成 `\n`（那份文件的行尾是**混的**；`'\n}\n'` 那类切片
+        //   一旦碰上 CRLF 段就会一路切到文件尾 ⇒ 误报红。归一之后与行尾无关，判据本身一字未动。）
+        const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8').replace(/\r\n/g, '\n')
         const t = (re) => (src.match(re) || []).length
         return t(/'\/playthrough\/rp-memory\/write': \['POST'\]/g) === 1
           && t(/rest === '\/playthrough\/rp-memory\/write'/g) === 1
@@ -622,12 +649,18 @@ try {
     check('E4 ★ 直接编辑落在**共用那份**上（写盘 + 备份都在同一处目录）',
       r.status === 200 && r.data?.ok === true && r.data.base === 'workspace-root'
       && readFileSync(join(wsMem, 'index.md'), 'utf8').includes('共用那份里改的')
-      && readdirSync(wsMem).some((n) => n.includes('.bak-')),
+      && readdirSync(join(wsMem, '.bak')).some((n) => n.includes('.bak-')),
       JSON.stringify(r.data).slice(0, 240))
     check('E5 ★ 用户自己改的 ⇒ 快照跟着走，状态仍是"一致"（⛔ 不许因为改在共用那份上就误报）',
       (await call('GET', '/playthrough/rp-memory/deadzones/status')).data.status === 'ok')
   }
 } finally {
+  // ★★ 2026-09-24：**先切断还挂着的连接**再关服务器 —— 少了这一行，undici 的 keep-alive socket 会把
+  //   **事件循环吊住**（本台子结尾故意不调 `process.exit`，见下），于是进程**永不退出**、全量门
+  //   （`spawnSync`）白等到超时。同款做法见 `_selftest-floor-watch.mjs` / `_selftest-host*.mjs` 的收尾。
+  // ★ 先拆掉生产那条 watcher（台子收尾必须：它会把事件循环吊住，跑完不退 —— 见实现处注释）。
+  try { __disposeFloorWatch() } catch { /* 拆不掉也只能算了 */ }
+  try { if (typeof server.closeAllConnections === 'function') server.closeAllConnections() } catch { /* 老 node */ }
   await new Promise((r) => server.close(r))
   rmSync(HOME, { recursive: true, force: true })
   rmSync(WS, { recursive: true, force: true })
