@@ -1088,6 +1088,9 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     // （20260918：/config/test 随旧「API 设置」卡一起退出面板 —— 卡换成了「向量检索 API」，
     //   测试连接改打 /retrieval/test；服务端那条端点仍在，只是面板不再用。）
     ['POST', '/retrieval/test'],
+    // ★ 2026-09-27（用户口径「在设置面板加一个自动抓取模型名称的功能」）：向量检索 API 卡的
+    //   「抓取模型列表」按钮打它 —— 服务商 /models 的宿主侧代理（密钥只进请求头，绝不回显）。
+    ['POST', '/retrieval/models'],
     ['GET', '/sessions'],
     ['GET', '/session/events'],
     ['GET', '/agent'],
