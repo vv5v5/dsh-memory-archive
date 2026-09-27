@@ -531,6 +531,115 @@ if (!existsSync(PRESET_FILE)) {
     badMount.length === 0, JSON.stringify(badMount))
 }
 
+// ---- 9c-b) ★ 2026-09-27 历史工具结果折叠：纯函数 + 假 session 直接测（含反证） ----
+// 用户口径「彻底修剪历史工具结果」—— index 设计上就是每轮重读的，旧轮工具结果没有留存价值。
+// 三条硬规则：① 只折 turn < 表面最大轮（当前轮折了 = 轮内多步 livelock，反证必查）；
+//             ② 桩里带「第N轮 工具名(关键参数)」且以固定标记开头（幂等判据）；
+//             ③ 同一条 shadow-price 协议（先影子计量事件，再 replace 替换事件）。
+{
+  const { collapseHistoryToolResultsOnSession, TOOL_COLLAPSE_MARKER } = mod
+  check('9c-b-0 折叠纯函数与标记已导出',
+    typeof collapseHistoryToolResultsOnSession === 'function' && typeof TOOL_COLLAPSE_MARKER === 'string')
+  const mkSession = (events) => {
+    // 表面视图：replace 把 [startSeq,endSeq] 从表面摘掉、新 seq 顶上 —— 与真 session 同一条语义。
+    let nextSeq = Math.max(...events.map((e) => e.seq)) + 1
+    const surface = [...events.map((e) => e.seq)]
+    const bySeq = new Map(events.map((e) => [e.seq, e]))
+    const log = []
+    return {
+      get surfaceNodes() { return [...surface] },
+      get surface() { return { nodes: [...surface] } },
+      eventAt: (seq) => bySeq.get(seq),
+      deriveEventMessage: (ev) => ev.data?.message ?? null,
+      append(type, data, opts) {
+        const seq = nextSeq++
+        bySeq.set(seq, { type, seq, data })
+        log.push({ type, seq, data, opts })
+        if (opts?.surfaceOp?.op === 'replace') {
+          const s = opts.surfaceOp.startSeq
+          const i = surface.indexOf(s)
+          if (i >= 0) surface.splice(i, 1)
+        }
+        surface.push(seq)
+        return { seq }
+      },
+      log,
+    }
+  }
+  const callEv = (seq, callId, name, args) => ({
+    type: 'tool/call', seq, data: { turn: 1, callId, name, arguments: args },
+  })
+  const resEv = (seq, turn, callId, text) => ({
+    type: 'tool/result', seq,
+    data: { turn, message: { role: 'tool', source: { kind: 'tool', callId }, content: [{ type: 'text', text }] } },
+  })
+  // 场景：第 1 轮读 index.md（旧）＋ 第 2 轮读 worldbook（旧）＋ 第 3 轮刚读的 notes（当前轮）
+  // 历史轮原文给真实量级（几千字）：charsSaved 才有语义（真实世界里桩远短于原文）。
+  const events = [
+    callEv(1, 'c1', 'read', '{"file_path": "D:/x/.roleplay-memory/index.md"}'),
+    resEv(2, 1, 'c1', '目录与最近进展……（一大段原文）' + '原'.repeat(5000)),
+    callEv(3, 'c2', 'read', '{"file_path": "D:/x/世界书.json"}'),
+    resEv(4, 2, 'c2', '【舞台总纲】……（14872 字原文）' + '界'.repeat(9000)),
+    callEv(5, 'c3', 'read', '{"file_path": "D:/x/notes.md"}'),
+    resEv(6, 3, 'c3', '最新场记……'),
+  ]
+  const s1 = mkSession(events)
+  const done1 = collapseHistoryToolResultsOnSession(s1, { tokenMeter: { estimateMessage: () => 100 } })
+  check('9c-b-1 只折历史轮：折 2 处（第 1、2 轮各一），当前轮（第 3 轮）不折',
+    done1.collapsed === 2 && done1.charsSaved > 0, JSON.stringify(done1))
+  const shadowEvents = s1.log.filter((l) => l.type === 'compaction/prune')
+  const replacements = s1.log.filter((l) => l.type === 'tool/result')
+  check('9c-b-2 shadow-price 协议：每个被折结果先落影子计量事件再落替换事件，且 replace 指向原 seq',
+    shadowEvents.length === 2 && replacements.length === 2
+    && shadowEvents.every((l, i) => l.data.shadowedTokenCount === 100
+      && replacements[i].opts.surfaceOp.op === 'replace'
+      && replacements[i].opts.surfaceOp.startSeq === l.data.shadowedSeqs[0]),
+    JSON.stringify(shadowEvents.map((l) => l.data.shadowedSeqs)))
+  const stubTexts = replacements.map((l) => l.data.message.content[0].text)
+  check('9c-b-3 桩是「标记+第N轮+工具名(关键参数)」的一小行，原文不再在内',
+    stubTexts[0].startsWith(TOOL_COLLAPSE_MARKER) && stubTexts[0].includes('第1轮 read(index.md)')
+    && stubTexts[1].includes('第2轮 read(世界书.json)')
+    && stubTexts.every((t) => t.length < 200 && !t.includes('（一大段原文）') && !t.includes('14872')),
+    JSON.stringify(stubTexts))
+  check('9c-b-4 表面上旧 seq 被替换件顶替（旧内容不再可见）',
+    !s1.surfaceNodes.includes(2) && !s1.surfaceNodes.includes(4)
+    && s1.surfaceNodes.includes(replacements[0].seq),
+    JSON.stringify(s1.surfaceNodes))
+  const s2 = mkSession(events.map((e) => (e.seq === 2
+    ? { ...e, data: { ...e.data, message: { ...e.data.message,
+      content: [{ type: 'text', text: TOOL_COLLAPSE_MARKER + '第1轮 read(index.md)；已折。' }] } } }
+    : e)))
+  const done2 = collapseHistoryToolResultsOnSession(s2, {})
+  check('9c-b-5 幂等（反证：已是桩的结果不再折）＋ 计量缺席（无 tokenMeter）不炸',
+    done2.collapsed === 1 && s2.log.every((l) => l.type !== 'compaction/prune' || l.data.shadowedTokenCount === 0),
+    JSON.stringify(done2))
+  const s3 = mkSession(events.filter((e) => e.data.turn <= 1))
+  const done3 = collapseHistoryToolResultsOnSession(s3, {})
+  check('9c-b-6 反证：表面只有一轮（maxTurn ≤ 1）时什么都不折（折了就 livelock）',
+    done3.collapsed === 0 && s3.log.length === 0, JSON.stringify(done3))
+  // ★ 9c-b-7（2026-09-27 真机验收教训）：「tool/call」事件不在表面 ⇒ 桩的工具名要从
+  //   assistant 消息的 {type:'tool-call', id, name, arguments} 块取（真机首战 17 根桩全 tool(?)）。
+  //   形态照真机：第 2 轮有结果（maxTurn=2），第 3 轮是当前楼还没产结果 ⇒ 只折第 1 轮的。
+  const realShape = [
+    { type: 'assistant/message', seq: 1, data: { turn: 1, message: { role: 'assistant', content: [
+      { type: 'reasoning', text: '先读 index' },
+      { type: 'tool-call', id: 'call_00_A', name: 'read', arguments: '{"file_path": "D:/x/.roleplay-memory/index.md"}' },
+    ] } } },
+    { type: 'tool/result', seq: 2, data: { turn: 1, message: { role: 'tool', source: { kind: 'tool', callId: 'call_00_A' }, content: [{ type: 'text', text: '目录……' + '原'.repeat(3000) }] } } },
+    { type: 'assistant/message', seq: 3, data: { turn: 2, message: { role: 'assistant', content: [
+      { type: 'tool-call', id: 'call_00_B', name: 'grep', arguments: '{"pattern": "裙子"}' },
+    ] } } },
+    { type: 'tool/result', seq: 4, data: { turn: 2, message: { role: 'tool', source: { kind: 'tool', callId: 'call_00_B' }, content: [{ type: 'text', text: '第2轮命中……' + '果'.repeat(2000) }] } } },
+    { type: 'user/message', seq: 5, data: { turn: 3, content: '三楼' } },
+  ]
+  const s4 = mkSession(realShape)
+  const done4 = collapseHistoryToolResultsOnSession(s4, {})
+  const stub4 = s4.log.filter((l) => l.type === 'tool/result')[0]?.data?.message?.content?.[0]?.text ?? ''
+  check('9c-b-7 反证：表面没有 tool/call 事件（真机形状）⇒ 桩仍带工具名与路径（不是 tool(?)）',
+    done4.collapsed === 1 && stub4.includes('read(index.md)') && !stub4.includes('tool(?)'),
+    'collapsed=' + done4.collapsed + ' 桩=' + JSON.stringify(stub4.slice(0, 80)))
+}
+
 // ---- 7) 临时目录清掉 ----
 rmSync(tmp, { recursive: true, force: true })
 rmSync(bare, { recursive: true, force: true })

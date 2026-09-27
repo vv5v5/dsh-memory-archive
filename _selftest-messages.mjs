@@ -244,6 +244,68 @@ await check('★ 反证：source.kind 缺失（老日志）⇒ 逐行给 null，
   })
 })
 
+// ---- ★ 2026-09-27 compaction/prune 遮蔽：复制出来的整楼原文 = 模型实际收到的形状 ----
+// 用户口径：「调整提示词查看器的逻辑，加入修剪标记，确保复制的整楼原文是实际收到的」。
+// 真机教训：2026-09-26 的每轮修剪把世界书读取（14872 字）缩成头尾替换件（5159 字），但查看器
+// 只消费 compaction/summary 的遮蔽 ⇒ 原件与替换件**都**画出来（双重计数，"48.9% 是工具结果"
+// 就是这么量出来的）。下面用真机形状的日志（prune 事件点名 seq13，替换件带 surfaceOp）
+// 钉住：原件消失／替换件在场带标记／位置跟被顶替 seq 走（不漂移到修剪那轮）。
+function pruneEvents() {
+  return [
+    ev('turn/start', 10, 1000, { turn: 1 }),
+    ev('user/message', 11, 1010, { content: '一楼问题' }),
+    ev('assistant/message', 12, 1020, { message: { content: [{ type: 'reasoning', text: '（思维链）先读世界书。' }, { type: 'text', text: '一楼回答' }] } }),
+    ev('tool/result', 13, 1030, { turn: 1, message: { role: 'tool', content: [{ type: 'text', text: '【舞台总纲】' + '原文'.repeat(7000) }] } }),
+    ev('assistant/message', 14, 1040, { message: { content: [{ type: 'text', text: '一楼收尾' }] } }),
+    ev('turn/end', 15, 1050, { turn: 1, reason: { kind: 'completed' } }),
+    ev('turn/start', 20, 2000, { turn: 2 }),
+    ev('user/message', 21, 2010, { content: '二楼问题' }),
+    ev('assistant/message', 22, 2020, { message: { content: [{ type: 'text', text: '二楼回答' }] } }),
+    // 修剪发生在第 2 楼的 pre-step 里：影子事件点名 seq13，替换件落在 seq25（log seq 在尾部）。
+    // surfaceOp/sourceEventSeqs 直接并进 data —— 与真机日志的替换件同形。
+    ev('compaction/prune', 24, 2030, { shadowedRange: { start: 13, end: 13 }, shadowedSeqs: [13], shadowedTokenCount: 3000 }),
+    ev('tool/result', 25, 2031, {
+      turn: 1,
+      message: { role: 'tool', content: [{ type: 'text', text: '【舞台总纲】头部……\n[... tool result middle pruned ...]\n……尾部' }] },
+      surfaceOp: { op: 'replace', startSeq: 13, endSeq: 13 },
+      sourceEventSeqs: [13],
+    }),
+    ev('turn/end', 26, 2040, { turn: 2, reason: { kind: 'completed' } }),
+  ]
+}
+
+await check('★ 2026-09-27 compaction/prune：被点名的原件消失，替换件在场且带修剪标记（反证：双渲染必红）', async () => {
+  await withServer(fakeSource({ s: pruneEvents }), async (base) => {
+    const { body } = await getJson(base, '/api/messages?id=s')
+    assert.equal(body.ok, true)
+    const seqs = body.messages.map((m) => m.seq)
+    assert.ok(!seqs.includes(13), '被 prune 点名的原件（seq13，一万多字那种）必须消失，实际：' + JSON.stringify(seqs))
+    const rep = body.messages.find((m) => m.seq === 25)
+    assert.ok(rep, '替换件（seq25）必须在场')
+    assert.equal(rep.role, 'tool')
+    assert.equal(rep.replaces, 13, '替换件要带上它顶替的 seq')
+    // 修剪标记在替换件**全文**里（列表 preview 只有首行）⇒ 从单条抽屉取原样对象断言。
+    const joined = body.messages.map((m) => m.preview).join('\n')
+    assert.ok(!joined.includes('原文原文'), '原始全文一个字都不许再出现在任何 preview 里')
+    const drawer = await getJson(base, '/api/part?id=s&turn=1&part=messages&seq=25')
+    assert.equal(drawer.body.ok, true, '替换件的抽屉取得到：' + JSON.stringify(drawer.body))
+    assert.ok(JSON.stringify(drawer.body.message).includes('middle pruned'), '替换件正文自带修剪标记')
+    const originalDrawer = await getJson(base, '/api/part?id=s&turn=1&part=messages&seq=13')
+    assert.equal(originalDrawer.body.ok, false, '原件（seq13）不许再从抽屉捞出来（它已不在上下文里）')
+  })
+})
+
+await check('★ 2026-09-27 替换件的上下文位置跟被顶替 seq 走（不漂移到修剪那轮）＋ turn 归属跟随', async () => {
+  await withServer(fakeSource({ s: pruneEvents }), async (base) => {
+    const { body } = await getJson(base, '/api/messages?id=s')
+    const idx = (seq) => body.messages.findIndex((m) => m.seq === seq)
+    // 上下文顺序：…一楼回答(12) → 替换件(25，坐 13 的位置) → 一楼收尾(14) → 二楼(21,22)
+    assert.ok(idx(12) < idx(25) && idx(25) < idx(14), '替换件必须坐在 seq13 原来的位置上：'
+      + JSON.stringify(body.messages.map((m) => m.seq)))
+    assert.equal(body.messages.find((m) => m.seq === 25).turn, 1, 'turn 归属跟位置走 ⇒ 第 1 楼（不是修剪发生的那楼）')
+  })
+})
+
 console.log(`\nsummary: ${pass} passed, ${fails.length} failed :: _selftest-messages`)
 if (fails.length > 0) {
   console.log('failed: ' + fails.join(' | '))

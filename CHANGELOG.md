@@ -6,6 +6,61 @@
 
 ## [Unreleased]
 
+### 2026-09-27 下午（**每轮彻底折叠历史工具结果** ＋ 查看器改渲染真实请求面）
+
+> 用户口径（逐字）：「其实 index 设计上就是每轮重读的」「1、彻底修剪历史工具」
+> 「2、调整提示词查看器的逻辑，加入修剪标记，确保复制的整楼原文是实际收到的」
+> 「改人设吧，说思考时抓住要点，不要长篇复述查询到的结果」。
+
+- **Added｜`toolCollapsePerTurn`（默认开）—— 每轮把**历史轮**工具结果折成一行桩**：
+  2026-09-26 的 `toolPrunePerTurn` 只剪 >8192 的（真机核验：13 轮会话表面 18 个工具结果
+  48936 字、超阈 0 个——剪是剪住了，但 16 个 8192 以下的旧读取快照原样躺着，占 ~38k 字）。
+  既然 index.md 设计上就是每轮重读，旧轮结果没有留存价值 ⇒ 折叠成
+  `〔历史工具结果已修剪〕第N轮 read(index.md)；原文不随历史回传…` 一小行（带固定标记 =
+  幂等判据；callId 反查 tool/call 取工具名与关键参数）。⚠️ **只折 turn 号小于表面最大轮的**：
+  compactIfNeeded 轮内每个 step 前都跑，折掉本轮刚读的文件 = 模型只能无限重读（livelock）。
+  与官方 pruner 同一条 shadow-price 协议（先 `compaction/prune` 影子计量，再 `surfaceOp:
+  replace` 替换；原始全文仍在会话日志）。逻辑本体抽成**导出的纯函数**
+  `collapseHistoryToolResultsOnSession(session, deps)`（类方法只注入 freezeMessage/tokenMeter），
+  台子用假 session 直接测。配置键 `toolCollapsePerTurn: false` 可关回只剪超预算的行为。
+- **生成的 `mt-compaction-rp.js` 已重新落盘到真机预设目录**（`buildRpCompactionBackend()`
+  重跑；生成件过 `node --check`）；`_selftest-mt-compaction.mjs` 新增 9c-b 一节
+  **7 条判据**（只折历史轮／shadow 协议／桩形状／表面顶替／幂等＋计量缺席／maxTurn≤1
+  不折的反证），全过。
+- **dsh-prompt-viewer（记忆库面板「提示词」段）**：渲染从「会话日志」改为「请求表面」——
+  `buildConversation` 消费 `compaction/prune` 与任意 `surfaceOp.replace`（**时序敏感**的位置
+  supersession：先到的遮蔽杀当时那行，后到的替换件复活该位置；⛔ 终态黑名单会把替换件连坐误杀，
+  台子踩过）；替换件的**上下文位置跟被顶替的 seq 走**（链式继承），否则历史轮内容漂移到修剪
+  那一轮。被 replace 的原始事件不再画出，替换件带 `[... tool result middle pruned ...]`／
+  `〔历史工具结果已修剪〕` 标记原样可见；列表/抽屉/单条三处新增 `replaces` 字段与
+  「已修剪→seq N」徽标。此前导出（如 `F:\学习资料\整点薯条\system.docx`）把日志里的原始全文
+  与替换件**都**画出来 ⇒ "48.9% 是工具结果、超阈值没剪" 是双重计数假象。
+  **reasoning 块照画**（核实 `llm-deepseek/src/serialize.ts`：assistant 历史的 reasoning
+  序列化为 `thinking` 块**随请求回传**（带 replay 签名），只有 user/tool-result 里的才丢弃）
+  —— 它确实是模型收到的东西。台子：_selftest-messages **13/0**（新增 prune 双判据：原件消失
+  +替换件带标记+位置跟随，反证=双渲染必红）、_selftest-turns 10/0、client 128/0、
+  prompt-map 60/0；整套门 **74/0**。已 cp 到宿主实体拷贝，**重启宿主生效**。
+
+- **Added｜persona §4 加「思考从简」一行**（用户口径：「思考时抓住要点，不要长篇复述查询到的
+  结果」）：`★ 思考从简：思考只抓要点（要查什么、查到了什么），⛔ 不长篇复述查询到的结果
+  原文——结论落到正文或笔记，思考里不背书。` 放 §4 节头下第一条。背景：工具结果折叠后，
+  剩余上下文里最大的一块是 **assistant 历史的 reasoning**（真机 13 轮 ≈3.7 万字符；核实
+  `llm-deepseek/src/serialize.ts`——assistant 历史的 reasoning 序列化为 `thinking` 块随请求
+  回传，只有 user/tool-result 里的才丢弃）——宿主侧丢历史 reasoning 影响所有会话，先走
+  提示词侧从源头少产出。repo 与真机两份 `agent.cordis.yml` 同步改；_selftest-preset-persona
+  **78/0**（新增行不碰 P9 三处锚与节头清单）、_selftest-preset-install 20/0；整套门 74/0。
+  ⚠️ yml 随宿主启动加载，**重启宿主生效**。
+- **真机验收（16:03 那楼，宿主 15:37 起）**：折叠**生效**——turn 13 pre-step 落 17 条
+  `compaction/prune`，turn 1–12 的全部旧工具结果折成桩（17×65 字 ≈ 1105 字，替代约 4 万字）；
+  persona「思考从简」确认进 system（system/message 的 `data.message` 19116 字含该行）。
+  活预设布局查明：**真正被加载的是 `profiles/web/cordis.patch.yml` 的 `preset-roleplay` 条目**
+  （模块在 `profiles/web/preset-modules/`）——`.agent-presets/roleplay` 与插件捆绑份都是别本，
+  首次铺盘铺错了地方，已补铺到活位置。遗留：桩里工具名全是 `tool(?)`（「tool/call」事件不在
+  表面，真机永远查不到）——已修：改为从 assistant 消息的 tool-call 块取（块 id 与结果
+  source.callId 同一）；台子新增 9c-b-7 反证，全过；**随下次重启生效**（已折的桩不回改，幂等跳过）。
+  另：16:00 那次启动 EADDRINUSE 是市场重启失败留下的 `recovery.js` 善后进程占着 3080
+  （它自己永不拉起宿主），已清掉并重新拉起。
+
 ### 2026-09-27 凌晨（**recentFloors 阈值可配置** ＋ 12 周目迁移收尾 ＋ 向量库撕裂写修复）
 
 > 用户口径（逐字）：「**修一下注入的最近几楼功能，不触发**」「**记忆库直接把当前rp正文全吃了**」
