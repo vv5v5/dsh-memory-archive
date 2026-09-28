@@ -1945,3 +1945,11 @@
 
 [0.2.0]: https://github.com/vv5v5/dsh-memory-archive/releases/tag/v0.2.0
 [0.1.0]: https://github.com/vv5v5/dsh-memory-archive/releases/tag/v0.1.0
+- **Added｜压缩面板：保留比可设 + 阈值自由输入**（用户口径「走这条路，在面板加对应设置」「不是滚动条，
+  是输入数字逻辑」）：① `POST /compaction/config` 新增可选 `retainPercent`（1–99）——宿主按同一套
+  备份/回读纪律点改部署预设 yml 的 `retainRatio:`（`writeDeployedRatioLine` 通用底座，键名参数化）；
+  ② 面板「压缩」档新增保留比数字框（留空 = 不改），回执单独一行；③ 阈值/数字框**取消步长 5 对齐**
+  （`AUTO_COMPACT_STEP_PERCENT` 5→1，12%/13% 不再被悄悄归到 10/15；滑块保留、step 同步改 1）。
+  背景：真机 10 万阈值 + 0.05 保留比 ⇒ 保留尾 3.9 万 token 锁死可压空间，每楼触发压缩却压不动。
+  台子：_selftest-compaction-threshold **205/0**（S1 断言改步长 1 + 新值域）、_selftest-client
+  **128/0**（白名单登记保留比输入框）；整套门 **74/0**。已铺实体拷贝，重启宿主生效。

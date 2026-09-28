@@ -3833,12 +3833,16 @@ await check('★ 压缩·读不到就红字（验收4）：主/副两行各有�
   } finally { fakeReact.__setPreset(null) }
 })
 
-await check('★ 压缩·控件（验收5）：滑块 5–90 步 5 + 数字框互相同步 + 开关 + 保存；如实小字由宿主给（notes 原样显示）', () => {
+await check('★ 压缩·控件（验收5；★ 2026-09-28 改：步长取消 + 新增保留比输入）：滑块/数字框 5–90 互相同步 + 开关 + 保存；如实小字由宿主给（notes 原样显示）', () => {
   const body = compactSection()
-  assert.ok(body.includes('const COMPACT_MIN_PERCENT = 5') && body.includes('const COMPACT_MAX_PERCENT = 90') && body.includes('const COMPACT_STEP_PERCENT = 5'),
-    '控件范围/步长常量不是 5–90/5')
+  assert.ok(body.includes('const COMPACT_MIN_PERCENT = 5') && body.includes('const COMPACT_MAX_PERCENT = 90') && body.includes('const COMPACT_STEP_PERCENT = 1'),
+    '控件范围/步长常量不是 5–90/1')
   assert.ok(body.includes("id: 'dma-compact-range'") && body.includes("type: 'range'") && body.includes("step: COMPACT_STEP_PERCENT"), '缺滑块')
   assert.ok(body.includes("id: 'dma-compact-percent'") && body.includes("type: 'number'"), '缺数字框')
+  // ★ 2026-09-28：保留比输入框（用户口径「把保留比调小(5%→2%)」—— 在面板上可设）
+  assert.ok(body.includes("id: 'dma-compact-retain'") && body.includes('retainPercent'), '缺保留比输入框')
+  assert.ok(body.includes("body.retainPercent = rn"), '保存体没带保留比')
+  assert.ok(body.includes("'保留比 YAML：'"), '保留比 yml 的写盘回执没有单独显示')
   assert.ok(body.includes("id: 'dma-compact-switch'") && body.includes("type: 'checkbox'"), '缺「用面板的阈值」开关')
   assert.ok(body.includes("id: 'dma-compact-save'"), '缺保存按钮')
   // 互相同步：两个控件都读同一份 percent state，且变更都走同一个 onPercent

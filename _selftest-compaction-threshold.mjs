@@ -49,11 +49,13 @@ check('生成器连调两次逐字节相同（确定性）', text1 === text2)
 check('产物里没有模板串残留（`${` 与反引号都不许进产物）', !text1.includes('${') && !text1.includes('\\u0060'))
 
 // ───────────────────────────── S1 clampThresholdPercent ─────────────────────────────
-console.log('\nS1 clampThresholdPercent：5–90 的整数、步长 5')
-check('常量 = 5 / 90 / 5 / 15', ct.AUTO_COMPACT_MIN_PERCENT === 5 && ct.AUTO_COMPACT_MAX_PERCENT === 90
-  && ct.AUTO_COMPACT_STEP_PERCENT === 5 && ct.AUTO_COMPACT_DEFAULT_PERCENT === 15)
+// ★ 2026-09-28（用户口径「修文字输入逻辑：不是滚动条，是输入数字」）：步长 5 取消 → 1
+//   （12%、13% 这类值不再被悄悄归到 10/15；滑块 step 同步改 1，滑块与数字框粒度一致）。
+console.log('\nS1 clampThresholdPercent：5–90 的整数（步长已取消）')
+check('常量 = 5 / 90 / 1 / 15', ct.AUTO_COMPACT_MIN_PERCENT === 5 && ct.AUTO_COMPACT_MAX_PERCENT === 90
+  && ct.AUTO_COMPACT_STEP_PERCENT === 1 && ct.AUTO_COMPACT_DEFAULT_PERCENT === 15)
 for (const [v, want, clamped] of [[15, 15, false], [5, 5, false], [90, 90, false], [20, 20, false], [0, 5, true], [-7, 5, true],
-  [95, 90, true], [1000, 90, true], [22, 20, true], [23, 25, true], [22.4, 20, true], [17.5, 20, true],
+  [95, 90, true], [1000, 90, true], [12, 12, false], [13, 13, false], [22, 22, false], [23, 23, false],
   ['35', 35, false], ['abc', 15, true], [null, 15, true], [undefined, 15, true], [NaN, 15, true], [{}, 15, true], [[20], 15, true]]) {
   const got = ct.clampThresholdPercent(v)
   const label = typeof v === 'object' ? JSON.stringify(v) : String(v)
