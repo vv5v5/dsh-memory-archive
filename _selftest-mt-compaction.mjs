@@ -280,6 +280,57 @@ try {
     out.proxyCallMsg = String((e && e.message) || e)
   }
   out.hasHashPrivateMember = null
+
+  // ---- 4d-b) ★★ 2026-09-28 空压区不压：被压区只剩旧 checkpoint ⇒ 烧 LLM 之前就抛「不压」----
+  // （await 不能进非 async 箭头函数 ⇒ 与 4c 同款平铺在模块体里；真机病理见上面 4d 的注释。）
+  const captured4d = []
+  const ctx4d = { llm: { stream: async function* (options) { captured4d.push(options) } } }
+  const receiver4d = {
+    ctx: ctx4d,
+    instruction: 'i',
+    config: { summarizationProvider: 'prov', summarizationModel: 'mod', maxTokens: 16, modelPolicies: [] },
+  }
+  const agent4d = { session: { id: 'sid-4d', requestHeader: () => undefined }, options: {} }
+  const ckptOnly = [{ role: 'user', source: { kind: 'plugin', plugin: 'compact' }, content: [
+    { type: 'text', text: 'This is an automatically generated checkpoint. <compacted-summary>上一份摘要</compacted-summary>' },
+  ] }]
+  try {
+    await mod.default.prototype.summarize.call(receiver4d, { messages: ckptOnly }, agent4d, undefined)
+    out.emptySpan = { threw: null, llmCalled: captured4d.length }
+  } catch (e) {
+    out.emptySpan = { threw: String((e && e.message) || e), llmCalled: captured4d.length }
+  }
+
+  // ---- 4d) ★★ 2026-09-28 「摘要只进不出、越压越少」回归门（真机 12 周目 seq1181 实锚）----
+  // 真机病理：被压区只剩上一轮 checkpoint 时，模型对着空的新正文忠实回 []，而 [] 更小 ⇒
+  // 缩量闸放行 ⇒ 空 wrapper 把旧浓缩**整块顶掉**（覆盖 91 条消息的大 checkpoint 被吃成 []；
+  // turn55 一轮连发 6 次压缩、次次如此）。修法两层：① 空 span ⇒ 烧 LLM 之前就「不压」；
+  // ② 旧条目强制滚进新摘要（指令只说 Reference、没承诺保留 ⇒ 不能赌模型自觉）。
+  out.carried = (() => {
+    try {
+      const f = mod.carriedSummaryBlocks
+      if (typeof f !== 'function') return { exported: false }
+      const prev = JSON.stringify([
+        { summary: '旧摘要A', tags: { vibe: 'Serious', special: [], important: false } },
+        { summary: '旧摘要B', tags: { vibe: 'Daily', special: [], important: false } },
+      ])
+      const one = (blocks) => JSON.parse(blocks[0].text).map((e) => e.summary).join('|')
+      const r1 = f([{ type: 'text', text: '[]' }], prev)
+      const r2 = f([{ type: 'text', text: JSON.stringify([{ summary: '新摘要', tags: {} }]) }], prev)
+      const r3 = f([{ type: 'text', text: JSON.stringify([{ summary: '旧摘要A', tags: {} }, { summary: '新摘要', tags: {} }]) }], prev)
+      const r4 = f([{ type: 'text', text: '模型没按 JSON 回' }], prev)
+      const r5 = f([{ type: 'text', text: '任意' }], '')
+      return {
+        exported: true,
+        r1: one(r1),
+        r2: one(r2),
+        r3: one(r3),
+        r4Prepended: r4.length === 2 && r4[0].text === prev,
+        r5Same: r5.length === 1 && r5[0].text === '任意',
+      }
+    } catch (e) { return { threw: String(e && e.message) } }
+  })()
+
 } catch (e) {
   out.threw = String((e && e.stack) || e)
 }
@@ -316,6 +367,25 @@ if (full) {
   check('★ 5c 反证：报错里不出现「Receiver must be an instance」（出现了就是私有成员又回来了）',
     typeof full.proxyCallMsg === 'string' && !full.proxyCallMsg.includes('Receiver must be an instance'),
     String(full.proxyCallMsg).slice(0, 200))
+
+  // ★ 4d：见满载运行器 —— 空压区不压 + 旧条目强制滚进（真机 seq1181 吃 checkpoint 的回归门）
+  check('★ 4d-1 carriedSummaryBlocks 从生成物导出且不抛', !!full.carried && full.carried.exported === true, JSON.stringify(full.carried))
+  if (!!full.carried && full.carried.exported === true) {
+    check('★ 4d-2 模型回 [] ⇒ 旧条目整体滚进新摘要（旧 checkpoint 原样滚进新壳）',
+      full.carried.r1 === '旧摘要A|旧摘要B', JSON.stringify(full.carried.r1))
+    check('★ 4d-3 有新内容 ⇒ 缺失的旧条目按序补前（滚动合并）',
+      full.carried.r2 === '旧摘要A|旧摘要B|新摘要', JSON.stringify(full.carried.r2))
+    check('★ 4d-4 已在的旧条目不重复（按 summary 全文去重）',
+      full.carried.r3 === '旧摘要B|旧摘要A|新摘要', JSON.stringify(full.carried.r3))
+    check('★ 4d-5 非 JSON 输出 ⇒ 旧原文整块前置为独立文本块（⛔ 不硬拼）',
+      full.carried.r4Prepended === true, JSON.stringify(full.carried))
+    check('★ 4d-6 旧摘要为空/抠不出 ⇒ 原样返回（行为不变）',
+      full.carried.r5Same === true, JSON.stringify(full.carried))
+  }
+  check('★ 4d-7 ★★反证锚：只剩旧 checkpoint 的 span ⇒ 烧 LLM 之前就抛「不压」（llm 调用数为 0）',
+    !!full.emptySpan && typeof full.emptySpan.threw === 'string'
+    && full.emptySpan.threw.includes('no new content to summarize') && full.emptySpan.llmCalled === 0,
+    JSON.stringify(full.emptySpan))
 
   // ★ 4c：真装配跑通后，截获到的请求里**只该有**过滤后的东西（口径 = 玩家发言 + AI 正文）
   const sent = full.assembledSent === null || full.assembledSent === undefined
