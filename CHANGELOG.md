@@ -1953,3 +1953,10 @@
   背景：真机 10 万阈值 + 0.05 保留比 ⇒ 保留尾 3.9 万 token 锁死可压空间，每楼触发压缩却压不动。
   台子：_selftest-compaction-threshold **205/0**（S1 断言改步长 1 + 新值域）、_selftest-client
   **128/0**（白名单登记保留比输入框）；整套门 **74/0**。已铺实体拷贝，重启宿主生效。
+- **Fixed｜保留比持久化回路**（用户口径「面板调过后关掉，再打开还是 0」）：首版只在保存时点改了
+  yml 的 `retainRatio`，config.json 没记、`/config` 投影不返回 ⇒ 面板重开必是空。现走阈值的既有模式：
+  config.json `autoCompact.retainPercent` 持久化（1–99 整数或 null）＋ `/config` 投影返回 ＋
+  面板初值回显（保存成功后立即回显）＋ **mt 每轮现读生效**（`applyPanelThreshold` 接受
+  `panel.retainPercent` 覆盖 YAML retainRatio，经 `clampRetainRatio` 夹紧 < 阈值×0.7；
+  未设置 ⇒ 走 YAML 原值，行为不变）。台子：threshold **209/0**（新增保留比 4 判据）；
+  门 **74/0**。三份实体拷贝已同步，重启宿主生效。

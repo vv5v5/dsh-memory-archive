@@ -440,6 +440,22 @@ console.log('\nS6 生成物：覆写 + 无 # 私有成员 + 读不到就用 YAML
   // 反证：把"删掉 retainTokens"这一步去掉 ⇒ 判据必红
   check('★ 反证：不删 retainTokens 的实现会被"互斥键必须去掉"抓住（官方 resolveConfig 会直接抛）',
     'retainTokens' in Object.assign({}, YAML_RESOLVED, { retainRatio: 0.05 }), '')
+  // ★★ 2026-09-28（用户口径「把保留比调小(5%→2%)」）：面板 retainPercent ⇒ 覆盖 YAML 的 retainRatio
+  const withRetain = apply(YAML_RESOLVED, readText(JSON.stringify({ autoCompact: { usePanelThreshold: true, thresholdPercent: 10, retainPercent: 2 } })))
+  check('★ 保留比 2%（面板）@ 阈值 10% ⇒ retainRatio 0.02（覆盖 YAML 的 0.05）',
+    withRetain.applied === true && withRetain.config.thresholdRatio === 0.1 && withRetain.config.retainRatio === 0.02, JSON.stringify(withRetain.config))
+  const retainBig = apply(YAML_RESOLVED, readText(JSON.stringify({ autoCompact: { usePanelThreshold: true, thresholdPercent: 10, retainPercent: 50 } })))
+  check('★ 保留比 50% @ 阈值 10% ⇒ 封在 0.7×阈值 = 0.07（不撞官方不变量）',
+    retainBig.config.retainRatio === 0.07, JSON.stringify(retainBig.config.retainRatio))
+  const retainNone = apply(YAML_RESOLVED, readText(JSON.stringify({ autoCompact: { usePanelThreshold: true, thresholdPercent: 10 } })))
+  check('★ 面板未设保留比 ⇒ retainRatio 走 YAML 原值 0.05（行为不变）',
+    retainNone.config.retainRatio === 0.05, JSON.stringify(retainNone.config.retainRatio))
+  const retainRead = readText(JSON.stringify({ autoCompact: { usePanelThreshold: true, thresholdPercent: 10, retainPercent: 2 } }))
+  check('★ readPanelAutoCompact 带出 retainPercent；越界(500)/缺省 ⇒ null',
+    retainRead.retainPercent === 2
+    && readText(JSON.stringify({ autoCompact: { usePanelThreshold: true, thresholdPercent: 10, retainPercent: 500 } })).retainPercent === null
+    && readText(JSON.stringify({ autoCompact: { usePanelThreshold: true, thresholdPercent: 10 } })).retainPercent === null,
+    JSON.stringify(retainRead))
   rmSync(productPath, { force: true })
 }
 
