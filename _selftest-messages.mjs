@@ -94,26 +94,28 @@ await check('总数/最新下标 + 被压缩遮蔽的行不出现（13/14 被 sh
   await withServer(fakeSource({ s: messyEvents }), async (base) => {
     const { body } = await getJson(base, '/api/messages?id=s')
     assert.equal(body.ok, true)
-    assert.equal(body.total, 8, '10 行 - 2 行被压缩遮蔽 + 1 行压缩摘要')
-    assert.equal(body.latestIndex, 7)
+    assert.equal(body.total, 7, '10 行 - 2 行被压缩遮蔽 = 7；★ 压缩摘要（seq24）是账本事件、不在请求面 ⇒ 不再成行')
+    assert.equal(body.latestIndex, 6)
     const seqs = body.messages.map((m) => m.seq)
     assert.ok(!seqs.includes(13) && !seqs.includes(14), '被遮蔽的行必须消失')
-    const comp = body.messages.find((m) => m.seq === 24)
-    assert.equal(comp.isCompacted, true)
+    // ★ 2026-09-28 反证：compaction/summary 从不在请求面（真机 1181 的被压区=486..486 实锚）
+    //   ⇒ 它绝不能再以 role:'user' 活行的形状混进导出（改前和包装行内容成对重复，误导"没解决"）
+    assert.ok(!seqs.includes(24), '压缩摘要账本行不许再出现在对话行里：' + JSON.stringify(seqs))
+    assert.ok(body.messages.every((m) => m.isCompacted === false), '账本行摘除后 isCompacted 恒为 false')
     const tool = body.messages.find((m) => m.seq === 23)
     assert.equal(tool.role, 'tool')
     assert.equal(tool.isToolResult, true)
   })
 })
-await check('默认返回最后 N 条（limit=3 ⇒ index 5..7，绝对下标），from/limit 显式分页', async () => {
+await check('默认返回最后 N 条（limit=3 ⇒ index 4..6，绝对下标），from/limit 显式分页', async () => {
   await withServer(fakeSource({ s: messyEvents }), async (base) => {
     const tail = (await getJson(base, '/api/messages?id=s&limit=3')).body
-    assert.deepEqual(tail.messages.map((m) => m.index), [5, 6, 7])
-    assert.equal(tail.messages[0].seq, 24)
+    assert.deepEqual(tail.messages.map((m) => m.index), [4, 5, 6])
+    assert.equal(tail.messages[0].seq, 23)
     const page = (await getJson(base, '/api/messages?id=s&from=1&limit=2')).body
     assert.deepEqual(page.messages.map((m) => m.index), [1, 2])
     assert.equal(page.messages[0].seq, 12)
-    assert.equal(page.total, 8, 'total 恒为全表总数')
+    assert.equal(page.total, 7, 'total 恒为全表总数')
   })
 })
 await check('preview 只放首行截断，chars 是全文长度', async () => {
@@ -127,12 +129,12 @@ await check('preview 只放首行截断，chars 是全文长度', async () => {
     assert.equal(first.isToolResult, false)
   })
 })
-await check('turn 归属：楼内行取所在楼；压缩摘要行归它所在的楼', async () => {
+await check('turn 归属：楼内行取所在楼（★ 账本行已不再成行）', async () => {
   await withServer(fakeSource({ s: messyEvents }), async (base) => {
     const { body } = await getJson(base, '/api/messages?id=s')
     assert.equal(body.messages.find((m) => m.seq === 21).turn, 2)
     assert.equal(body.messages.find((m) => m.seq === 31).turn, 3)
-    assert.equal(body.messages.find((m) => m.seq === 24).turn, 2)
+    assert.equal(body.messages.find((m) => m.seq === 24), undefined, '账本行不再有 turn 归属可言')
   })
 })
 await check('空会话：total:0、messages:[]、latestIndex:null（W0 增量 2）', async () => {
@@ -176,11 +178,10 @@ await check('★ 甲（2026-09-18）：part=messages&seq= ⇒ 只回那一条的
     // ★ 被压缩遮蔽的行（seq 13/14）已不在模型历史里 ⇒ 如实报没有（⛔ 不许捞回来）
     const shadowed = await getJson(base, '/api/part?id=s&turn=2&part=messages&seq=13')
     assert.equal(shadowed.body.ok, false, '被压缩遮蔽的行不许再捞出来：' + JSON.stringify(shadowed.body))
-    // 但**压缩摘要那一条本身**在历史里（它就是取代前史的那条 user 消息）⇒ 取得到，且带 isCompacted
+    // ★ 2026-09-28：压缩摘要（seq24）是**账本事件**、不在请求面 ⇒ 如实报没有
+    //   （模型收到的是 checkpoint **包装消息**；改前这里还能捞到账本行，会误导"上下文里堆了摘要"）
     const summaryRow = await getJson(base, '/api/part?id=s&turn=2&part=messages&seq=24')
-    assert.equal(summaryRow.body.ok, true, '摘要那条应该取得到')
-    assert.equal(summaryRow.body.isCompacted, true, '摘要那条要如实标 isCompacted')
-    assert.equal(summaryRow.body.message._event, 'compaction/summary', '压缩摘要不是消息 ⇒ 如实标它的事件类型')
+    assert.equal(summaryRow.body.ok, false, '账本行不许再捞出来：' + JSON.stringify(summaryRow.body))
     const gone = await getJson(base, '/api/part?id=s&turn=1&part=messages&seq=22')
     assert.equal(gone.body.ok, false, '第 1 楼发不出 seq=22 ⇒ 必须如实报没有')
     const bad = await getJson(base, '/api/part?id=s&turn=2&part=messages&seq=abc')
