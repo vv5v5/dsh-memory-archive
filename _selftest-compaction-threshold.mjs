@@ -418,8 +418,9 @@ console.log('\nS6 生成物：覆写 + 无 # 私有成员 + 读不到就用 YAML
       && got.config.retainTokens === 8000, JSON.stringify({ panel, applied: got.applied }))
   }
   const off = apply(YAML_RESOLVED, readText(JSON.stringify({ autoCompact: { usePanelThreshold: false, thresholdPercent: 20 } })))
-  check('★ usePanelThreshold 为 false ⇒ 也用 YAML 原值（面板上那个 20% 不生效）',
-    off.applied === false && off.config === YAML_RESOLVED)
+  // ★ 2026-09-28 开关退役 ⇒ usePanelThreshold:false 的老面板读数**同样生效**（20% 覆盖 YAML）
+  check('★ 2026-09-28 开关退役 ⇒ 老读数（usePanelThreshold:false）也恒生效：20% 覆盖 YAML',
+    off.applied === true && off.config.thresholdRatio === 0.2 && off.config.retainRatio === 0.05)
   const on = apply(YAML_RESOLVED, readText(JSON.stringify({ autoCompact: { usePanelThreshold: true, thresholdPercent: 20 } })))
   check('★ 开关开着 + 20% ⇒ 整体替换：thresholdRatio 0.2 + retainRatio 0.05，**删掉互斥的 retainTokens**',
     on.applied === true && on.config.thresholdRatio === 0.2 && on.config.retainRatio === 0.05
@@ -701,8 +702,7 @@ console.log('JSON:' + JSON.stringify(out))
       c20.secondReadTokens === 51200 && c20.finalConfig.thresholdRatio === 0.4, `${c20.secondReadTokens} / ${JSON.stringify(c20.finalConfig)}`)
     check('★ config 里 effective 的是比例式（thresholdRatio 0.2 + retainRatio 0.05，retainTokens 已被去掉）',
       c20.patched.thresholdRatio === 0.2 && c20.patched.retainRatio === 0.05 && c20.patched.hasRetainTokens === false, JSON.stringify(c20.patched))
-    check('★ 开关关掉 ⇒ 回到预设 YAML 那两个数（0.15 + retainRatio 0.05，触发点 19200）',
-      cOff.triggerTokens === 19200 && cOff.patched.thresholdRatio === 0.15, JSON.stringify({ t: cOff.triggerTokens, p: cOff.patched }))
+    check('★ 2026-09-28 开关退役 ⇒ 面板值恒生效：关不掉（cOff 也走面板，触发点同 20% 档）', cOff.triggerTokens === 25600 && cOff.patched.thresholdRatio === 0.2, JSON.stringify({ t: cOff.triggerTokens, p: cOff.patched }))
     check('★ 配置文件是坏 JSON ⇒ 同样回预设原值（触发点 19200），⛔ 不退回官方默认 0.8', cBad.triggerTokens === 19200, JSON.stringify(cBad).slice(0, 400))
     check('★ 根本没有配置文件 ⇒ 同样回预设原值（触发点 19200）', cNone.triggerTokens === 19200, JSON.stringify(cNone).slice(0, 400))
     // ── ★ 2026-09-22 修好后的两档（同一个子进程里的真引擎 + 假 ctx.llm.stream）──
@@ -843,10 +843,9 @@ const s9 = await (async () => {
   }
   return out
 })()
-
-check('GET /config 投影出 autoCompact（默认开 + 15%）',
-  s9.defaultConfig && s9.defaultConfig.usePanelThreshold === true && s9.defaultConfig.thresholdPercent === 15,
-  JSON.stringify(s9.defaultConfig))
+check('★ GET /config 投影出 autoCompact（15% + 保留比未设为 null）—— 开关退役后不再投影 usePanelThreshold',
+  s9.defaultConfig && s9.defaultConfig.thresholdPercent === 15 && s9.defaultConfig.retainPercent === null
+  && s9.defaultConfig.usePanelThreshold === undefined, JSON.stringify(s9.defaultConfig))
 check('★ GET /compaction/state：percent 走官方公式（52000/128000 ⇒ 41）、triggerPercent 走计量（60160 ⇒ 47）——**两个数确实不同**',
   s9.stateLive.percent === 41 && s9.stateLive.usedTokens === 52000
   && s9.stateLive.triggerPercent === 47 && s9.stateLive.triggerTokens === 60160
@@ -869,7 +868,7 @@ check('notes 是宿主给的如实说明（立刻生效 / 估算略早 / 超限�
 check('★ POST /compaction/config：两件事都写成（config.ok 与 yaml.ok 同时 true）',
   s9.writeOk.ok === true && s9.writeOk.config.ok === true && s9.writeOk.yaml.ok === true && s9.writeOk.yaml.changed === true,
   JSON.stringify(s9.writeOk))
-check('★ config.json 里落了 autoCompact（20% + 开关开）', s9.configAfter.autoCompact.usePanelThreshold === true && s9.configAfter.autoCompact.thresholdPercent === 20,
+check('★ config.json 里落了 autoCompact（20% + 保留比未设）', s9.configAfter.autoCompact.thresholdPercent === 20 && s9.configAfter.autoCompact.retainPercent === null,
   JSON.stringify(s9.configAfter.autoCompact))
 check('★ 部署的预设 YAML 只改了那一行（0.15 → 0.2，注释缩进原样）',
   s9.yamlAfter.includes('        thresholdRatio: 0.2') && s9.yamlAfter.includes('        retainRatio: 0.05')
@@ -881,20 +880,20 @@ check('★ 越界 999 ⇒ 夹到 90%（config 与 yaml 都是 0.9，并在 confi
   s9.writeClamped.applied.thresholdPercent === 90 && s9.writeClamped.config.thresholdPercent === 90
   && s9.writeClamped.yaml.after === 0.9 && s9.yamlClamped.includes('thresholdRatio: 0.9')
   && typeof s9.writeClamped.config.reason === 'string' && s9.writeClamped.config.reason.includes('90'), JSON.stringify({ applied: s9.writeClamped.applied, reason: s9.writeClamped.config.reason }))
-check('★★ 两件事各自如实：预设里 2 处 thresholdRatio ⇒ yaml.ok:false（拒绝改、盘上没动），**而 config.ok:true**（写成了 35% / 开关关）',
+check('★★ 两件事各自如实：预设里 2 处 thresholdRatio ⇒ yaml.ok:false（拒绝改、盘上没动），**而 config.ok:true**（写成了 35%）',
   s9.writePartial.config.ok === true && s9.writePartial.yaml.ok === false
   && String(s9.writePartial.yaml.reason).includes('2 次')
   && s9.writePartial.ok === false && typeof s9.writePartial.error.message === 'string'
   && s9.yamlUntouchedOnRefuse.includes('thresholdRatio: 0.9')
-  && s9.configAfterPartial.usePanelThreshold === false && s9.configAfterPartial.thresholdPercent === 35,
+  && s9.configAfterPartial.thresholdPercent === 35,
   JSON.stringify({ config: s9.writePartial.config, yaml: s9.writePartial.yaml, err: s9.writePartial.error }))
 
-check('★ 盘上写着非法值（"yes" / 999）⇒ sanitize 如实回落：开关仍是**开**（不是被 "yes" 顶成关）、百分比夹到 90 并记进 configError',
-  s9.sanitized.autoCompact.usePanelThreshold === true && s9.sanitized.autoCompact.thresholdPercent === 90
+check('★ 盘上写着非法值（"yes" / 999）⇒ sanitize 如实回落：百分比夹到 90 并记进 configError',
+  s9.sanitized.autoCompact.thresholdPercent === 90
   && typeof s9.sanitized.configError === 'string' && s9.sanitized.configError.includes('autoCompact.thresholdPercent'),
   JSON.stringify({ ac: s9.sanitized.autoCompact, err: s9.sanitized.configError }))
 check('★ 夹紧后的 90% 真的进了实时读数（thresholdTokens = 0.9 × 128000 = 115200）',
-  s9.stateClamped.enabled === true && s9.stateClamped.thresholdPercent === 90 && s9.stateClamped.thresholdTokens === 115200,
+  s9.stateClamped.thresholdPercent === 90 && s9.stateClamped.thresholdTokens === 115200,
   JSON.stringify(s9.stateClamped))
 
 // ───────────────── S10 ★ 修好后的请求形状（从生成物导出纯函数直测） ─────────────────
