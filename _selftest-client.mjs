@@ -3841,15 +3841,14 @@ await check('★ 压缩·控件（验收5；★ 2026-09-28 改：步长取消 + 
   assert.ok(body.includes("id: 'dma-compact-percent'") && body.includes("type: 'number'"), '缺数字框')
   // ★ 2026-09-28：保留比输入框（用户口径「把保留比调小(5%→2%)」—— 在面板上可设）
   assert.ok(body.includes("id: 'dma-compact-retain'") && body.includes('retainPercent'), '缺保留比输入框')
-  assert.ok(body.includes("body.retainPercent = rn"), '保存体没带保留比')
+  assert.ok(body.includes("mutateJson(HOST_API_BASE + '/compaction/config', 'POST', { retainPercent: rn }"), '保留比的保存体没带 retainPercent')
   assert.ok(body.includes("'保留比 YAML：'"), '保留比 yml 的写盘回执没有单独显示')
-  assert.ok(body.includes("id: 'dma-compact-switch'") && body.includes("type: 'checkbox'"), '缺「用面板的阈值」开关')
-  assert.ok(body.includes("id: 'dma-compact-save'"), '缺保存按钮')
+  assert.ok(body.includes("id: 'dma-compact-save-thr'") && body.includes("id: 'dma-compact-retain-save'"), '缺两颗保存按钮（阈值/保留比各一颗）')
   // 互相同步：两个控件都读同一份 percent state，且变更都走同一个 onPercent
   assert.ok((body.match(/onChange: \(ev\) => onPercent\(ev\.target\.value\)/g) || []).length === 2, '滑块与数字框没有共用同一个同步函数')
   assert.ok(body.includes('const onPercent = (raw) => {'), '缺 onPercent（同步 + 夹紧）')
   // 保存体：两个字段都带
-  assert.ok(body.includes('const body = { usePanelThreshold: usePanel }') && body.includes('body.thresholdPercent = n'), '保存体缺字段')
+  assert.ok(body.includes('const body = Number.isFinite(n) ? { thresholdPercent: n } : {}'), '阈值保存体缺字段')
   // 如实小字：由宿主 notes 渲染，客户端不另写一份
   assert.ok(body.includes('notes.map((line, i) =>'), '没有渲染宿主给的 notes')
   assert.equal(body.includes('略早'), false, '⛔ 客户端自己写了"略早"那段小字（必须由宿主给，免得两份漂）')
@@ -3863,7 +3862,7 @@ await check('★ 压缩·控件（验收5；★ 2026-09-28 改：步长取消 + 
 await check('★ 压缩·失败也说话（验收6）：整体 ok:false 时从 err.payload 里把两半摊开，⛔ 不静默', () => {
   const body = compactFlowBody()
   assert.ok(body.includes("const payload = error && error.payload ? error.payload : null"), '抛错时没读 err.payload（两半的原因会丢）')
-  assert.ok(body.includes("setSave({ busy: false, ok: false, text: errText(error), detail: payload })"), '失败没进 detail（界面上看不到两半）')
+  assert.ok((body.match(/setSave(Thr|Ret)\(\{ busy: false, ok: false, text: errText\(error\), detail: payload \}\)/g) || []).length === 2, '阈值/保留比两条保存的失败都得进 detail')
   assert.ok(body.includes('void load()'), '失败后没有回读一次真实状态（界面会停在旧数）')
 })
 
