@@ -78,13 +78,19 @@ t('S6 面板：`state:card` 只作"已退役"的历史识别保留（⛔ 不再�
   assert.ok(src.includes('【已退役 · 2026-09-20】'), '老捕获那两行的注释该标"已退役"')
 })
 
-t('S7 预设（若本机有）：两级挂载都没了，且正文改指 `state.md`', () => {
-  const preset = 'C:/Users/w/.dsh/.agent-presets/roleplay/agent.cordis.yml'
-  if (!existsSync(preset)) return // 别的机器上没这份预设 ⇒ 跳过（⛔ 不假装测过）
-  const yml = read(preset)
-  assert.equal(/^- id: state-bridge\s*$/m.test(yml), false, '⛔ 预设里还挂着 state-bridge')
-  assert.equal(/^- id: story-anchor\s*$/m.test(yml), false, '⛔ 预设里还挂着 story-anchor（口径是"暂时不注册"）')
-  assert.ok(yml.includes('state.md'), '预设正文该指向周目笔记的 state.md')
+t('S7 预设：两级挂载都没了；persona 正文不再指向 state.md（2026-09-29 四账+简报制，state.md 无人维护）', () => {
+  const deployed = 'C:/Users/w/.dsh/.agent-presets/roleplay/agent.cordis.yml'
+  if (existsSync(deployed)) { // 别的机器上没这份预设 ⇒ 跳过（⛔ 不假装测过）
+    const yml = read(deployed)
+    assert.equal(/^- id: state-bridge\s*$/m.test(yml), false, '⛔ 预设里还挂着 state-bridge')
+    assert.equal(/^- id: story-anchor\s*$/m.test(yml), false, '⛔ 预设里还挂着 story-anchor（口径是"暂时不注册"）')
+  }
+  const repoYml = read(path.join(here, 'preset', 'agent.cordis.yml'))
+  const iPrefix = repoYml.indexOf('prefix: |-')
+  const iEnd = repoYml.indexOf('\n- id:', iPrefix)
+  const persona = iPrefix > 0 && iEnd > iPrefix ? repoYml.slice(iPrefix, iEnd) : ''
+  assert.ok(persona.length > 1000, '切不出 repo persona 正文')
+  assert.equal(persona.includes('state.md'), false, '⛔ persona 正文还指向无人维护的 state.md（现状源＝主管四账＋简报）')
 })
 
 t('S8 四个 state_* 工具名不再出现在**任何** lib/ 源码里（⛔ 防回流；注释提及不算）', () => {

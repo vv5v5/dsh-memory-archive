@@ -6,6 +6,59 @@
 
 ## [Unreleased]
 
+### 2026-09-30（**尾部注入改"替换"**：主管简报 / index 尾注 / PHI 不再逐楼叠加——`[剧情简报]` 真机 10 楼叠 10 份的修复）
+
+> 任务书：`04-派单\手工派单-任务书-尾部注入改替换（anima+记忆库不再叠加）-20260930.md`（tavern 那半边已由
+> vv5v5 fork `daf7c73` 完成，本条照同一口径补齐本仓三处）。⚠️ 未提交未推送，等主管发话。
+
+- **根因**：`agent/pre-step` 往 `decision.messages` 追加 ⇒ agent-loop 逐条 `session.append('user/message')`
+  落盘成**新的**历史事件，上一轮那条没人退休 ⇒ 逐楼累积（真机第 89 楼：`[剧情简报]` 10 份 8,890 字，
+  请求体九成是过去 10 轮读过的旧注入）。
+- **修法（宿主 surface 替换，compaction 压历史同款机制）**：记着上一轮自己那条的 seq、且它还在
+  `session.surface.nodes` 上 ⇒ `session.append('user/message', msg, { op:'replace', … })`——新节点占位、
+  旧的从请求面消失（shadowed，日志一条不删）；首轮/被压缩掉/拿不到会话/append 抛错 ⇒ 退回 append 或
+  `decision.messages` 老路（宁可叠加，也不静默丢内容，退回必留痕）。
+- 新纯函数 `planTailSurfaceOp({previousSeq, surfaceNodes})`（`lib/phi-message.js` 导出；三处共用）；
+  `lib/index.js` 新增统一交付 `deliverTailMessage(…)`——**主管简报**（`supervisor-briefing`）与
+  **index 状态尾注**（`index-state`）同一条 pre-step 两支**各自记各自的 seq**，互不替换对方；
+  PHI（`lib/phi-message.js` registerPhiMessage）同口径。消息形状（`id`/`role`/`content`/`source`）一律照旧
+  （缺 `id` 落盘过不了 V4 校验——2026-09-29 踩过）。
+- 台子：新增 `_selftest-tail-surface.mjs`（13 条：纯函数真值表 / phi 两楼 append→replace / 抛错与会话缺席的
+  退回 / 清扫计划含幂等与白名单反证 / ★行为对拍反证 + source pin）；`_selftest-phi-message.mjs` P4 改钉新契约
+  + P4b 钉退回老路。
+- **手术清扫端点**（2026-09-30 用户拍板）：`POST /surface/cleanup-tail-injections` `{sessionId, dryRun}`——
+  修复前落盘的旧尾部注入逐条微型 replace 换下请求面（占位 form `tail-residue-cleanup` 不在白名单 ⇒ 幂等；
+  ⛔ 缺省 dryRun，真跑必须显式 `dryRun:false`）。真机首跑：31 条 / 换下 98,471 字 / 0 失败 / 重跑 0 目标；
+  同晚又扫了分叉会话 ee784642（9 条 / 21,860 字）与另一线 aea5ea68（17 条 / 140,987 字）。
+- **首楼认领**（同晚，fork/重启自愈）：各注入器在**没有自记 seq** 时（进程首楼/新 fork 会话），
+  `tailOwnFormState` 把 surface 上自己 form 的最新一条当替换目标（认领——重启孤儿/分叉继承的那条被
+  换掉而不是叠加），更旧的旧节点逐条占位换下 ⇒ **分叉/重启不再重新累积**（覆盖 简报/index 尾注/PHI；
+  anima 同款在其仓；tavern 的 runtime-lore 仍靠重跑本端点）。
+
+### 2026-09-30（**"anima 又空了"定案：不是接口错，是 8B 在服务端双峰抖动** ＋ 摘掉维度不匹配的旧库 ＋ 预算抬到 30s×2）
+
+> 用户口径（逐字）：「修一下amina失败的问题。看一下api回复的具体报错，先定位是什么问题导致超时」→
+> 「确实是8b」「加大预算吧。慢就慢点」「从 chatCollections 摘掉」。
+
+- **定案（真机实测，非推断）**：`Qwen/Qwen3-Embedding-8B` **没有报错** —— 它回的是 HTTP 200，
+  只是**时快时慢且双峰**。同一把 key、同一句话、同一时间窗，交替打 4 轮 + 连打 6 次（共 12 次）：
+  - 快档 6/12：`0.205 / 0.395 / 0.791 / 1.639 / 2.622 / 3.303 s`
+  - 慢档 6/12：`12.39 / ≥20 / 22.0 / 26.6 / ≥30 / ≥30 s` ← **3.3s~12.4s 之间一次都没有**
+  - 对照：同批 `Qwen/Qwen3-Embedding-4B` 稳定 `82–326ms`、0 次超时；
+    **重排**无问题 —— `Qwen/Qwen3-Reranker-8B` `423 / 251 / 144 ms`。
+  ⇒ 所以改前那句"超时无响应"是**插件自己按 5000ms 掐断**的，不是服务端回错；而 5000×2 的预算
+  在双峰分布下**必然经常两次都撞上慢档**。探针脚本留在 `产物\memory-tools\_probe-embed-*.mjs`（3 个）。
+- **Changed｜预算（`preset/agent.cordis.yml` 的 anima 行）**：`embed.timeout_ms` 5000 → **30000**、
+  `timeoutMs`（每轮硬上限）12000 → **65000**（单次 30000 × `attempts` 2 = 60000 +
+  `EMBED_RESERVE_MS` 2000）。每轮失败率 ≈ (3/12)² ≈ 6%，代价是**最坏一轮等约 60s**
+  （⇒ 同批要求前台提示，另单）。
+- **Fixed｜维度不匹配的静默（`chatCollections` 摘掉 `影子_-0906重开`）**：该库是 **2560 维**
+  （09-17 用 4B 建的），查询却是 8B 的 **4096 维** ⇒ vectra 点积比到 2560 之后 `arr2[i]` 是
+  `undefined` ⇒ 相似度 **NaN** ⇒ 那 16 条**每轮白算一遍再被 `min_score` 静默丢掉**
+  （引擎 `dimensionDiagnostics` 已会把它如实写进注入那一格）。反方向更坏（只算前 2560 维 ⇒
+  看着正常的**假分数**可能混进结果）⇒ **两个库必须同处一个向量空间**，否则只能二选一。
+  要用它 ⇒ 先按当前模型整库重算（原文都在它自己的元数据文件里）再挂回来。
+
 ## [0.8.0] - 2026-09-28
 
 ### 2026-09-28 深夜（查看器不再把压缩账本行画成对话行——「看着还是没解决」的错觉来源）

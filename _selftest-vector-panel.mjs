@@ -485,8 +485,8 @@ console.log('\n── E) client.js 源级 ──')
 
 sensitive(
   // ★ 2026-09-25 美化单（用户拍板）：页签名「剧情大纲」→「RP 记忆」，源级断言跟着改。
-  'E1 档位同层：computeSources 返回 [摘要, 原文, RP 记忆, 向量]',
-  (s) => s.includes("['summaries', '摘要'], ['floors', '原文'], ['outline', 'RP 记忆'], ['vector', '向量']"),
+  'E1 档位同层：computeSources 返回 [原文, 摘要, 向量, RP 记忆, 主管]（0930 顺序调整+主管档）',
+  (s) => s.includes("['floors', '原文'], ['summaries', '摘要'], ['vector', '向量'], ['outline', 'RP 记忆'], ['supervisor', '主管']"),
   "['vector', '向量']",
 )
 sensitive(

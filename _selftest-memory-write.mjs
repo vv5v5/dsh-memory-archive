@@ -16,11 +16,12 @@ import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply } from './lib/index.js'
+const NL_MW = String.fromCharCode(10)
 import {
   MEMORY_WRITE_TOOL, MEMORY_WRITE_DIR, MEMORY_WRITE_MAX_CHARS, MEMORY_WRITE_MODES, NOTE_SELF_MARK,
   NOTES_MAINTENANCE_LIMIT_CHARS, notesMaintenanceHint,
   SANDBOX_MODES, readMemoryWriteSwitch, decideNoteWrite, foldSandboxMode, sandboxDecision,
-  planNoteWrite, applyNoteWrite,
+  planNoteWrite, applyNoteWrite, headingSkeleton,
 } from './lib/memory-write.js'
 // ★I 那三条用的**真** `writeWithBackup`：与 lib/index.js 接线时喂进去的是**同一份**
 //   （`deadzone.js` 的；⛔ 不在这里另写一份备份实现 —— 那就不是"接线那一脚真能用"了）。
@@ -393,6 +394,39 @@ check('① 常量：工具名 memory_write、目录 .roleplay-memory（与社区
     + '（⛔ 不许"对不上就当第一段" —— 那正是会误删别人内容的那一脚）',
     misTitle.ok === false && misTitle.reason === 'find-missing', JSON.stringify(misTitle).slice(0, 200))
 
+  // ⑦c ★ 2026-09-29（用户口径「replace 很难用」）：**标题限定行 = 同级 + 规范化前缀**（不必整行抄）。
+  //   真机踩的坑原样进台子：实际标题带副题/弯引号，模型只给前缀 ⇒ 上一版逐字比必挂、回执只叫它重读全文。
+  const sceneReal =
+    MARK_M + '\n## 第8场 · 续十七 — 永生花揭“露出”玩法\n跳蛋、露出、义茎处理。\n\n' +
+    MARK_M + '\n## 第8场 · 续十八 — 下半\n塞玩具、出门。\n'
+  const pfx = planNoteWrite({ current: sceneReal, mode: 'replace',
+    find: MARK_M + '\n## 第8场 · 续十七',
+    text: MARK_M + '\n## 第8场 · 续十七 — 永生花揭"露出"玩法（已收纳）\n一行场记。\n' })
+  check('★M⑦c 标题限定行给**无歧义前缀** ⇒ 命中唯一段整段换（带副题/弯引号的标题不必整行抄；别的段一个字节不动）',
+    pfx.ok === true && pfx.next.includes('（已收纳）') && pfx.next.includes('塞玩具、出门。') && !pfx.next.includes('跳蛋'),
+    JSON.stringify({ ok: pfx.ok, reason: pfx.reason, rc: pfx.replacedChars }).slice(0, 240))
+  // ⑦d 规范化的两只角：全角数字（８⇄8）与弯直引号（“”⇄"")都算同一个字。
+  const pfxN = planNoteWrite({ current: MARK_M + '\n## 第８场 · 续十七 — 永生花揭“露出”玩法\n正文A\n',
+    find: MARK_M + '\n## 第8场 · 续十七 — 永生花揭"露出"玩法', text: MARK_M + '\n## 第8场 · 续十七\n一行。\n' })
+  check('★M⑦d 规范化命中：全角８⇄半角8、弯引号⇄直引号（NFKC + 引号折叠 + 去空白），整行抄也不误伤',
+    pfxN.ok === true && pfxN.next.includes('一行。') && !pfxN.next.includes('正文A'),
+    JSON.stringify({ ok: pfxN.ok, reason: pfxN.reason }).slice(0, 200))
+  // ⑦e 反证 ×2：**层级不同不算命中**（### 别想吃 ## 的段）；**真前缀撞多段 ⇒ find-ambiguous**（含糊即拒）。
+  const lvlSeg = planNoteWrite({ current: sceneReal, mode: 'replace', find: MARK_M + '\n### 第8场 · 续十七', text: 'x' })
+  const ambSeg = planNoteWrite({ current:
+    MARK_M + '\n## 第8场 · 续十七 — 上\nA\n\n' + MARK_M + '\n## 第8场 · 续十七 — 下\nB\n',
+    mode: 'replace', find: MARK_M + '\n## 第8场 · 续十七', text: 'x' })
+  check('★M⑦e 反证：标题限定行**层级不同**（### 对 ##）⇒ find-missing；前缀**撞多段** ⇒ find-ambiguous（⛔ 不猜）',
+    lvlSeg.ok === false && lvlSeg.reason === 'find-missing' && ambSeg.ok === false && ambSeg.reason === 'find-ambiguous',
+    JSON.stringify({ lvl: lvlSeg.reason, amb: ambSeg.reason }).slice(0, 200))
+  // ⑦g 标题骨架：find 失配回执 / 写入回执的「一步重锚」清单（带行号、超宽截断、无标题 ⇒ 空串）。
+  const sk = headingSkeleton('# 一\n正文\n\n## 二·很长很长很长很长很长很长很长很长很长很长很长很长\n尾\n')
+  const skCut = headingSkeleton('# 一\n正文\n\n## 二·很长很长很长很长很长很长很长很长很长很长很长很长\n尾\n', { width: 10 })
+  check('★M⑦g 标题骨架：带行号列出标题、超宽截断（width:10 ⇒ 带 …）、无标题/空文 ⇒ 空串',
+    sk.includes('L1: # 一') && sk.includes('L4: ## 二·') && !sk.includes('…')
+      && skCut.includes('L4: ## 二·很长很长很…') && skCut.includes('…')
+      && headingSkeleton('没有标题的文件') === '' && headingSkeleton('') === '', JSON.stringify(skCut).slice(0, 220))
+
   // ⑧ 相：常量与"两处一致"
   check('★M⑧（相）常量：`NOTE_SELF_MARK` 就是 persona §5 里写的那个字面（逐字，一个字符都不许改）',
     MARK === '〔AI 自记〕', JSON.stringify(MARK))
@@ -401,6 +435,26 @@ check('① 常量：工具名 memory_write、目录 .roleplay-memory（与社区
     + '重打一遍就迟早两处不一致（persona §5 那一处一致不一致由 `_selftest-preset-persona.mjs` 钉）',
     hostSrcM.includes('NOTE_SELF_MARK') && hostSrcM.includes(MARK) === false,
     `引用=${hostSrcM.includes('NOTE_SELF_MARK')} 重打=${hostSrcM.includes(MARK)}`)
+  // ★ 2026-09-29：写入回执**带标题骨架**（schema 声明 headings + render 加尾巴 —— ⛔ 漏声明整份返回会被
+  //   宿主 output schema 拒掉，2026-09-26 anima_query 的 diagnostics 踩过同一道）。
+  check('★M⑧c 写入回执带标题骨架：schema 声明 `headings` + render 加「现标题骨架」尾巴',
+    hostSrcM.includes("headings: { type: 'string' }") && hostSrcM.includes('现标题骨架（replace 对锚用'),
+    'index.js 源里缺 headings 回执')
+  // ★ 2026-09-29：主管简报 / index 状态尾注接线 —— pre-step 尾消息（⛔ **必须自带 id**，缺 id 落盘过不了
+  //   V4 校验、resume 拒载 —— 2026-09-29 pmp 世界书尾注把 session-12b02aab 弄拒载的同一道坑）
+  //   + config `indexStatePerTurn`/`supervisor` 总开关（默认开 / sanitize 严格布尔 / patch 校验）。
+  check('★M⑧d 主管简报/index 状态尾注接线：registerSupervisor 挂上 apply + 尾消息自带 id + 双 source + 开关',
+    hostSrcM.includes('function registerSupervisor(ctx, log)')
+      && hostSrcM.includes('registerSupervisor(ctx, log)')
+      && hostSrcM.includes('id: randomUUID()')
+      && hostSrcM.includes("source: { kind: 'plugin:dsh-memory-archive', form: 'supervisor-briefing' }")
+      && hostSrcM.includes("form: 'index-state'")
+      && hostSrcM.includes('indexStatePerTurn === false')
+      && hostSrcM.includes('indexStatePerTurn: true')
+      && hostSrcM.includes("issues.push('indexStatePerTurn 不是布尔值，已回落 true')")
+      && hostSrcM.includes('fail(\'"indexStatePerTurn" 必须是布尔值\')')
+      && hostSrcM.includes('supervisor: { enabled: true, everyNFloors: 1, briefingMaxChars: 1800, model: \'\' }'),
+    'index.js 源里缺主管/状态尾注接线')
 
   // ⑨ 逐字模式那几条判据**一个字都没动**（本单只**加**了一条"第一行是标记行"的分岔）：
   //   重叠出现照旧算两处（`aa` 在 `aaa` 里 ⇒ 两处 ⇒ find-ambiguous）；不是标记行开头的 find 照旧走逐字模式。
@@ -419,7 +473,7 @@ check('① 常量：工具名 memory_write、目录 .roleplay-memory（与社区
 //   ★ 本单**只改文案与给模型的下一步动作**：判据一个字没动（`over-budget` 仍是"`text` 超 `maxChars` ⇒ 拒收"，
 //     ⛔ 不新造阈值、⛔ 不改上限数值、⛔ 不加自动压缩/自动删除）。
 //   ★U① 钉"闸不分 mode ＋ 上限只有一个来源"；★U② 钉「**瘦身本来就过得了**」—— 回执里那三条出路
-//   （`replace` 成空 / 最早场记压成一行 / `index.md` 按骨架整段换掉）落地时每一脚都要走它；
+//   （`replace` 成空 / 场记整段挪 `world.md` 只留一行标记 / `index.md` 按骨架整段换掉）落地时每一脚都要走它；
 //   ★ 任务书 §2.3 追问的就是这一路：`replace` 的 `text` **也**受同一个上限管，但那**不妨碍**瘦身 ——
 //     闸看的是 `text` 的**长度**，⛔ 不是结果文件的长度，也不是 `find` 的长度。
 //   ⚠️ 回执那段**字面**（三件事都在不在、顺序是不是"先优化、再写"）由真工具那一侧钉：★E9 / ★E9b / ★E9c。
@@ -592,6 +646,8 @@ check('① 常量：工具名 memory_write、目录 .roleplay-memory（与社区
     mkdirSync(join(HOME, 'dsh-memory-archive'), { recursive: true })
     writeFileSync(join(HOME, 'dsh-memory-archive', 'config.json'), JSON.stringify({
       schemaVersion: 1, rootMode: 'workspace', root: { sessionId: null, characterId: 'ch', playthroughId: 'pt' },
+      // ★ 2026-09-30：E 区测的是**旧全功能面**（replace/overwrite 教学与流程）⇒ 主管关闭（append-only 闸随主管开关联动）
+      supervisor: { enabled: false },
     }))
     mkdirSync(join(HOME, 'pmp-dsh-tavern'), { recursive: true })
     writeFileSync(join(HOME, 'pmp-dsh-tavern', 'play-workspace.json'), JSON.stringify({ schemaVersion: 1, rootPath: WS }))
@@ -667,6 +723,9 @@ check('① 常量：工具名 memory_write、目录 .roleplay-memory（与社区
     check('★E3 找不到 ⇒ 拒收，理由点明"先 read 一遍"（⛔ 不是 `拒写：find-missing` 这种黑话）',
       typeof r3a.err === 'string' && r3a.err.includes('没找到') && r3a.err.includes('read'),
       String(r3a.err).slice(0, 200))
+    check('★E3c ★ 2026-09-29：find 失配 ⇒ 回执带**标题骨架**与「无歧义前缀」出路（对照重锚一步到位，⛔ 不再只叫它重读全文）',
+      typeof r3a.err === 'string' && r3a.err.includes('标题骨架') && r3a.err.includes('无歧义前缀'),
+      String(r3a.err).slice(0, 400))
     const r3b = await callTool({ path: 'index.md', mode: 'replace', find: '## ', text: 'x' })
     check('★E3b 多义 ⇒ 拒收，理由说清"出现了几次"（`## ` 在现文里 3 次）并要它"给长一点、能唯一确定的一段"',
       typeof r3b.err === 'string' && r3b.err.includes('出现了 3 次') && r3b.err.includes('唯一确定'),
@@ -752,9 +811,10 @@ check('① 常量：工具名 memory_write、目录 .roleplay-memory（与社区
     const filesBefore7 = readdirSync(MEM).sort()
     writeFileSync(memFile('rounds.md'), SEG_E, 'utf8')
     const rAmb = await callTool({ path: 'rounds.md', mode: 'replace', find: MARK_M, text: 'x' })
-    check('★E8 真工具（段模式的多义）：`find` 只给标记行、盘上有**两段** ⇒ 拒收，理由说清"出现了 2 次"'
-      + '并要它"给长一点"（模型照做就能改对）',
-      typeof rAmb.err === 'string' && rAmb.err.includes('出现了 2 次') && rAmb.err.includes('唯一确定'),
+    check('★E8 真工具（段模式的多义）：`find` 只给标记行、盘上有**两段** ⇒ 拒收，理由说清"命中了多段"'
+      + '并要它"加长前缀到唯一确定"（模型照做就能改对；2026-09-29 起回执还带标题骨架）',
+      typeof rAmb.err === 'string' && rAmb.err.includes('命中了**多段**') && rAmb.err.includes('唯一确定')
+        && rAmb.err.includes('标题骨架'),
       String(rAmb.err).slice(0, 240))
     check('★E8b 那一次拒收之后盘上**零变化**（逐字节没变、没多出 `.bak-`）',
       readFileSync(memFile('rounds.md'), 'utf8') === SEG_E
@@ -774,7 +834,7 @@ check('① 常量：工具名 memory_write、目录 .roleplay-memory（与社区
     // ⑨（★20260926 单）**撞单次上限** ⇒ 回执（工具抛的那句话）必须把**三件事**说全，顺序是"先优化、再写"。
     //   用户口径（逐字）：「重新设计下记忆写入功能，改为**到上限时自动提示需要优化**。同步**轻量化提示词**」。
     //   ① 撞的是哪个上限（这一段 N 字符 / 单次上限 M）；② 为什么该优化（笔记在长胖 / 那几段该"每轮替换、只留最新"）；
-    //   ③ 怎么优化（可照做的三件：`replace` ＋ `text:''` / 最早场记压成一行、伏笔挪 `world.md` / `index.md` 按骨架整段换掉）。
+    //   ③ 怎么优化（可照做的三件：`replace` ＋ `text:''` / 只留最近 3 场、场记整段挪 `world.md` / `index.md` 按骨架整段换掉）。
     //   ⚠️ 判据写成一个小函数 `overFacts()`：★E9 拿**真回执**算、★E9b 拿**被剪过的副本**再算一遍 ——
     //     证明它会咬人（不是形状断言：剪掉"怎么优化"那一段，同一条必红）。
     const filesBefore9 = readdirSync(MEM).sort()
@@ -786,13 +846,13 @@ check('① 常量：工具名 memory_write、目录 .roleplay-memory（与社区
       num: m.includes(`这一段 ${CH} 字符`) && m.includes(`超过单次上限 ${MEMORY_WRITE_MAX_CHARS}`),
       why: m.includes('笔记在长胖') && m.includes('每轮替换、只留最新'),
       how: m.includes("mode:'replace'") && m.includes("text:''") && m.includes('把 `find` 指到的那一段整个删掉')
-        && m.includes('world.md') && m.includes('压成**一行**留在原位')
+        && m.includes('world.md') && m.includes('只留最近 3 场') && m.includes('整段挪进')
         && m.includes('index.md') && m.includes('骨架') && m.includes('整段换掉'),
       order: m.indexOf('先优化') > 0 && m.indexOf('拆成两次写') > m.indexOf('先优化'),
     })
     const f9 = overFacts(overMsg)
     check('★E9 ★（20260926）撞单次上限 ⇒ 回执把**三件事**说全：①数字（这一段 N 字符 / 单次上限 M）'
-      + '②为什么（笔记在长胖 / 那几段该"每轮替换、只留最新"）③怎么优化（`replace`＋`text:\'\'` / 最早场记压成一行、'
+      + '②为什么（笔记在长胖 / 那几段该"每轮替换、只留最新"）③怎么优化（`replace`＋`text:\'\'` / 只留最近 3 场、'
       + '伏笔挪 `world.md` / `index.md` 按骨架整段换掉）—— ⛔ 不再是干巴巴一句"超了"',
       f9.num && f9.why && f9.how, JSON.stringify({ f9, msg: overMsg.slice(0, 420) }))
     check('★E9b ★顺序口径：**先优化、再写** —— "拆成两次写"若出现，必须排在"先优化"**之后**'
@@ -821,6 +881,49 @@ check('① 常量：工具名 memory_write、目录 .roleplay-memory（与社区
       && readFileSync(memFile('rounds.md'), 'utf8') === textBefore9
       && JSON.stringify(readdirSync(MEM).sort()) === JSON.stringify(filesBefore9),
       JSON.stringify(readdirSync(MEM)))
+
+  // ───────── ★ES（2026-09-30 单）：**主管开启 ⇒ 写作者 append-only 硬闸** ─────────
+  //   persona 新契约（随记只进 index.md）被上百楼拼接历史的"往 notes.md 记场记"示范压过（真机 00:51 实锤）
+  //   ⇒ 闸上在**工具执行层**：主管开启时 path 必须 index.md 且 mode 必须 append，其余拒收并当场指路。
+  //   工具描述同步窄面（不再教 replace/overwrite/维护三规矩）。
+  {
+    writeFileSync(join(HOME, 'dsh-memory-archive', 'config.json'), JSON.stringify({
+      schemaVersion: 1, rootMode: 'workspace', root: { sessionId: null, characterId: 'ch', playthroughId: 'pt' },
+      supervisor: { enabled: true },
+    }))
+    const tools2 = []
+    const ctx2 = {
+      effect: (fn) => fn(),
+      inject: (_names, cb) => { cb(ctx2); return () => {} },
+      get: (name) => (name === 'webServer' ? { register: () => () => {} } : undefined),
+      webServer: { register: () => () => {} },
+      plugin: (spec) => { spec.apply({ effect: (fn) => fn(), on: () => () => {}, systemPrompt: { section: () => () => {} } }) },
+      on: () => () => {},
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      tools: { register: (t) => { tools2.push(t); return () => {} } },
+    }
+    apply(ctx2)
+    const tool2 = tools2.find((t) => t.name === 'memory_write')
+    const call2 = async (args) => {
+      try { return { out: await tool2.execute(args, exec) } } catch (e) { return { err: String(e?.message || e) } }
+    }
+    check('★ES1 描述窄面：不再教「唯一作者与维护者/维护三规矩」，改教随记单口（append 到 index.md）',
+      tool2.description.includes('导演随记') && tool2.description.includes('记忆主管')
+        && !tool2.description.includes('唯一作者与维护者') && !tool2.description.includes('维护三规矩'),
+      tool2.description.slice(0, 120))
+    const rs = await call2({ path: 'notes.md', mode: 'append', text: '〔AI 自记〕' + NL_MW + '## 第8场 · 场记' })
+    check('★ES2 闸咬人：往 notes.md 追加场记 ⇒ 拒收并指路（真机 00:51 那一脚从此走不通）',
+      typeof rs.err === 'string' && rs.err.includes('随记只进 index.md') && rs.err.includes('记忆主管'),
+      String(rs.err).slice(0, 160))
+    const rs2 = await call2({ path: 'index.md', mode: 'replace', find: '第 3 场', text: 'x' })
+    check('★ES3 闸咬人：主管开启下连 index.md 的 replace 也拒（描述+执行双窄面）',
+      typeof rs2.err === 'string' && rs2.err.includes('随记只进 index.md'), String(rs2.err).slice(0, 120))
+    const rs3 = await call2({ path: 'index.md', mode: 'append', text: '导演：下一场塞玩具出门。' })
+    check('★ES4 正路畅通：index.md + append ⇒ 照常写',
+      rs3.out !== undefined && rs3.out.path === 'index.md' && rs3.out.mode === 'append'
+        && readFileSync(memFile('index.md'), 'utf8').includes('塞玩具出门'),
+      JSON.stringify(rs3.out ?? rs3.err).slice(0, 160))
+  }
   } finally {
     rmSync(TMP_E, { recursive: true, force: true })
   }
@@ -885,15 +988,17 @@ check('① 常量：工具名 memory_write、目录 .roleplay-memory（与社区
 
   // ★★S9（2026-09-26 收纳升级，用户口径「升级」）：notes.md 过保养线 ⇒ **点名催收纳**。
   //   两级：① memory_write 回执尾（写完那一刻模型最听得进去）；② `mt:memoryHome` 段尾每轮现算。
-  //   线值与 persona §5 同源（6000 字）；⛔ 判据别两头都要——换位置就换读法（备份收纳同日踩过）。
-  check('★S9 线值与 persona §5 同源（6000 字）', NOTES_MAINTENANCE_LIMIT_CHARS === 6000)
+  //   线值与 persona §5 同源（2500 字）；⛔ 判据别两头都要——换位置就换读法（备份收纳同日踩过）。
+  check('★S9 线值与 persona §5 同源（2500 字）', NOTES_MAINTENANCE_LIMIT_CHARS === 2500)
   check('★S9a 没过线 ⇒ 空串（不噪声）',
-    notesMaintenanceHint(0) === '' && notesMaintenanceHint(5999) === '' && notesMaintenanceHint(Number.NaN) === '')
-  check('★S9b 过线（含正好 6000）⇒ 字数、出处线值、怎么收纳都点名',
-    notesMaintenanceHint(6000).includes('6000') && notesMaintenanceHint(6000).includes('收纳')
-      && notesMaintenanceHint(6000).includes('最早场记压成一行')
-      && notesMaintenanceHint(6000).includes('world.md')
-      && notesMaintenanceHint(13010).includes('13010'))
+    notesMaintenanceHint(0) === '' && notesMaintenanceHint(2499) === '' && notesMaintenanceHint(Number.NaN) === '')
+  check('★S9b 过线（含正好 2500）⇒ 字数、出处线值、托管口径都点名（⛔ 不催模型自己动手）',
+    notesMaintenanceHint(2500).includes('2500') && notesMaintenanceHint(2500).includes('收纳')
+      && notesMaintenanceHint(2500).includes('记忆主管')
+      && notesMaintenanceHint(2500).includes('⛔ 你无需处理、也不要自己动手')
+      && notesMaintenanceHint(2500).includes('不要自己动手') === notesMaintenanceHint(2500).includes('不要自己动手')
+      && notesMaintenanceHint(13010).includes('13010')
+      && notesMaintenanceHint(2500).includes('现在就做') === false)
   {
     const judge = (s) => s.includes('notesMaintenanceFor(sid),')
       && s.includes('function notesMaintenanceFor(')
@@ -905,6 +1010,3 @@ check('① 常量：工具名 memory_write、目录 .roleplay-memory（与社区
       && hostSrc.includes("value.maintenanceHint ? '\\n' + value.maintenanceHint : ''"))
   }
 }
-
-console.log(`\n── ${pass} 通过 / ${fail} 失败 ──`)
-process.exitCode = fail === 0 ? 0 : 1

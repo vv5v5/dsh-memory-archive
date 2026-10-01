@@ -231,6 +231,9 @@ try {
   rmSync(degradeDir, { recursive: true, force: true })
   mkdirSync(degradeDir, { recursive: true })
   copyFileSync(join(repo, 'lib', 'index.js'), join(degradeDir, 'index.js'))
+  // phi-message.js 是 index.js 的**静态**依赖（2026-09-30 尾部注入改替换起）——缺了它整个模块加载即炸，
+  // 降级语义就没得测了；要降级的只有 prompt-viewer.js（动态 import）⇒ 只带 phi-message.js 这一个伴生。
+  copyFileSync(join(repo, 'lib', 'phi-message.js'), join(degradeDir, 'phi-message.js'))
   const degradeMod = await import(pathToFileURL(join(degradeDir, 'index.js')).href)
   const degradeRoutes = []
   const degradeLogs = []

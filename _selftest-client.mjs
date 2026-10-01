@@ -227,7 +227,7 @@ await check('★ D 单 + 20260919：apply(fakeCtx) 不抛；inject 恰好 ["slot
 })
 
 await check('★ 面板跟随（20260919）：查到会话的周目才改绑定；查不到一个字不改；本次打开不重复写；读的端点只此一处', () => {
-  assert.ok(src.includes('function ArchivePanel({ onClose, sessions }) {'), '面板要收 sessions prop（跟随要知道当前会话）')
+  assert.ok(src.includes('function ArchivePanel({ onClose, sessions, initialView }) {'), '面板要收 sessions prop（跟随要知道当前会话；20260930 起另收 initialView＝报错 toast 直落故障档）')
   assert.ok(src.includes('sessions: ctx.sessions'), '挂载面板时要把 ctx.sessions 传进去')
   assert.ok(src.includes("data.source === 'session' && char0 !== '' && play0 !== ''"), '⛔ 只有 source===\'session\' 且拿得到角色/周目才许动')
   assert.ok(src.includes('if (!mapped) return'), '⛔ 认不出周目 ⇒ 一个字都不改绑定（保持原绑定）')
@@ -1108,6 +1108,13 @@ await check('★ 用到的宿主 rest 全在表内（含 /templates 与 v5 的 /
     ['POST', '/import/apply'],
     // 自动收纳的状态出口（2026-09-15：压缩后自动收，失败要播报 ⇒ 顶栏红标读它）
     ['GET', '/auto-collect'],
+    // 「主管」档（2026-09-29）：状态/简报只读 + 配置保存（注入器+ops 在宿主，收/排期在压缩后端）
+    ['GET', '/supervisor/state'],
+    ['GET', '/supervisor/briefing'],
+    ['POST', '/supervisor/config'],
+    ['POST', '/supervisor/summary-delete'],      // 主管档：摘要逐条删除（0930）
+    ['GET', '/health/events'],                   // 健康事件（0930）：故障档数据源
+    ['POST', '/health/ack'],                     // 健康事件：知道了（清未读）
     // 「角色扮演记忆库」只读出口（20260919）：同一档的上一块 —— 清单（不带 ?file=）与单份正文各一次调用
     ['GET', '/playthrough/rp-memory'],
     // ★ 2026-09-23（用户口径「给剧情大纲加 1、剧情文本支持设置死区 2、剧情文本支持直接编辑」）：
@@ -2568,11 +2575,11 @@ const outlineCodeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*
 
 // ★ 2026-09-25 美化单（用户拍板）：页签名「剧情大纲」→「RP 记忆」—— 该档实际是角色扮演预设维护的
 //   记忆库（5 份笔记 + 楼层快照），旧名与内容不符（client.js computeSources 同日注释）。逐字断言跟着改。
-await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返回恰好 [摘要, 原文, RP 记忆, 向量, 压缩]（★ 2026-09-20：摘「状态」档、加「向量」档；★ 2026-09-21：加「压缩」档；★ 2026-09-25：「剧情大纲」改名「RP 记忆」）；会话模式只有 [会话事件, 压缩]', () => {
+await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返回恰好 [原文, 摘要, 向量, RP 记忆, 主管, 压缩]（★ 2026-09-20：摘「状态」档、加「向量」档；★ 2026-09-21：加「压缩」档；★ 2026-09-25：「剧情大纲」改名「RP 记忆」；★ 2026-09-29：加「主管」档）；会话模式只有 [会话事件, 压缩]', () => {
   const cs = outlineFnBody(src, 'computeSources')
   assert.ok(cs, '缺 computeSources 函数')
   assert.ok(
-    cs.includes("return [['summaries', '摘要'], ['floors', '原文'], ['outline', 'RP 记忆'], ['vector', '向量'], ['compact', '压缩']]"),
+    cs.includes("return [['floors', '原文'], ['summaries', '摘要'], ['vector', '向量'], ['outline', 'RP 记忆'], ['supervisor', '主管'], ['compact', '压缩']]"),
     '档位返回不是逐字约定形状',
   )
   // ★ 2026-09-21：「压缩」档读的是**本会话**的实时占用（不依赖 Tavern 归档）⇒ 会话模式与
@@ -2595,8 +2602,8 @@ await check('★ 大纲·档位逐字（验收1）：computeSources 工作区返
     const clickables = []
     collectNodes(tree, (n) => n.props && typeof n.props.onClick === 'function' && typeof n.props.children === 'string', clickables)
     const labels = clickables.map((n) => n.props.children)
-    const order = labels.filter((l) => ['摘要', '原文', 'RP 记忆', '向量', '压缩'].includes(l))
-    assert.deepEqual(order, ['摘要', '原文', 'RP 记忆', '向量', '压缩'], '档位顺序或成员不对: ' + order.join(','))
+    const order = labels.filter((l) => ['原文', '摘要', '向量', 'RP 记忆', '主管', '压缩'].includes(l))
+    assert.deepEqual(order, ['原文', '摘要', '向量', 'RP 记忆', '主管', '压缩'], '档位顺序或成员不对: ' + order.join(','))
     assert.equal(labels.includes('状态'), false, '⛔「状态」档已摘除，不许回来')
     // ★ 2026-09-20：「向量」档与 摘要/原文/剧情大纲 同层（用户口径「和摘要原文平级」）
     assert.equal(labels.includes('向量'), true, '缺「向量」档入口')
@@ -4305,12 +4312,12 @@ await check('★★ 记忆库·弹窗「对齐楼层」＝先真回档、再记�
   }
 })
 
-await check('★ 收纳升级（2026-09-26）：RP 记忆 notes.md 过保养线 ⇒ 行头亮「⚠ 超保养线」徽标（字节近似 6000×3，精确字数在宿主注入那路）；反证：挖掉字节判据 ⇒ 必红', () => {
+await check('★ 收纳升级（2026-09-26；2026-09-29 线值随 §5 收窄 6000→2500）：RP 记忆 notes.md 过保养线 ⇒ 行头亮「⚠ 超保养线」徽标（字节近似 2500×3，精确字数在宿主注入那路）；反证：挖掉字节判据 ⇒ 必红', () => {
   const judge = (s) => s.includes("'data-notes-over': '1'")
-    && s.includes('f.bytes >= 6000 * 3') && s.includes('⚠ 超保养线')
-    && s.includes('最早场记压成一行')
+    && s.includes('f.bytes >= 2500 * 3') && s.includes('⚠ 超保养线')
+    && s.includes('只留最近 3 场')
   assert.ok(judge(src), 'notes.md 超保养线徽标没找到（源码里缺徽标行/判据/文案）')
-  const cut = src.split('f.bytes >= 6000 * 3').join('')
+  const cut = src.split('f.bytes >= 2500 * 3').join('')
   assert.equal(judge(cut), false, '反证失败：挖掉字节判据后 judge 仍命中（判据没咬住那一行）')
 })
 

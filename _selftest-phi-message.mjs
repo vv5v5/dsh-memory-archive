@@ -61,7 +61,7 @@ await t('P3 shouldInjectPhi 真值表：开着 + 有正文 + 第 1 步 ⇒ 注�
   assert.equal(shouldInjectPhi({}).inject, false, '畸形入参 ⇒ 不注、不抛')
 })
 
-await t('P4 registerPhiMessage：prepend 挂 pre-step、先走 next() 再往 decision.messages 末尾追加', async () => {
+await t('P4 registerPhiMessage：prepend 挂 pre-step、先走 next()；★有会话 ⇒ session.append 替换通路（叠加修复）', async () => {
   const listeners = []
   const ctx = { on: (name, fn, opts) => { listeners.push({ name, fn, opts }) } }
   const h = registerPhiMessage(ctx, { getText: () => '正文', isEnabled: () => true })
@@ -69,15 +69,46 @@ await t('P4 registerPhiMessage：prepend 挂 pre-step、先走 next() 再往 dec
   assert.equal(listeners.length, 1)
   assert.equal(listeners[0].name, 'agent/pre-step')
   assert.equal(listeners[0].opts.prepend, true, '官方 time-context 同款：抢在最外层')
+  // 假会话：接住 session.append（宿主同款契约：返回带 seq 的事件；surface.nodes 随之增长）
+  const captures = []
+  const surface = { nodes: [] }
+  const session = {
+    id: 's1', surface,
+    append(type, message, intent) {
+      const seq = 400 + captures.length + 1
+      captures.push({ seq, message, intent })
+      surface.nodes.push(seq)
+      return { seq }
+    },
+  }
   const base = { kind: 'enter', messages: [{ id: 'u1', role: 'user' }] }
   let nextCalled = 0
-  const out = await listeners[0].fn({ agent: { session: { id: 's1' } }, step: 1 }, () => { nextCalled += 1; return Promise.resolve(base) })
+  const out1 = await listeners[0].fn({ agent: { session }, step: 1 }, () => { nextCalled += 1; return Promise.resolve(base) })
   assert.equal(nextCalled, 1, '必须先走 next()（不改变链上其它人的结果）')
-  assert.equal(out.messages.length, 2)
+  assert.equal(out1, base, '★替换通路必须原样返回 decision（⛔ 塞 messages = 新增历史事件 = 累积）')
+  assert.equal(captures.length, 1, '该走 session.append 直写')
+  assert.equal(captures[0].intent.surfaceOp, 'append', '首轮没有可换的 ⇒ append')
+  assert.equal(captures[0].message.source.kind, 'plugin')
+  assert.equal(captures[0].message.source.plugin, PHI_MESSAGE_PLUGIN_ID)
+  // 第二轮：上一轮那条还在 surface 上 ⇒ 必须正好 replace 它（请求面只留一份）
+  await listeners[0].fn({ agent: { session }, step: 1 }, () => Promise.resolve(base))
+  assert.deepEqual(captures[1].intent, {
+    surfaceOp: { op: 'replace', startSeq: captures[0].seq, endSeq: captures[0].seq },
+    sourceEventSeqs: [captures[0].seq],
+  }, '第二轮没换掉上一轮那条（= 还在叠加）')
+  assert.equal(h.injected, 2)
+})
+
+await t('P4b phi 拿不到 session.append ⇒ 退回 decision.messages 老路（宁可叠加，不静默丢）', async () => {
+  const listeners = []
+  registerPhiMessage({ on: (n, fn) => listeners.push(fn) }, { getText: () => '正文', isEnabled: () => true })
+  const fn = listeners[0]
+  const base = { kind: 'enter', messages: [{ id: 'u1', role: 'user' }] }
+  const out = await fn({ agent: { session: { id: 's1' } }, step: 1 }, () => Promise.resolve(base))
+  assert.equal(out.messages.length, 2, '没有会话 ⇒ 退回叠加老路（消息不能丢）')
   assert.equal(out.messages[0].id, 'u1', '原有消息一条不许动')
   assert.equal(out.messages[1].source.kind, 'plugin')
   assert.equal(out.messages[1].source.plugin, PHI_MESSAGE_PLUGIN_ID)
-  assert.equal(h.injected, 1)
 })
 
 await t('P5 ★ 反证：关掉 / 拿不到正文 / 不是第 1 步 ⇒ **一条都不加**（decision 原样返回）', async () => {

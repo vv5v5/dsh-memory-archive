@@ -221,6 +221,8 @@ check('④ 卸载：调用 effect 持有的 disposer ⇒ disposed 增加 1', sta
 //   现在要证的是更硬的半边：**降级不许拖垮 apply**，且**不许悄悄装个空壳**。
 mkdirSync(join(tmp, 'lib'), { recursive: true })
 cpSync(join(repo, 'lib', 'index.js'), join(tmp, 'lib', 'index.js'))
+// phi-message.js 是 index.js 的静态依赖（2026-09-30 尾部注入改替换起）——要降级的是 skill 正文，不是它
+cpSync(join(repo, 'lib', 'phi-message.js'), join(tmp, 'lib', 'phi-message.js'))
 cpSync(join(repo, 'skill', 'rp-assistant'), join(tmp, 'skill', 'rp-assistant'), { recursive: true })
 unlinkSync(join(tmp, 'skill', 'rp-assistant', 'SKILL.md')) // 只删正文，资料留着（资料不是注册期读的）
 
